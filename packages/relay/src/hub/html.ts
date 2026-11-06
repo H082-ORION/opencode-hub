@@ -72,16 +72,15 @@ export function login(input: { next?: string; error?: string }) {
   )
 }
 
-export function dashboard(input: {
-  url: string
+type MachineList = {
   machines: Machine[]
   online: (id: string) => boolean
   machineURL: (id: string) => string
-  providers: Provider[]
-  code?: { code: string; expiresAt: number }
-  error?: string
-}) {
-  const machines = input.machines.length
+}
+
+/** The machines table alone; the dashboard polls it so enrollments and connections show up without a reload. */
+export function machines(input: MachineList) {
+  return input.machines.length
     ? `<table>
   <tr><th>Name</th><th>ID</th><th>Status</th><th>Last seen</th><th></th></tr>
   ${input.machines
@@ -103,7 +102,16 @@ export function dashboard(input: {
     .join("")}
 </table>`
     : `<p class="muted">No machines yet.</p>`
+}
 
+export function dashboard(
+  input: MachineList & {
+    url: string
+    providers: Provider[]
+    code?: { code: string; expiresAt: number }
+    error?: string
+  },
+) {
   const code = input.code
     ? `<p>One-time code, valid until ${escape(formatTime(input.code.expiresAt))}:</p>
 <div class="code">${escape(input.code.code)}</div>
@@ -137,7 +145,7 @@ export function dashboard(input: {
 ${input.error ? `<section><p class="error">${escape(input.error)}</p></section>` : ""}
 <section>
   <h2>Machines</h2>
-  ${machines}
+  <div id="machines">${machines(input)}</div>
 </section>
 <section>
   <h2>Add a machine</h2>
@@ -161,7 +169,19 @@ ${input.error ? `<section><p class="error">${escape(input.error)}</p></section>`
     <label>API key <input name="apiKey" type="password" autocomplete="off" required></label>
     <div><button type="submit">Save provider</button></div>
   </form>
-</section>`,
+</section>
+<script>
+// Manual redirects keep an expired session from swapping the login page into the table.
+const state = { last: "" }
+setInterval(async () => {
+  const response = await fetch("/hub/machines", { cache: "no-store", redirect: "manual" }).catch(() => undefined)
+  if (!response || !response.ok) return
+  const html = await response.text()
+  if (html === state.last) return
+  state.last = html
+  document.getElementById("machines").innerHTML = html
+}, 3000)
+</script>`,
   )
 }
 

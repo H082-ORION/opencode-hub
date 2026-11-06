@@ -95,6 +95,11 @@ opencode hub
 The dashboard is at `http://localhost:4800`, and machines are at `http://<machine-id>.localhost:4800` (browsers resolve
 `*.localhost` to loopback). Enroll a local machine with `opencode agent join http://localhost:4800 --code <code>`.
 
+From a source checkout (`bun run dev hub`, `bun run dev agent run`), the machine's server reads the web UI from
+`packages/app/dist`, which release builds embed instead. Build it once with `bun run --cwd packages/app build`, then
+`bun run dev service restart`; without it the machine answers `/` with an empty 500 (Firefox shows
+`NS_ERROR_NET_ERROR_RESPONSE`) while the API still works.
+
 ## Troubleshooting
 
 - Hub logs: `journalctl -u opencode-hub -f`. Health check: `curl http://127.0.0.1:4800/hub/health`.

@@ -131,6 +131,7 @@ export async function start(options: Options) {
     if (pathname === "/hub/handoff") return handoff(url, session)
     if (request.method === "POST") return sameOrigin(request) ? mutate(request, pathname) : forbidden()
     if (pathname === "/" && (request.method === "GET" || request.method === "HEAD")) return dashboard()
+    if (pathname === "/hub/machines" && request.method === "GET") return Html.respond(Html.machines(machineList()))
     return Html.respond(Html.message("Not found", ""), { status: 404 })
   }
 
@@ -255,14 +256,20 @@ export async function start(options: Options) {
 
   function dashboard(extra: { code?: { code: string; expiresAt: number }; error?: string } = {}, status = 200) {
     const body = Html.dashboard({
+      ...machineList(),
       url: origin,
-      machines: store.machines(),
-      online: (id) => tunnels.has(id),
-      machineURL: (id) => `${machineOrigin(id)}/`,
       providers: store.providers(),
       ...extra,
     })
     return Html.respond(body, { status })
+  }
+
+  function machineList() {
+    return {
+      machines: store.machines(),
+      online: (id: string) => tunnels.has(id),
+      machineURL: (id: string) => `${machineOrigin(id)}/`,
+    }
   }
 
   async function enroll(request: Request, server: Server<Tunnel.SocketData>) {

@@ -233,6 +233,16 @@ describe("browser access", () => {
     expect(await code.text()).toContain(`opencode agent join ${state.hub.url} --code `)
   })
 
+  test("serves the machines table for live refresh only to a signed-in user", async () => {
+    const fragment = await fetch(`${state.hub.url}/hub/machines`, { headers: { cookie: state.cookie } })
+    const html = await fragment.text()
+    expect(html).toContain("Test Machine")
+    expect(html).toContain(">online<")
+    expect(html).not.toContain("<html")
+    const anonymous = await fetch(`${state.hub.url}/hub/machines`, { redirect: "manual" })
+    expect(anonymous.status).toBe(302)
+  })
+
   test("escapes machine names in the dashboard", async () => {
     await Agent.enroll({ url: state.hub.url, code: state.hub.createEnrollmentCode().code, name: "<b>evil</b>" })
     const page = await (await fetch(`${state.hub.url}/`, { headers: { cookie: state.cookie } })).text()
