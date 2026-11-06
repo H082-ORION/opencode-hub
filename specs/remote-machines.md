@@ -89,16 +89,18 @@ Rules:
   created_at, last_seen_at), `provider` (id, name, base_url, api_key, created_at), `setting` (key, value). Enrollment
   codes and handoff tickets live in memory.
 - Routes on the hub host:
-  - `GET /` dashboard (login required): machines (name, id, online, last seen, open link, revoke), "add machine"
-    (shows a one-time code valid 10 min and the exact `opencode agent join` command), LLM providers (preset or custom
-    upstream base URL, API key write-only, delete).
-  - `GET/POST /login`, `POST /logout`, `GET /hub/handoff`.
+  - The dashboard is a second entry of the web app (`packages/app/hub.html`, `packages/app/src/hub/`) built with
+    `@opencode/ui`. The CLI passes the embedded app assets to `Hub.start({ ui })`; every non-API GET on the hub host
+    serves `hub.html` (including `/login?next=`). Without assets the hub serves a 503 page explaining how to build them.
+  - JSON API under `/hub/api/`: `session`, `login`, `logout`, `machines`, `events` (SSE, live machine list),
+    `machines/code`, `DELETE machines/<id>`, `providers`, `DELETE providers/<id>`, `presets` (provider catalog),
+    `providers/chatgpt/begin`, `providers/chatgpt/complete`. Mutations need a JSON body and `Origin` = hub origin.
+  - `GET /hub/handoff`.
   - `POST /hub/agent/enroll` JSON `{ code, name }` -> `{ machine: { id, name }, tunnelToken, llmToken, url }`.
   - `GET /hub/agent/connect` WebSocket upgrade for the tunnel.
   - `ANY /llm/<provider>/<rest>`: LLM proxy (below).
   - `GET /hub/tls-allowed?domain=` -> 200 for the hub host and existing machine hosts, else 404.
   - `GET /hub/health` -> 200.
-  - Dashboard mutations are form POSTs; reject them unless `Origin` (or `Referer`) is the hub origin.
 - Routes on `<m>.<domain>`: `/__hub/session` (ticket consumption); everything else requires the cookie and is proxied
   through the tunnel, including WebSocket upgrades. Machine offline -> 503 HTML page with a link back to the dashboard.
   Unknown machine -> 404.
@@ -106,11 +108,14 @@ Rules:
 
 ## LLM proxy
 
-- A provider entry is `{ id, name, baseURL (upstream), apiKey }`. Presets: `anthropic` (https://api.anthropic.com/v1),
-  `openai` (https://api.openai.com/v1), `openrouter` (https://openrouter.ai/api/v1), `google`
-  (https://generativelanguage.googleapis.com/v1beta), `mistral` (https://api.mistral.ai/v1), `groq`
-  (https://api.groq.com/openai/v1), `deepseek` (https://api.deepseek.com/v1). The `id` must be the opencode provider id
-  on the machine.
+- A provider entry is `{ id, name, baseURL (upstream), apiKey }` or a ChatGPT subscription (`openai`, OAuth with token
+  sharing; the hub stores and refreshes the token and sends bodies zstd-compressed). The `id` must be the opencode
+  provider id on the machine.
+- Provider choices come from opencode's own models.dev catalog (`hub/catalog.ts`), fetched daily from
+  models.opencode.ai and cached in the data dir, with the base URL derived the way core does (most common URL of the
+  first SDK-backed API of each chat model). Templated URLs (Azure, Bedrock, Vertex) are excluded; custom providers
+  remain possible.
+- Anthropic subscriptions cannot be proxied: opencode only uses them through the local `claude` CLI.
 - `<hub>/llm/<id>/<rest>` -> `<baseURL>/<rest>` with the same query string. The machine's llm token is looked for in
   `authorization: Bearer`, `x-api-key`, `x-goog-api-key` and the `key` query parameter; whichever carried it is rewritten
   with the real key, the others are left alone. No valid llm token -> 401. Unknown provider -> 404.

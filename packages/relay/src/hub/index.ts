@@ -1,13 +1,19 @@
 import type { Server, ServerWebSocket } from "bun"
+import { createHash } from "node:crypto"
 import { Option, Schema } from "effect"
 import { Protocol } from "../protocol.js"
 import { Auth } from "./auth.js"
+import { Catalog } from "./catalog.js"
+import { ChatGPT } from "./chatgpt.js"
 import { Html } from "./html.js"
 import { Llm } from "./llm.js"
 import { Store } from "./store.js"
 import { Tunnel } from "./tunnel.js"
 
 export * as Hub from "./index.js"
+
+/** The built web app; `path` has no leading slash (`hub.html`, `_assets/hub-abc.js`). */
+export type UI = { file(path: string): { body: string | Uint8Array; type: string } | undefined }
 
 export type Options = {
   hostname?: string
@@ -20,14 +26,42 @@ export type Options = {
   password?: string
   /** Milliseconds between tunnel PINGs. */
   pingInterval?: number
+  /** The dashboard's assets. Without them the hub host serves a page explaining how to build them. */
+  ui?: UI
+  chatgpt?: ChatGPT.Options
+  /** Where the provider catalog comes from; defaults to models.dev. */
+  catalog?: { source?: string; fetch?: typeof fetch }
+  /** The running opencode version, sent to OpenAI when signing in with ChatGPT. */
+  version?: string
 }
+
+/** A browser following `/hub/api/events`. */
+type Listener = { session: string; send: (text: string) => void; close: () => void }
 
 const PASSWORD_KEY = "password_hash"
 const PING_INTERVAL = 25_000
+const KEEPALIVE_INTERVAL = 25_000
 const HELLO_TIMEOUT = 10_000
 const LABEL = /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/
+const PROVIDER_ID = /^[a-zA-Z0-9][a-zA-Z0-9._-]{0,63}$/
 const EnrollRequest = Schema.fromJsonString(Schema.Struct({ code: Schema.String, name: Schema.String }))
 const decodeEnrollRequest = Schema.decodeUnknownOption(EnrollRequest)
+const decodeLogin = Schema.decodeUnknownOption(
+  Schema.fromJsonString(Schema.Struct({ password: Schema.String, next: Schema.optional(Schema.String) })),
+)
+const decodeProvider = Schema.decodeUnknownOption(
+  Schema.fromJsonString(
+    Schema.Struct({
+      id: Schema.String,
+      name: Schema.optional(Schema.String),
+      baseURL: Schema.optional(Schema.String),
+      apiKey: Schema.String,
+    }),
+  ),
+)
+const decodeChatGPTComplete = Schema.decodeUnknownOption(
+  Schema.fromJsonString(Schema.Struct({ attempt: Schema.String, callback: Schema.String })),
+)
 
 export async function start(options: Options) {
   const store = Store.open(options.data)
@@ -36,8 +70,15 @@ export async function start(options: Options) {
   const generated = fixedHash || store.setting(PASSWORD_KEY) ? undefined : await setStoredPassword(store)
   if (generated) console.log(`opencode hub password (shown once): ${generated}`)
   const auth = Auth.create()
+  const chatgpt = ChatGPT.create({
+    store,
+    options: options.chatgpt,
+    app: { name: "hub", version: options.version ?? "local" },
+  })
+  const catalog = Catalog.create({ data: options.data, ...options.catalog })
   const tunnels = new Map<string, Tunnel.Instance>()
   const pings = new Map<Tunnel.Instance, Timer>()
+  const listeners = new Set<Listener>()
 
   const server = Bun.serve({
     hostname: options.hostname ?? "127.0.0.1",
@@ -75,6 +116,7 @@ export async function start(options: Options) {
         if (tunnels.get(data.machine.id) !== data.tunnel) return
         tunnels.delete(data.machine.id)
         store.touchMachine(data.machine.id)
+        notifyMachines()
       },
     },
   })
@@ -94,6 +136,7 @@ export async function start(options: Options) {
     createEnrollmentCode: () => auth.createCode(),
     async stop() {
       pings.forEach((timer) => clearInterval(timer))
+      listeners.forEach((listener) => listener.close())
       tunnels.forEach((tunnel) => tunnel.ws.close(1001, "hub stopping"))
       await server.stop(true)
       store.close()
@@ -116,23 +159,206 @@ export async function start(options: Options) {
     if (pathname === "/hub/tls-allowed") return tlsAllowed(url)
     if (pathname === "/hub/agent/enroll") return enroll(request, server)
     if (pathname === "/hub/agent/connect") return connect(request, server)
-    if (pathname.startsWith("/llm/")) return Llm.proxy(request, url, store)
-    if (pathname === "/login") return login(request, url, server)
+    if (pathname.startsWith("/llm/")) return Llm.proxy(request, url, store, chatgpt)
+    if (pathname.startsWith("/hub/api/")) return api(request, pathname.slice("/hub/api/".length), server)
     const session = auth.session(Auth.readCookie(request.headers.get("cookie")))
-    if (pathname === "/logout" && request.method === "POST") {
-      if (!sameOrigin(request)) return forbidden()
-      if (session) auth.deleteSession(session)
-      return redirect("/login", Auth.clearCookie(secure))
+    if (pathname === "/hub/handoff") {
+      if (session) return handoff(url, session)
+      const next = url.searchParams.get("next")
+      return redirect(next ? `/login?next=${encodeURIComponent(next)}` : "/login")
     }
-    if (!session) {
-      const next = pathname === "/" ? "" : `?next=${encodeURIComponent(`${origin}${pathname}${url.search}`)}`
-      return redirect(`/login${next}`)
+    if (request.method !== "GET" && request.method !== "HEAD")
+      return new Response("Method not allowed", { status: 405 })
+    // A machine host sends signed-out browsers here; one that is already signed in goes straight on.
+    if (pathname === "/login" && session) {
+      const next = url.searchParams.get("next") ?? ""
+      return redirect(next ? `/hub/handoff?next=${encodeURIComponent(next)}` : "/")
     }
-    if (pathname === "/hub/handoff") return handoff(url, session)
-    if (request.method === "POST") return sameOrigin(request) ? mutate(request, pathname) : forbidden()
-    if (pathname === "/" && (request.method === "GET" || request.method === "HEAD")) return dashboard()
-    if (pathname === "/hub/machines" && request.method === "GET") return Html.respond(Html.machines(machineList()))
-    return Html.respond(Html.message("Not found", ""), { status: 404 })
+    return serveUI(pathname)
+  }
+
+  async function api(request: Request, route: string, server: Server<Tunnel.SocketData>) {
+    const method = request.method
+    if (method !== "GET" && method !== "HEAD") {
+      if (request.headers.get("origin") !== origin) return forbidden()
+      if (!/^application\/json\b/i.test(request.headers.get("content-type") ?? ""))
+        return json(415, { error: "Expected a JSON request body." })
+    }
+    if (route === "login" && method === "POST") return login(request, server)
+    const session = auth.session(Auth.readCookie(request.headers.get("cookie")))
+    if (route === "session" && method === "GET")
+      return session ? json(200, { authenticated: true }) : json(401, { authenticated: false })
+    if (!session) return json(401, { error: "Sign in to the hub first." })
+    if (route === "logout" && method === "POST") {
+      auth.deleteSession(session)
+      listeners.forEach((listener) => listener.session === session && listener.close())
+      return json(200, {}, Auth.clearCookie(secure))
+    }
+    if (route === "machines" && method === "GET") return json(200, machineList())
+    if (route === "events" && method === "GET") return events(session)
+    if (route === "machines/code" && method === "POST") {
+      const code = auth.createCode()
+      return json(200, { ...code, command: `opencode agent join ${origin} --code ${code.code}` })
+    }
+    const machine = /^machines\/([^/]+)$/.exec(route)
+    if (machine && method === "DELETE") {
+      const id = decodeURIComponent(machine[1])
+      if (!store.deleteMachine(id)) return json(404, { error: "Unknown machine." })
+      tunnels.get(id)?.ws.close(4403, "machine revoked")
+      tunnels.delete(id)
+      notifyMachines()
+      return new Response(null, { status: 204 })
+    }
+    if (route === "providers" && method === "GET") return json(200, providerList())
+    if (route === "providers" && method === "POST") return saveProvider(request)
+    if (route === "presets" && method === "GET") return json(200, await catalog.list())
+    if (route === "providers/chatgpt/begin" && method === "POST") return json(200, chatgpt.begin())
+    if (route === "providers/chatgpt/complete" && method === "POST") {
+      const body = Option.getOrUndefined(decodeChatGPTComplete(await request.text()))
+      if (!body) return json(400, { error: "Expected { attempt, callback }." })
+      const failure = await chatgpt.complete(body).then(
+        () => undefined,
+        (error: unknown) => (error instanceof Error ? error.message : String(error)),
+      )
+      if (failure) return json(400, { error: failure })
+      pushConfig()
+      return json(200, { provider: providerList().find((provider) => provider.id === ChatGPT.PROVIDER.id) })
+    }
+    const provider = /^providers\/([^/]+)$/.exec(route)
+    if (provider && method === "DELETE") {
+      if (!store.deleteProvider(decodeURIComponent(provider[1]))) return json(404, { error: "Unknown provider." })
+      pushConfig()
+      return new Response(null, { status: 204 })
+    }
+    return json(404, { error: "Not found." })
+  }
+
+  async function login(request: Request, server: Server<Tunnel.SocketData>) {
+    const client = clientAddress(request, server)
+    const wait = auth.throttled(client)
+    if (wait > 0) {
+      const seconds = Math.ceil(wait / 1000)
+      return json(429, { error: `Too many failed attempts. Try again in ${seconds} s.`, retryAfter: seconds })
+    }
+    const body = Option.getOrUndefined(decodeLogin(await request.text()))
+    const hash = fixedHash ?? store.setting(PASSWORD_KEY)
+    const valid = body !== undefined && hash !== undefined && (await Bun.password.verify(body.password, hash))
+    if (!valid) {
+      auth.fail(client)
+      return json(401, { error: "Wrong password." })
+    }
+    auth.succeed(client)
+    const next = body.next ?? ""
+    return json(
+      200,
+      { redirect: next ? `/hub/handoff?next=${encodeURIComponent(next)}` : "/" },
+      Auth.sessionCookie(auth.createSession(), secure),
+    )
+  }
+
+  async function saveProvider(request: Request) {
+    const body = Option.getOrUndefined(decodeProvider(await request.text()))
+    if (!body) return json(400, { error: "Expected { id, apiKey, name?, baseURL? }." })
+    const id = body.id.trim()
+    // A catalog provider needs only its id; a custom one passes its own name and upstream.
+    const entry = await catalog.find(id)
+    const baseURL = body.baseURL?.trim() || entry?.baseURL || ""
+    const apiKey = body.apiKey.trim()
+    if (!PROVIDER_ID.test(id))
+      return json(400, { error: "Provider id must be letters, digits, dots, dashes or underscores." })
+    if (!/^https?:$/.test(URL.parse(baseURL)?.protocol ?? ""))
+      return json(400, { error: "Upstream base URL must be http(s)." })
+    if (!apiKey) return json(400, { error: "API key is required." })
+    const name = body.name?.trim() || entry?.name || id
+    store.saveProvider({ id, name, baseURL, apiKey })
+    pushConfig()
+    return json(200, { provider: { id, name, baseURL, auth: "key" } })
+  }
+
+  function events(session: string) {
+    const encoder = new TextEncoder()
+    const state = {} as { listener?: Listener; timer?: Timer }
+    const cleanup = () => {
+      clearInterval(state.timer)
+      if (state.listener) listeners.delete(state.listener)
+    }
+    const stream = new ReadableStream<Uint8Array>({
+      start(controller) {
+        const send = (text: string) => controller.enqueue(encoder.encode(text))
+        state.listener = {
+          session,
+          send,
+          close() {
+            cleanup()
+            controller.close()
+          },
+        }
+        listeners.add(state.listener)
+        state.timer = setInterval(() => send(": keepalive\n\n"), KEEPALIVE_INTERVAL)
+        send(`retry: 2000\n${machinesEvent()}`)
+      },
+      cancel: cleanup,
+    })
+    return new Response(stream, {
+      headers: {
+        "content-type": "text/event-stream",
+        "cache-control": "no-store",
+        "x-accel-buffering": "no",
+      },
+    })
+  }
+
+  function machinesEvent() {
+    return `event: machines\ndata: ${JSON.stringify(machineList())}\n\n`
+  }
+
+  function notifyMachines() {
+    if (listeners.size === 0) return
+    const event = machinesEvent()
+    listeners.forEach((listener) => listener.send(event))
+  }
+
+  function machineList() {
+    return store.machines().map((machine) => ({
+      id: machine.id,
+      name: machine.name,
+      online: tunnels.has(machine.id),
+      lastSeenAt: machine.last_seen_at,
+      url: `/hub/handoff?next=${encodeURIComponent(`${machineOrigin(machine.id)}/`)}`,
+    }))
+  }
+
+  function providerList() {
+    return store.providerSummaries().map((provider) => ({
+      id: provider.id,
+      name: provider.name,
+      baseURL: provider.base_url,
+      auth: provider.auth,
+    }))
+  }
+
+  function serveUI(pathname: string) {
+    const key = pathname.replace(/^\/+/, "")
+    const ui = options.ui
+    if (!ui) return Html.respond(Html.message("Web UI missing", MISSING_UI), { status: 503 })
+    // The main app's shell is for machine hosts; the hub host only serves its own page and the shared assets.
+    const asset = key && key !== "index.html" && key !== "hub.html" ? ui.file(key) : undefined
+    if (asset) return assetResponse(key, asset)
+    if (/^(?:_assets|assets|icons)\//.test(key) || /\.[a-z0-9]+$/i.test(key))
+      return new Response("Not found", { status: 404, headers: { "cache-control": "no-store" } })
+    const page = ui.file("hub.html")
+    if (!page) return Html.respond(Html.message("Web UI missing", MISSING_UI), { status: 503 })
+    const html = typeof page.body === "string" ? page.body : new TextDecoder().decode(page.body)
+    return new Response(html, {
+      headers: {
+        "content-type": "text/html; charset=utf-8",
+        "cache-control": "no-cache",
+        "content-security-policy": csp(html),
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "referrer-policy": "same-origin",
+      },
+    })
   }
 
   async function machineRoute(request: Request, url: URL, server: Server<Tunnel.SocketData>, label: string) {
@@ -194,84 +420,6 @@ export async function start(options: Options) {
     return redirect(target.toString())
   }
 
-  async function login(request: Request, url: URL, server: Server<Tunnel.SocketData>) {
-    const current = auth.session(Auth.readCookie(request.headers.get("cookie")))
-    const afterLogin = (next: string) => (next ? `/hub/handoff?next=${encodeURIComponent(next)}` : "/")
-    if (request.method === "GET" || request.method === "HEAD") {
-      const next = url.searchParams.get("next") ?? ""
-      if (current) return redirect(afterLogin(next))
-      return Html.respond(Html.login({ next }))
-    }
-    if (request.method !== "POST") return new Response("Method not allowed", { status: 405 })
-    if (!sameOrigin(request)) return forbidden()
-    const form = await request.formData()
-    const next = String(form.get("next") ?? "")
-    const client = clientAddress(request, server)
-    const wait = auth.throttled(client)
-    if (wait > 0) {
-      const error = `Too many failed attempts. Try again in ${Math.ceil(wait / 1000)} s.`
-      return Html.respond(Html.login({ next, error }), { status: 429 })
-    }
-    const password = form.get("password")
-    const hash = fixedHash ?? store.setting(PASSWORD_KEY)
-    const valid = typeof password === "string" && hash !== undefined && (await Bun.password.verify(password, hash))
-    if (!valid) {
-      auth.fail(client)
-      return Html.respond(Html.login({ next, error: "Wrong password." }), { status: 401 })
-    }
-    auth.succeed(client)
-    return redirect(afterLogin(next), Auth.sessionCookie(auth.createSession(), secure))
-  }
-
-  async function mutate(request: Request, pathname: string) {
-    if (pathname === "/machines/code") return dashboard({ code: auth.createCode() })
-    const revoke = /^\/machines\/([^/]+)\/revoke$/.exec(pathname)
-    if (revoke) {
-      store.deleteMachine(revoke[1])
-      tunnels.get(revoke[1])?.ws.close(4403, "machine revoked")
-      tunnels.delete(revoke[1])
-      return redirect("/")
-    }
-    const remove = /^\/providers\/([^/]+)\/delete$/.exec(pathname)
-    if (remove) {
-      if (store.deleteProvider(remove[1])) pushConfig()
-      return redirect("/")
-    }
-    if (pathname !== "/providers") return Html.respond(Html.message("Not found", ""), { status: 404 })
-    const form = await request.formData()
-    const field = (name: string) => String(form.get(name) ?? "").trim()
-    const preset = Llm.PRESETS.find((entry) => entry.id === field("preset"))
-    const id = field("id") || preset?.id || ""
-    const baseURL = field("baseURL") || preset?.baseURL || ""
-    const apiKey = field("apiKey")
-    if (!/^[a-zA-Z0-9][a-zA-Z0-9._-]{0,63}$/.test(id))
-      return dashboard({ error: "Provider id must be letters, digits, dots, dashes or underscores." }, 400)
-    if (!/^https?:$/.test(URL.parse(baseURL)?.protocol ?? ""))
-      return dashboard({ error: "Upstream base URL must be http(s)." }, 400)
-    if (!apiKey) return dashboard({ error: "API key is required." }, 400)
-    store.saveProvider({ id, name: field("name") || (preset?.id === id ? preset.name : id), baseURL, apiKey })
-    pushConfig()
-    return redirect("/")
-  }
-
-  function dashboard(extra: { code?: { code: string; expiresAt: number }; error?: string } = {}, status = 200) {
-    const body = Html.dashboard({
-      ...machineList(),
-      url: origin,
-      providers: store.providers(),
-      ...extra,
-    })
-    return Html.respond(body, { status })
-  }
-
-  function machineList() {
-    return {
-      machines: store.machines(),
-      online: (id: string) => tunnels.has(id),
-      machineURL: (id: string) => `${machineOrigin(id)}/`,
-    }
-  }
-
   async function enroll(request: Request, server: Server<Tunnel.SocketData>) {
     if (request.method !== "POST") return Response.json({ error: "method not allowed" }, { status: 405 })
     const client = clientAddress(request, server)
@@ -283,7 +431,9 @@ export async function start(options: Options) {
       auth.fail(client)
       return Response.json({ error: "invalid or expired enrollment code" }, { status: 403 })
     }
-    return Response.json({ ...store.createMachine(name), url: origin })
+    const enrolled = store.createMachine(name)
+    notifyMachines()
+    return Response.json({ ...enrolled, url: origin })
   }
 
   function connect(request: Request, server: Server<Tunnel.SocketData>) {
@@ -311,6 +461,7 @@ export async function start(options: Options) {
     data.tunnel = tunnel
     tunnels.set(machine.id, tunnel)
     store.touchMachine(machine.id)
+    notifyMachines()
     tunnel.send(
       Protocol.encodeJson(Protocol.Type.READY, 0, {
         machine: { id: machine.id, name: machine.name },
@@ -342,12 +493,6 @@ export async function start(options: Options) {
     const label = requested.endsWith(`.${hostname}`) ? requested.slice(0, -hostname.length - 1) : ""
     if (LABEL.test(label) && store.machine(label)) return new Response("ok")
     return new Response("not allowed", { status: 404 })
-  }
-
-  function sameOrigin(request: Request) {
-    const header = request.headers.get("origin")
-    if (header) return header === origin
-    return URL.parse(request.headers.get("referer") ?? "")?.origin === origin
   }
 }
 
@@ -381,3 +526,33 @@ function redirect(location: string, cookie?: string) {
 function forbidden() {
   return new Response("Cross-origin request refused", { status: 403 })
 }
+
+function json(status: number, body: unknown, cookie?: string) {
+  const headers = new Headers({ "cache-control": "no-store" })
+  if (cookie) headers.set("set-cookie", cookie)
+  return Response.json(body, { status, headers })
+}
+
+function assetResponse(key: string, asset: { body: string | Uint8Array; type: string }) {
+  // Vite content-hashes everything under `_assets/`; other files (fonts, icons) keep their names across releases.
+  const immutable = key.startsWith("_assets/")
+  // The copy gives DOM typings the ArrayBuffer-backed view they require.
+  return new Response(typeof asset.body === "string" ? asset.body : new Uint8Array(asset.body), {
+    headers: {
+      "content-type": asset.type,
+      "cache-control": immutable ? "public, max-age=31536000, immutable" : "public, max-age=3600, must-revalidate",
+      "x-content-type-options": "nosniff",
+    },
+  })
+}
+
+/** Allows the page's inline theme preload script by hash, like the CLI's web UI does. */
+function csp(html: string) {
+  const script = html.match(
+    /<script\b(?![^>]*\bsrc\s*=)[^>]*\bid=(["'])oc-theme-preload-script\1[^>]*>([\s\S]*?)<\/script>/i,
+  )?.[2]
+  const hash = script === undefined ? "" : ` 'sha256-${createHash("sha256").update(script).digest("base64")}'`
+  return `default-src 'self'; script-src 'self'${hash}; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self' data:; connect-src 'self'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'; object-src 'none'`
+}
+
+const MISSING_UI = `<p>This hub was started without its web interface. In a source checkout, build it with <code>bun run --cwd packages/app build</code> and restart <code>opencode hub</code>. Release builds embed it.</p>`

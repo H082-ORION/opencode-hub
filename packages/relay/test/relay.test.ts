@@ -90,7 +90,7 @@ const state = {} as {
 }
 
 beforeAll(async () => {
-  state.hub = await Hub.start({ hostname: "127.0.0.1", port: 0, data, password: PASSWORD })
+  state.hub = await Hub.start({ hostname: "127.0.0.1", port: 0, data, password: PASSWORD, catalog: { fetch: offline } })
   state.enrollment = await Agent.enroll({
     url: state.hub.url,
     code: state.hub.createEnrollmentCode().code,
@@ -207,47 +207,171 @@ describe("browser access", () => {
 
   test("a wrong password is throttled per client", async () => {
     const attempt = (password: string) =>
-      fetch(`${state.hub.url}/login`, {
-        method: "POST",
-        headers: { origin: state.hub.url, "x-forwarded-for": "203.0.113.9" },
-        body: new URLSearchParams({ password }),
-        redirect: "manual",
-      })
-    expect((await attempt("wrong")).status).toBe(401)
-    expect((await attempt(PASSWORD)).status).toBe(429)
+      api("login", { method: "POST", body: { password }, headers: { "x-forwarded-for": "203.0.113.9" }, cookie: "" })
+    const wrong = await attempt("wrong")
+    expect(wrong.status).toBe(401)
+    expect(await wrong.json()).toEqual({ error: "Wrong password." })
+    const throttled = await attempt(PASSWORD)
+    expect(throttled.status).toBe(429)
+    expect(throttled.headers.get("set-cookie")).toBeNull()
   })
 
-  test("dashboard lists the machine and refuses cross-origin mutations", async () => {
-    const page = await (await fetch(`${state.hub.url}/`, { headers: { cookie: state.cookie } })).text()
-    expect(page).toContain("Test Machine")
-    expect(page).toContain(">online<")
-    const refused = await fetch(`${state.hub.url}/machines/code`, {
+  test("login returns the handoff redirect for a machine destination", async () => {
+    const next = `${state.machineURL}/echo`
+    const response = await api("login", {
       method: "POST",
-      headers: { cookie: state.cookie, origin: "http://evil.example" },
+      body: { password: PASSWORD, next },
+      headers: { "x-forwarded-for": "203.0.113.11" },
+      cookie: "",
     })
-    expect(refused.status).toBe(403)
-    const code = await fetch(`${state.hub.url}/machines/code`, {
+    expect(response.status).toBe(200)
+    expect(await response.json()).toEqual({ redirect: `/hub/handoff?next=${encodeURIComponent(next)}` })
+    expect(response.headers.get("set-cookie")).toContain("HttpOnly")
+  })
+
+  test("reports the session and signs out", async () => {
+    expect((await api("session", { cookie: "" })).status).toBe(401)
+    expect(await (await api("session")).json()).toEqual({ authenticated: true })
+    const cookie = await login()
+    const out = await api("logout", { method: "POST", cookie })
+    expect(out.status).toBe(200)
+    expect(out.headers.get("set-cookie")).toContain("Max-Age=0")
+    expect((await api("session", { cookie })).status).toBe(401)
+    expect((await api("machines", { cookie })).status).toBe(401)
+  })
+
+  test("refuses cross-origin and non-JSON mutations", async () => {
+    const foreign = await api("machines/code", { method: "POST", headers: { origin: "http://evil.example" } })
+    expect(foreign.status).toBe(403)
+    const missing = await api("machines/code", { method: "POST", headers: { origin: "" } })
+    expect(missing.status).toBe(403)
+    const form = await fetch(`${state.hub.url}/hub/api/machines/code`, {
       method: "POST",
       headers: { cookie: state.cookie, origin: state.hub.url },
+      body: new URLSearchParams({ x: "1" }),
     })
-    expect(await code.text()).toContain(`opencode agent join ${state.hub.url} --code `)
+    expect(form.status).toBe(415)
   })
 
-  test("serves the machines table for live refresh only to a signed-in user", async () => {
-    const fragment = await fetch(`${state.hub.url}/hub/machines`, { headers: { cookie: state.cookie } })
-    const html = await fragment.text()
-    expect(html).toContain("Test Machine")
-    expect(html).toContain(">online<")
-    expect(html).not.toContain("<html")
-    const anonymous = await fetch(`${state.hub.url}/hub/machines`, { redirect: "manual" })
-    expect(anonymous.status).toBe(302)
+  test("issues enrollment codes with the join command", async () => {
+    const response = await api("machines/code", { method: "POST" })
+    const body = (await response.json()) as { code: string; expiresAt: number; command: string }
+    expect(body.code).toMatch(/^[A-Z2-9]{4}-[A-Z2-9]{4}$/)
+    expect(body.expiresAt).toBeGreaterThan(Date.now())
+    expect(body.command).toBe(`opencode agent join ${state.hub.url} --code ${body.code}`)
   })
 
-  test("escapes machine names in the dashboard", async () => {
-    await Agent.enroll({ url: state.hub.url, code: state.hub.createEnrollmentCode().code, name: "<b>evil</b>" })
-    const page = await (await fetch(`${state.hub.url}/`, { headers: { cookie: state.cookie } })).text()
-    expect(page).toContain("&#60;b&#62;evil&#60;/b&#62;")
-    expect(page).not.toContain("<b>evil</b>")
+  test("lists machines with their status and handoff link", async () => {
+    const list = (await (await api("machines")).json()) as Machine[]
+    const entry = list.find((item) => item.id === "test-machine")
+    expect(entry).toMatchObject({ name: "Test Machine", online: true })
+    expect(entry?.lastSeenAt).toBeNumber()
+    expect(entry?.url).toBe(`/hub/handoff?next=${encodeURIComponent(`${state.machineURL}/`)}`)
+  })
+
+  test("pushes the machine list when a machine enrolls, connects and is revoked", async () => {
+    const response = await api("events")
+    expect(response.headers.get("content-type")).toBe("text/event-stream")
+    const events = sse(response.body!.getReader())
+    expect((await events.next()).find((item) => item.id === "test-machine")?.online).toBe(true)
+
+    const enrollment = await Agent.enroll({
+      url: state.hub.url,
+      code: state.hub.createEnrollmentCode().code,
+      name: "Live",
+    })
+    expect((await events.next()).find((item) => item.id === "live")).toMatchObject({ online: false })
+
+    const agent = Agent.connect({ enrollment, local: async () => ({ url: `http://127.0.0.1:${local.port}` }) })
+    expect((await events.next()).find((item) => item.id === "live")).toMatchObject({ online: true })
+
+    expect((await api("machines/live", { method: "DELETE" })).status).toBe(204)
+    const after = await events.until((list) => !list.some((item) => item.id === "live"))
+    expect(after.some((item) => item.id === "test-machine")).toBe(true)
+    expect((await api("machines/live", { method: "DELETE" })).status).toBe(404)
+    await events.cancel()
+    await agent.close()
+  })
+
+  test("manages providers without exposing keys", async () => {
+    const presets = (await (await api("presets")).json()) as { id: string }[]
+    expect(presets.map((preset) => preset.id)).toContain("anthropic")
+    const saved = await api("providers", { method: "POST", body: { id: "anthropic", apiKey: "sk-secret" } })
+    expect(saved.status).toBe(200)
+    const invalid = await api("providers", { method: "POST", body: { id: "bad id", baseURL: "x", apiKey: "k" } })
+    expect(invalid.status).toBe(400)
+    const listed = await (await api("providers")).text()
+    expect(JSON.parse(listed)).toContainEqual({
+      id: "anthropic",
+      name: "Anthropic",
+      baseURL: "https://api.anthropic.com/v1",
+      auth: "key",
+    })
+    expect(listed).not.toContain("sk-secret")
+    expect((await api("providers/anthropic", { method: "DELETE" })).status).toBe(204)
+    expect((await api("providers/anthropic", { method: "DELETE" })).status).toBe(404)
+  })
+
+  test("starts a ChatGPT sign-in and reports a bad callback", async () => {
+    const begin = (await (await api("providers/chatgpt/begin", { method: "POST" })).json()) as {
+      attempt: string
+      url: string
+    }
+    expect(begin.url).toContain("/api/accounts/authorize?")
+    const complete = await api("providers/chatgpt/complete", {
+      method: "POST",
+      body: { attempt: "unknown", callback: "http://127.0.0.1:1455/auth/callback?code=x" },
+    })
+    expect(complete.status).toBe(400)
+    expect(((await complete.json()) as { error: string }).error).toContain("expired")
+  })
+
+  test("serves the dashboard page and assets from the web UI", async () => {
+    const ui = {
+      "hub.html": `<html><script id="oc-theme-preload-script">theme()</script><div id="root"></div></html>`,
+      "_assets/hub-abc.js": "console.log(1)",
+      "index.html": "<html>main app</html>",
+    } as Record<string, string>
+    const hub = await Hub.start({
+      hostname: "127.0.0.1",
+      port: 0,
+      data: mkdtempSync(path.join(os.tmpdir(), "opencode-relay-ui-")),
+      password: PASSWORD,
+      catalog: { fetch: offline },
+      ui: { file: (key) => (ui[key] === undefined ? undefined : { body: ui[key], type: Bun.file(key).type }) },
+    })
+    const page = await fetch(`${hub.url}/`)
+    expect(await page.text()).toBe(ui["hub.html"])
+    expect(page.headers.get("cache-control")).toBe("no-cache")
+    const hash = new Bun.CryptoHasher("sha256").update("theme()").digest("base64")
+    expect(page.headers.get("content-security-policy")).toContain(`'sha256-${hash}'`)
+    expect(await (await fetch(`${hub.url}/login?next=x`)).text()).toBe(ui["hub.html"])
+    // The main app shell belongs to machine hosts.
+    expect((await fetch(`${hub.url}/index.html`)).status).toBe(404)
+    const script = await fetch(`${hub.url}/_assets/hub-abc.js`)
+    expect(await script.text()).toBe("console.log(1)")
+    expect(script.headers.get("cache-control")).toContain("immutable")
+    expect((await fetch(`${hub.url}/_assets/missing.js`)).status).toBe(404)
+    await hub.stop()
+  })
+
+  test("explains a missing web UI", async () => {
+    const response = await fetch(`${state.hub.url}/`)
+    expect(response.status).toBe(503)
+    expect(await response.text()).toContain("bun run --cwd packages/app build")
+  })
+
+  test("a signed-in visit to the login page goes straight on", async () => {
+    const next = `${state.machineURL}/echo`
+    const response = await fetch(`${state.hub.url}/login?next=${encodeURIComponent(next)}`, {
+      headers: { cookie: state.cookie },
+      redirect: "manual",
+    })
+    expect(response.headers.get("location")).toBe(`/hub/handoff?next=${encodeURIComponent(next)}`)
+    const anonymous = await fetch(`${state.hub.url}/hub/handoff?next=${encodeURIComponent(next)}`, {
+      redirect: "manual",
+    })
+    expect(anonymous.headers.get("location")).toBe(`/login?next=${encodeURIComponent(next)}`)
   })
 })
 
@@ -372,20 +496,12 @@ describe("websocket proxy", () => {
 
 describe("llm proxy", () => {
   test("pushes provider changes to connected agents", async () => {
-    const response = await fetch(`${state.hub.url}/providers`, {
+    const response = await api("providers", {
       method: "POST",
-      headers: { cookie: state.cookie, origin: state.hub.url },
-      body: new URLSearchParams({
-        preset: "",
-        id: "fake",
-        name: "Fake",
-        baseURL: `http://127.0.0.1:${upstream.port}/v1`,
-        apiKey: "real-key",
-      }),
-      redirect: "manual",
+      body: { id: "fake", name: "Fake", baseURL: `http://127.0.0.1:${upstream.port}/v1`, apiKey: "real-key" },
     })
-    expect(response.status).toBe(302)
-    await until(() => state.configs.length > 0)
+    expect(response.status).toBe(200)
+    await until(() => state.configs.at(-1)?.providers.some((provider) => provider.id === "fake") === true)
     expect(state.configs.at(-1)).toEqual({ baseURL: `${state.hub.url}/llm`, providers: [{ id: "fake", name: "Fake" }] })
   })
 
@@ -520,12 +636,8 @@ describe("tunnel lifecycle", () => {
   })
 
   test("revoking a machine closes its tunnel and refuses its token", async () => {
-    const response = await fetch(`${state.hub.url}/machines/test-machine/revoke`, {
-      method: "POST",
-      headers: { cookie: state.cookie, origin: state.hub.url },
-      redirect: "manual",
-    })
-    expect(response.status).toBe(302)
+    const response = await api("machines/test-machine", { method: "DELETE" })
+    expect(response.status).toBe(204)
     await waitStatus(state.statuses, (entry) => entry.status === "stopped")
     expect(state.statuses.list.at(-1)?.detail).toBe("machine revoked")
     expect((await fetch(`${state.machineURL}/echo`, { headers: { cookie: state.cookie } })).status).toBe(404)
@@ -543,15 +655,58 @@ describe("tunnel lifecycle", () => {
   })
 })
 
+/** Keeps the provider catalog on its built-in list, so tests never reach models.dev. */
+const offline = Object.assign(async () => Response.error(), { preconnect: () => {} }) as typeof fetch
+
+type Machine = { id: string; name: string; online: boolean; lastSeenAt: number | null; url: string }
+
 async function login() {
-  const response = await fetch(`${state.hub.url}/login`, {
-    method: "POST",
-    headers: { origin: state.hub.url },
-    body: new URLSearchParams({ password: PASSWORD, next: "" }),
+  const response = await api("login", { method: "POST", body: { password: PASSWORD }, cookie: "" })
+  expect(response.status).toBe(200)
+  expect(await response.json()).toEqual({ redirect: "/" })
+  return (response.headers.get("set-cookie") ?? "").split(";")[0]
+}
+
+/** Calls the dashboard API as the signed-in browser would: same origin, JSON bodies. */
+function api(
+  route: string,
+  init: { method?: string; body?: unknown; headers?: Record<string, string>; cookie?: string } = {},
+) {
+  const method = init.method ?? "GET"
+  const headers = new Headers(method === "GET" ? {} : { origin: state.hub.url, "content-type": "application/json" })
+  const cookie = init.cookie ?? state.cookie
+  if (cookie) headers.set("cookie", cookie)
+  Object.entries(init.headers ?? {}).forEach(([name, value]) =>
+    value ? headers.set(name, value) : headers.delete(name),
+  )
+  return fetch(`${state.hub.url}/hub/api/${route}`, {
+    method,
+    headers,
+    body: init.body === undefined ? (method === "GET" ? undefined : "{}") : JSON.stringify(init.body),
     redirect: "manual",
   })
-  expect(response.status).toBe(302)
-  return (response.headers.get("set-cookie") ?? "").split(";")[0]
+}
+
+/** Reads `machines` events from the dashboard's event stream. */
+function sse(reader: { read(): Promise<{ done: boolean; value?: Uint8Array }>; cancel(): Promise<void> }) {
+  const decoder = new TextDecoder()
+  const buffer = { text: "" }
+  const next = async (): Promise<Machine[]> => {
+    const match = /event: machines\ndata: (.*)\n\n/.exec(buffer.text)
+    if (match) {
+      buffer.text = buffer.text.slice(match.index + match[0].length)
+      return JSON.parse(match[1]) as Machine[]
+    }
+    const chunk = await reader.read()
+    if (chunk.done) throw new Error("event stream ended")
+    buffer.text += decoder.decode(chunk.value, { stream: true })
+    return next()
+  }
+  const until = async (match: (list: Machine[]) => boolean): Promise<Machine[]> => {
+    const list = await next()
+    return match(list) ? list : until(match)
+  }
+  return { next, until, cancel: () => reader.cancel() }
 }
 
 function machine(pathname: string, init: RequestInit = {}) {
