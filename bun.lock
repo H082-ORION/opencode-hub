@@ -120,6 +120,7 @@
         "@opencode/client": "workspace:*",
         "@opencode/plugin": "workspace:*",
         "@opencode/pty": "0.4.0",
+        "@opencode/relay": "workspace:*",
         "@opencode/schema": "workspace:*",
         "@opencode/server": "workspace:*",
         "@opencode/tui": "workspace:*",
@@ -550,6 +551,18 @@
         "@typescript/native": "catalog:",
         "prettier": "3.6.2",
         "typescript": "catalog:",
+      },
+    },
+    "packages/relay": {
+      "name": "@opencode/relay",
+      "version": "2.2.5",
+      "dependencies": {
+        "effect": "catalog:",
+      },
+      "devDependencies": {
+        "@tsconfig/bun": "catalog:",
+        "@types/bun": "catalog:",
+        "@typescript/native": "catalog:",
       },
     },
     "packages/schema": {
@@ -1955,6 +1968,8 @@
     "@opencode/pty-win32-arm64": ["@opencode/pty-win32-arm64@0.4.0", "", { "os": "win32", "cpu": "arm64" }, "sha512-IKJMUnS2aluWqRj13enMWomYtwbXq8rStcf/mUbxBoAGTDMtWR/ZrRmKb2ptR7KUqDjdSEa+8C8rczS7uGFl9g=="],
 
     "@opencode/pty-win32-x64": ["@opencode/pty-win32-x64@0.4.0", "", { "os": "win32", "cpu": "x64" }, "sha512-P1QJLUX918/y8he8VEBSYoiN5bYhUnJtEaEpiE5fxoYsDP9nqAHXqIrGxTNNnda5jOBcCalxxy0WhL8qgeKOqQ=="],
+
+    "@opencode/relay": ["@opencode/relay@workspace:packages/relay"],
 
     "@opencode/schema": ["@opencode/schema@workspace:packages/schema"],
 
