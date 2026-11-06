@@ -191,6 +191,12 @@ export const password = Effect.fn("cli.service-config.password")(function* (valu
   return next
 })
 
+// Replaces the saved environment without stopping the service; the caller restarts it when it should apply.
+export const replaceEnv = Effect.fn("cli.service-config.replace-env")(function* (env: Readonly<Record<string, string>>) {
+  const { env: _env, ...rest } = yield* read()
+  yield* write(Object.keys(env).length === 0 ? rest : { ...rest, env: { ...env } })
+})
+
 export const acceptRemote = Effect.fn("cli.service-config.accept-remote")(function* () {
   yield* write({ ...(yield* read()), remoteAccepted: true })
 })

@@ -541,6 +541,54 @@ const Root = Spec.make(typeof OPENCODE_CLI_NAME === "string" ? OPENCODE_CLI_NAME
         }),
       ],
     }),
+    Spec.make("hub", {
+      description: "Run a hub that gives browser access to remote machines",
+      params: {
+        hostname: Flag.String("hostname").pipe(
+          Flag.withDescription("Hostname to listen on"),
+          Flag.withDefault("127.0.0.1"),
+        ),
+        port: Flag.Int("port").pipe(Flag.withDescription("Port to listen on"), Flag.withDefault(4800)),
+        url: Flag.String("url").pipe(
+          Flag.withDescription("Public base URL of the hub (default: http://localhost:<port>)"),
+          Flag.optional,
+        ),
+        data: Flag.String("data").pipe(
+          Flag.withDescription("Data directory (default: <global data>/hub)"),
+          Flag.optional,
+        ),
+      },
+      commands: [
+        Spec.make("password", {
+          description: "Reset the hub password and print the new one",
+          params: {
+            data: Flag.String("data").pipe(
+              Flag.withDescription("Data directory (default: <global data>/hub)"),
+              Flag.optional,
+            ),
+          },
+        }),
+      ],
+    }),
+    Spec.make("agent", {
+      description: "Connect this machine to a hub",
+      commands: [
+        Spec.make("join", {
+          description: "Enroll this machine with a hub",
+          params: {
+            url: Argument.String("url").pipe(Argument.withDescription("Hub URL")),
+            code: Flag.String("code").pipe(Flag.withDescription("One-time enrollment code from the hub dashboard")),
+            name: Flag.String("name").pipe(
+              Flag.withDescription("Machine name (default: this computer's hostname)"),
+              Flag.optional,
+            ),
+          },
+        }),
+        Spec.make("run", { description: "Keep this machine connected to its hub" }),
+        Spec.make("status", { description: "Show this machine's hub enrollment" }),
+        Spec.make("leave", { description: "Forget this machine's hub enrollment" }),
+      ],
+    }),
     Spec.make("reload", {
       description: "Reload configuration",
       globalFlags: ServerFlags,

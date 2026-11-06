@@ -95,6 +95,16 @@ const Handlers = Runtime.handlers(Commands, {
     set: () => import("./commands/handlers/service/set"),
     unset: () => import("./commands/handlers/service/unset"),
   },
+  hub: {
+    $: () => import("./commands/handlers/hub/start"),
+    password: () => import("./commands/handlers/hub/password"),
+  },
+  agent: {
+    join: () => import("./commands/handlers/agent/join"),
+    run: () => import("./commands/handlers/agent/run"),
+    status: () => import("./commands/handlers/agent/status"),
+    leave: () => import("./commands/handlers/agent/leave"),
+  },
   serve: () => import("./commands/handlers/serve"),
 })
 
