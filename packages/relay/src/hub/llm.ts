@@ -3,24 +3,19 @@ import type { Store } from "./store.js"
 
 export * as Llm from "./llm.js"
 
-export const PRESETS = [
-  { id: "anthropic", name: "Anthropic", baseURL: "https://api.anthropic.com/v1" },
-  { id: "openai", name: "OpenAI", baseURL: "https://api.openai.com/v1" },
-  { id: "openrouter", name: "OpenRouter", baseURL: "https://openrouter.ai/api/v1" },
-  { id: "google", name: "Google", baseURL: "https://generativelanguage.googleapis.com/v1beta" },
-  { id: "mistral", name: "Mistral", baseURL: "https://api.mistral.ai/v1" },
-  { id: "groq", name: "Groq", baseURL: "https://api.groq.com/openai/v1" },
-  { id: "deepseek", name: "DeepSeek", baseURL: "https://api.deepseek.com/v1" },
-]
-
 // Headers that describe the client's connection or encoding rather than the request itself.
 const DROPPED_REQUEST = new Set(["host", "cookie", "origin", "referer", "content-length", "accept-encoding"])
 
 /**
  * Forwards `/llm/<provider>/<rest>` to the provider's upstream, replacing the machine's llm token with the real key
- * in whichever place carried it.
+ * in whichever place carried it. ChatGPT providers always get a bearer access token from `chatgpt` instead.
  */
-export async function proxy(request: Request, url: URL, store: Store.Instance) {
+export async function proxy(
+  request: Request,
+  url: URL,
+  store: Store.Instance,
+  chatgpt?: { accessToken(provider: Store.Provider): Promise<string> },
+) {
   const match = /^\/llm\/([^/]+)(\/.*)?$/.exec(url.pathname)
   if (!match) return json(404, "unknown provider")
   const headers = toHeaders(
@@ -31,15 +26,35 @@ export async function proxy(request: Request, url: URL, store: Store.Instance) {
   const query = new URLSearchParams(url.search)
   const bearer = /^Bearer\s+(\S+)$/i.exec(request.headers.get("authorization") ?? "")?.[1]
   const slots = [
-    { token: bearer, apply: (key: string) => headers.set("authorization", `Bearer ${key}`) },
-    { token: request.headers.get("x-api-key"), apply: (key: string) => headers.set("x-api-key", key) },
-    { token: request.headers.get("x-goog-api-key"), apply: (key: string) => headers.set("x-goog-api-key", key) },
-    { token: query.get("key"), apply: (key: string) => query.set("key", key) },
+    {
+      token: bearer,
+      apply: (key: string) => headers.set("authorization", `Bearer ${key}`),
+      clear: () => headers.delete("authorization"),
+    },
+    {
+      token: request.headers.get("x-api-key"),
+      apply: (key: string) => headers.set("x-api-key", key),
+      clear: () => headers.delete("x-api-key"),
+    },
+    {
+      token: request.headers.get("x-goog-api-key"),
+      apply: (key: string) => headers.set("x-goog-api-key", key),
+      clear: () => headers.delete("x-goog-api-key"),
+    },
+    { token: query.get("key"), apply: (key: string) => query.set("key", key), clear: () => query.delete("key") },
   ].filter((slot) => slot.token && store.machineByLlmToken(slot.token))
   if (slots.length === 0) return json(401, "invalid llm token")
   const provider = store.provider(match[1])
   if (!provider) return json(404, "unknown provider")
-  slots.forEach((slot) => slot.apply(provider.api_key))
+  const access = provider.auth === "chatgpt" ? await chatgptToken(provider, chatgpt) : undefined
+  if (access instanceof Response) return access
+  slots.forEach((slot) => (access === undefined ? slot.apply(provider.api_key) : slot.clear()))
+  if (access !== undefined) headers.set("authorization", `Bearer ${access}`)
+  const body =
+    request.method === "GET" || request.method === "HEAD" ? undefined : new Uint8Array(await request.arrayBuffer())
+  // ChatGPT token sharing rejects uncompressed bodies over ~1 MiB and decodes zstd.
+  const compress = access !== undefined && body !== undefined && body.length > 0 && !headers.has("content-encoding")
+  if (compress) headers.set("content-encoding", "zstd")
 
   const search = query.toString()
   const upstream = `${provider.base_url.replace(/\/+$/, "")}${target.pathname}${search ? `?${search}` : ""}`
@@ -47,7 +62,7 @@ export async function proxy(request: Request, url: URL, store: Store.Instance) {
     method: request.method,
     headers,
     // LLM requests are small; buffering gives upstreams a content-length instead of a chunked upload.
-    body: request.method === "GET" || request.method === "HEAD" ? undefined : await request.arrayBuffer(),
+    body: compress ? new Uint8Array(Bun.zstdCompressSync(body)) : body,
     redirect: "manual",
     signal: request.signal,
   }).catch((error: unknown) => error as Error)
@@ -57,6 +72,18 @@ export async function proxy(request: Request, url: URL, store: Store.Instance) {
     statusText: response.statusText,
     headers: toHeaders(withoutDecodedHeaders(response.headers)),
   })
+}
+
+async function chatgptToken(
+  provider: Store.Provider,
+  chatgpt: { accessToken(provider: Store.Provider): Promise<string> } | undefined,
+) {
+  if (!chatgpt) return json(502, "ChatGPT sign-in is not available on this hub")
+  return chatgpt
+    .accessToken(provider)
+    .catch((error: unknown) =>
+      json(502, `ChatGPT token refresh failed: ${error instanceof Error ? error.message : String(error)}`),
+    )
 }
 
 function json(status: number, error: string) {

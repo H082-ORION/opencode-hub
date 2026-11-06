@@ -1,4 +1,5 @@
 import { Database } from "bun:sqlite"
+import { Option, Schema } from "effect"
 import { mkdirSync } from "node:fs"
 import path from "node:path"
 
@@ -11,13 +12,33 @@ export type Machine = {
   last_seen_at: number | null
 }
 
+const OAuth = Schema.Struct({
+  access: Schema.String,
+  refresh: Schema.String,
+  expires: Schema.Number,
+  clientID: Schema.String,
+  scopes: Schema.Array(Schema.String),
+})
+export type OAuth = typeof OAuth.Type
+const decodeOAuth = Schema.decodeUnknownOption(Schema.fromJsonString(OAuth))
+
+/** `key` providers forward `api_key`; `chatgpt` providers use the OAuth credential in `oauth`. */
+export type Auth = "key" | "chatgpt"
+
 export type Provider = {
   id: string
   name: string
   base_url: string
   api_key: string
+  auth: Auth
+  oauth: OAuth | undefined
   created_at: number
 }
+
+/** Provider fields that are safe to show in the UI: no key, no tokens. */
+export type ProviderSummary = Pick<Provider, "id" | "name" | "base_url" | "auth">
+
+type ProviderRow = Omit<Provider, "auth" | "oauth"> & { auth: string; oauth: string | null }
 
 // Labels that would collide with infrastructure names or look like the hub itself.
 const RESERVED = new Set(["www", "hub", "api", "app", "admin", "mail", "llm", "localhost", "static", "assets"])
@@ -40,8 +61,19 @@ export function open(dir: string) {
     name TEXT NOT NULL,
     base_url TEXT NOT NULL,
     api_key TEXT NOT NULL,
+    auth TEXT NOT NULL DEFAULT 'key',
+    oauth TEXT,
     created_at INTEGER NOT NULL
   )`)
+  // Databases created before OAuth providers lack these columns.
+  const columns = new Set(
+    db
+      .query<{ name: string }, []>("PRAGMA table_info(provider)")
+      .all()
+      .map((row) => row.name),
+  )
+  if (!columns.has("auth")) db.run("ALTER TABLE provider ADD COLUMN auth TEXT NOT NULL DEFAULT 'key'")
+  if (!columns.has("oauth")) db.run("ALTER TABLE provider ADD COLUMN oauth TEXT")
   db.run("CREATE TABLE IF NOT EXISTS setting (key TEXT PRIMARY KEY, value TEXT NOT NULL)")
 
   const machineColumns = "id, name, created_at, last_seen_at"
@@ -50,8 +82,9 @@ export function open(dir: string) {
     machine: db.query<Machine, [string]>(`SELECT ${machineColumns} FROM machine WHERE id = ?`),
     byTunnel: db.query<Machine, [string]>(`SELECT ${machineColumns} FROM machine WHERE tunnel_token_hash = ?`),
     byLlm: db.query<Machine, [string]>(`SELECT ${machineColumns} FROM machine WHERE llm_token_hash = ?`),
-    providers: db.query<Provider, []>("SELECT * FROM provider ORDER BY id"),
-    provider: db.query<Provider, [string]>("SELECT * FROM provider WHERE id = ?"),
+    providers: db.query<ProviderRow, []>("SELECT * FROM provider ORDER BY id"),
+    provider: db.query<ProviderRow, [string]>("SELECT * FROM provider WHERE id = ?"),
+    summaries: db.query<ProviderSummary, []>("SELECT id, name, base_url, auth FROM provider ORDER BY id"),
     setting: db.query<{ value: string }, [string]>("SELECT value FROM setting WHERE key = ?"),
   }
 
@@ -79,14 +112,31 @@ export function open(dir: string) {
     },
     deleteMachine: (id: string) => db.run("DELETE FROM machine WHERE id = ?", [id]).changes > 0,
     touchMachine: (id: string) => db.run("UPDATE machine SET last_seen_at = ? WHERE id = ?", [Date.now(), id]),
-    providers: () => queries.providers.all(),
-    provider: (id: string) => queries.provider.get(id) ?? undefined,
+    /** Full provider rows including secrets; only for the proxy and other server-side code. */
+    providers: () => queries.providers.all().map(fromRow),
+    provider(id: string) {
+      const row = queries.provider.get(id)
+      return row ? fromRow(row) : undefined
+    },
+    providerSummaries: () => queries.summaries.all(),
     saveProvider: (input: { id: string; name: string; baseURL: string; apiKey: string }) =>
       db.run(
-        `INSERT INTO provider (id, name, base_url, api_key, created_at) VALUES (?, ?, ?, ?, ?)
-         ON CONFLICT (id) DO UPDATE SET name = excluded.name, base_url = excluded.base_url, api_key = excluded.api_key`,
+        `INSERT INTO provider (id, name, base_url, api_key, auth, oauth, created_at) VALUES (?, ?, ?, ?, 'key', NULL, ?)
+         ON CONFLICT (id) DO UPDATE SET name = excluded.name, base_url = excluded.base_url, api_key = excluded.api_key,
+           auth = excluded.auth, oauth = excluded.oauth`,
         [input.id, input.name, input.baseURL, input.apiKey, Date.now()],
       ),
+    saveOAuthProvider: (input: { id: string; name: string; baseURL: string; oauth: OAuth }) =>
+      db.run(
+        `INSERT INTO provider (id, name, base_url, api_key, auth, oauth, created_at) VALUES (?, ?, ?, '', 'chatgpt', ?, ?)
+         ON CONFLICT (id) DO UPDATE SET name = excluded.name, base_url = excluded.base_url, api_key = excluded.api_key,
+           auth = excluded.auth, oauth = excluded.oauth`,
+        [input.id, input.name, input.baseURL, JSON.stringify(input.oauth), Date.now()],
+      ),
+    /** Replaces the credential of an existing OAuth provider, e.g. after a refresh. */
+    updateOAuth: (id: string, oauth: OAuth) =>
+      db.run("UPDATE provider SET oauth = ? WHERE id = ? AND auth = 'chatgpt'", [JSON.stringify(oauth), id]).changes >
+      0,
     deleteProvider: (id: string) => db.run("DELETE FROM provider WHERE id = ?", [id]).changes > 0,
     setting: (key: string) => queries.setting.get(key)?.value,
     setSetting: (key: string, value: string) =>
@@ -99,6 +149,14 @@ export function open(dir: string) {
 }
 
 export type Instance = ReturnType<typeof open>
+
+function fromRow(row: ProviderRow): Provider {
+  return {
+    ...row,
+    auth: row.auth === "chatgpt" ? "chatgpt" : "key",
+    oauth: row.oauth === null ? undefined : Option.getOrUndefined(decodeOAuth(row.oauth)),
+  }
+}
 
 /** Lowercase DNS label derived from a machine name: a-z, 0-9 and single hyphens, at most 32 characters. */
 export function slug(name: string) {

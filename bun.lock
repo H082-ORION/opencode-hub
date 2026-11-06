@@ -558,6 +558,7 @@
       "version": "2.2.5",
       "dependencies": {
         "effect": "catalog:",
+        "jose": "6.0.11",
       },
       "devDependencies": {
         "@tsconfig/bun": "catalog:",
