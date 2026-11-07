@@ -180,7 +180,7 @@ describe("browser access", () => {
     })
     expect(handoff.status).toBe(302)
     const ticketURL = handoff.headers.get("location") ?? ""
-    expect(ticketURL.startsWith(`${state.machineURL}/__hub/session?ticket=`)).toBe(true)
+    expect(ticketURL.startsWith(`${state.machineURL}/auth/hub-session?ticket=`)).toBe(true)
 
     const session = await fetch(ticketURL, { redirect: "manual" })
     expect(session.status).toBe(302)

@@ -39,6 +39,9 @@ export type Options = {
 type Listener = { session: string; send: (text: string) => void; close: () => void }
 
 const PASSWORD_KEY = "password_hash"
+// The machine's web app installs a service worker that answers every navigation with its own index.html except under
+// /api and /auth, so the handoff has to live under /auth to reach the hub once that worker is installed.
+const SESSION_PATH = "/auth/hub-session"
 const PING_INTERVAL = 25_000
 const KEEPALIVE_INTERVAL = 25_000
 const HELLO_TIMEOUT = 10_000
@@ -367,7 +370,7 @@ export async function start(options: Options) {
       const body = `<p class="muted">No machine is registered under this address.</p><p><a href="${Html.escape(origin)}/">Back to the hub</a></p>`
       return Html.respond(Html.message("Unknown machine", body), { status: 404 })
     }
-    if (url.pathname === "/__hub/session") return session(url, machine)
+    if (url.pathname === SESSION_PATH) return session(url, machine)
     const cookie = request.headers.get("cookie")
     const upgrade = request.headers.get("upgrade")?.toLowerCase() === "websocket"
     if (!auth.session(Auth.readCookie(cookie))) {
@@ -414,7 +417,7 @@ export async function start(options: Options) {
     const machine = host.endsWith(`.${domain}`) ? store.machine(host.slice(0, -domain.length - 1)) : undefined
     if (!machine) return redirect("/")
     const ticket = auth.createTicket(session, machine.id)
-    const target = new URL("/__hub/session", machineOrigin(machine.id))
+    const target = new URL(SESSION_PATH, machineOrigin(machine.id))
     target.searchParams.set("ticket", ticket)
     target.searchParams.set("next", `${next.pathname}${next.search}`)
     return redirect(target.toString())

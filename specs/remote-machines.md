@@ -41,7 +41,7 @@ Cookie handoff to machine hosts (cookies are host-only, so no `Domain=` attribut
 
 1. Unauthenticated request on `<m>.<domain>` -> 302 to `<hub-origin>/login?next=<full url>`.
 2. After login (or when already logged in), `GET <hub-origin>/hub/handoff?next=<full url>` validates that `next` is the
-   hub or a machine host, creates a one-time ticket (60 s), and 302s to `<m-origin>/__hub/session?ticket=..&next=<path>`.
+   hub or a machine host, creates a one-time ticket (60 s), and 302s to `<m-origin>/auth/hub-session?ticket=..&next=<path>`.
 3. The machine host consumes the ticket, sets its own `opencode_hub` cookie and 302s to `next`.
 
 ## Tunnel protocol (WebSocket, binary messages)
@@ -101,7 +101,7 @@ Rules:
   - `ANY /llm/<provider>/<rest>`: LLM proxy (below).
   - `GET /hub/tls-allowed?domain=` -> 200 for the hub host and existing machine hosts, else 404.
   - `GET /hub/health` -> 200.
-- Routes on `<m>.<domain>`: `/__hub/session` (ticket consumption); everything else requires the cookie and is proxied
+- Routes on `<m>.<domain>`: `/auth/hub-session` (ticket consumption); everything else requires the cookie and is proxied
   through the tunnel, including WebSocket upgrades. Machine offline -> 503 HTML page with a link back to the dashboard.
   Unknown machine -> 404.
 - Login is rate limited in memory (exponential delay per client IP after failures).
