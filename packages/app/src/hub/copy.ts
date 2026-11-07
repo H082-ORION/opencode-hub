@@ -79,6 +79,8 @@ export const copy = {
     search: "Search providers",
     catalogFailed: "Could not load the provider catalog",
     noMatch: "No provider matches. Add a custom one instead.",
+    showAll: (count: number) => `Show all ${count} providers`,
+    variants: (count: number) => `${count} endpoints and plans`,
     custom: "Custom provider",
     back: "Back",
     docs: "Get a key",

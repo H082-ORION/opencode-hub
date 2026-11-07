@@ -154,9 +154,9 @@ export function Machines(props: { onSignedOut: () => void; fail: Fail }) {
                       aria-label={machine.online ? copy.machines.online : copy.machines.offline}
                     />
                     <div class="hub-row-copy">
-                      <bdi class="hub-row-name" dir="auto">
-                        {machine.name}
-                      </bdi>
+                      <span class="hub-row-name">
+                        <bdi dir="auto">{machine.name}</bdi>
+                      </span>
                       <span class="hub-row-meta">
                         <code dir="ltr">{machine.id}</code>
                         <span aria-hidden="true">·</span>

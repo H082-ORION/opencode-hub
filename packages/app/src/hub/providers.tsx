@@ -16,6 +16,7 @@ import { errorText, hubApi, HubError, type HubPreset, type HubProvider } from ".
 import { ChatGPTDialog } from "./chatgpt"
 import { copy } from "./copy"
 import type { Fail } from "./dashboard"
+import { featuredGroups, groupKey, groupProviders, type ProviderGroup } from "./provider-groups"
 
 type ListState = { status: "loading" | "ready" | "failed"; list: HubProvider[]; error?: string }
 
@@ -129,10 +130,26 @@ export function Providers(props: { fail: Fail }) {
 
 type Draft =
   | { step: "pick"; query: string }
-  | { step: "catalog"; entry: HubPreset; baseURL: string; editURL: boolean }
+  // A company with several endpoints or plans lists them before the form.
+  | { step: "group"; key: string; query: string }
+  // `group` is the company step the form came from, so Back returns there.
+  | { step: "catalog"; entry: HubPreset; baseURL: string; editURL: boolean; group?: string }
   | { step: "custom"; id: string; name: string; baseURL: string }
 
-type FormState = { draft: Draft; apiKey: string; status: "editing" | "saving"; error?: string }
+// `all` lists every company; the picker opens on the featured ones.
+type FormState = {
+  draft: Draft
+  view: "featured" | "all"
+  apiKey: string
+  status: "editing" | "saving"
+  error?: string
+}
+
+// A picker row: a company, one catalog entry (in search results and a company's step), or the control that lists all.
+type PickItem =
+  | { kind: "group"; key: string; group: ProviderGroup<HubPreset> }
+  | { kind: "entry"; key: string; entry: HubPreset; section: string }
+  | { kind: "more"; key: string; count: number }
 
 type CatalogState = { status: "loading" | "ready" | "failed"; list: HubPreset[]; error?: string }
 
@@ -158,25 +175,77 @@ function AddProviderDialog(props: { onSaved: () => void; fail: Fail }) {
   }
 
   loadCatalog()
-  const [form, setForm] = createStore<FormState>({ draft: { step: "pick", query: "" }, apiKey: "", status: "editing" })
 
-  const results = createMemo(() => {
-    const draft = form.draft
-    const query = draft.step === "pick" ? draft.query.trim() : ""
-
-    if (!query) return catalog.list
-
-    return fuzzysort.go(query, catalog.list, { keys: ["name", "id"] }).map((result) => result.obj)
+  const [form, setForm] = createStore<FormState>({
+    draft: { step: "pick", query: "" },
+    view: "featured",
+    apiKey: "",
+    status: "editing",
   })
 
-  const saving = () => form.status === "saving"
   // Drafts are replaced whole: a store write would merge one step's fields into the next.
   const setDraft = (draft: Draft) => setForm("draft", reconcile(draft))
+
+  const groups = createMemo(() => groupProviders(catalog.list))
+  const groupNames = createMemo(() => new Map(groups().map((group) => [group.key, group.name] as const)))
+
+  const openGroup = () => {
+    const draft = form.draft
+
+    return draft.step === "group" ? groups().find((group) => group.key === draft.key) : undefined
+  }
+
+  const entryItem = (entry: HubPreset): PickItem => ({
+    kind: "entry",
+    key: `entry:${entry.id}`,
+    entry,
+    section: groupNames().get(groupKey(entry.id)) ?? entry.name,
+  })
+
+  const groupItem = (group: ProviderGroup<HubPreset>): PickItem => ({ kind: "group", key: `group:${group.key}`, group })
+
+  // A query searches every entry of the catalog whatever the view, so one pick reaches the form.
+  const results = createMemo((): PickItem[] => {
+    const draft = form.draft
+
+    if (draft.step === "group") {
+      const entries = openGroup()?.entries ?? []
+      const query = draft.query.trim()
+
+      return (query ? fuzzysort.go(query, entries, { keys: ["name", "id"] }).map((result) => result.obj) : entries).map(
+        entryItem,
+      )
+    }
+
+    if (draft.step !== "pick") return []
+    const query = draft.query.trim()
+
+    if (query) return fuzzysort.go(query, catalog.list, { keys: ["name", "id"] }).map((result) => entryItem(result.obj))
+
+    if (form.view === "all") return groups().map(groupItem)
+
+    return [...featuredGroups(groups()).map(groupItem), { kind: "more", key: "more", count: groups().length }]
+  })
+
+  const choose = (entry: HubPreset, group?: string) =>
+    setDraft({ step: "catalog", entry: { ...entry }, baseURL: entry.baseURL, editURL: false, group })
+
+  const pick = (item: PickItem) => {
+    if (item.kind === "more") return setForm("view", "all")
+
+    if (item.kind === "entry") return choose(item.entry, form.draft.step === "group" ? form.draft.key : undefined)
+
+    if (item.group.entries.length === 1) return choose(item.group.entries[0]!)
+    setDraft({ step: "group", key: item.group.key, query: "" })
+  }
+
+  const saving = () => form.status === "saving"
 
   const canSave = () => {
     const draft = form.draft
 
-    if (form.status !== "editing" || !form.apiKey.trim() || draft.step === "pick") return false
+    if (form.status !== "editing" || !form.apiKey.trim() || draft.step === "pick" || draft.step === "group")
+      return false
 
     return draft.step === "catalog" ? !!draft.baseURL.trim() : !!draft.id.trim() && !!draft.baseURL.trim()
   }
@@ -185,7 +254,7 @@ function AddProviderDialog(props: { onSaved: () => void; fail: Fail }) {
     event.preventDefault()
     const draft = form.draft
 
-    if (!canSave() || draft.step === "pick") return
+    if (!canSave() || draft.step === "pick" || draft.step === "group") return
     setForm({ status: "saving", error: undefined })
     hubApi
       .saveProvider(
@@ -220,12 +289,12 @@ function AddProviderDialog(props: { onSaved: () => void; fail: Fail }) {
       )
   }
 
-  const picking = () => (form.draft.step === "pick" ? form.draft : undefined)
+  const picking = () => (form.draft.step === "pick" || form.draft.step === "group" ? form.draft : undefined)
   const catalogDraft = () => (form.draft.step === "catalog" ? form.draft : undefined)
   const customDraft = () => (form.draft.step === "custom" ? form.draft : undefined)
 
   return (
-    <Dialog fit>
+    <Dialog fit class="hub-provider-dialog">
       <DialogHeader>
         <DialogTitleGroup title={copy.provider.title} description={copy.provider.description} />
       </DialogHeader>
@@ -241,7 +310,9 @@ function AddProviderDialog(props: { onSaved: () => void; fail: Fail }) {
                       <div class="hub-picked">
                         <ProviderIcon id={draft().entry.id} class="hub-provider-icon" aria-hidden="true" />
                         <div class="hub-row-copy">
-                          <span class="hub-row-name">{draft().entry.name}</span>
+                          <span class="hub-row-name">
+                            <bdi dir="auto">{draft().entry.name}</bdi>
+                          </span>
                           <span class="hub-row-meta">
                             <code dir="ltr">{draft().entry.id}</code>
                           </span>
@@ -367,8 +438,13 @@ function AddProviderDialog(props: { onSaved: () => void; fail: Fail }) {
                 variant="ghost"
                 disabled={saving()}
                 onClick={() => {
+                  const draft = form.draft
                   setForm({ error: undefined })
-                  setDraft({ step: "pick", query: "" })
+                  setDraft(
+                    draft.step === "catalog" && draft.group
+                      ? { step: "group", key: draft.group, query: "" }
+                      : { step: "pick", query: "" },
+                  )
                 }}
               >
                 {copy.provider.back}
@@ -405,25 +481,27 @@ function AddProviderDialog(props: { onSaved: () => void; fail: Fail }) {
                     placeholder={copy.provider.search}
                     label={copy.provider.preset}
                     items={results()}
-                    key={(entry) => entry.id}
-                    empty={copy.provider.noMatch}
-                    onSelect={(entry) =>
-                      setDraft({ step: "catalog", entry: { ...entry }, baseURL: entry.baseURL, editURL: false })
+                    key={(item) => item.key}
+                    section={(item) => (item.kind === "entry" ? item.section : "")}
+                    header={(item) =>
+                      item.kind === "entry" ? (
+                        <>
+                          <ProviderIcon
+                            id={groupKey(item.entry.id)}
+                            class="hub-picker-header-icon"
+                            aria-hidden="true"
+                          />
+                          {item.section}
+                        </>
+                      ) : undefined
                     }
+                    empty={copy.provider.noMatch}
+                    onSelect={pick}
                     onClose={() => dialog.close()}
                   >
-                    {(entry, attrs) => (
+                    {(item, attrs) => (
                       <button type="button" class="hub-picker-row" {...attrs}>
-                        <ProviderIcon id={entry().id} class="hub-provider-icon" aria-hidden="true" />
-                        <span class="hub-picker-copy">
-                          <span class="hub-picker-name">
-                            <SearchHighlight text={entry().name} />
-                            <code dir="ltr">{entry().id}</code>
-                          </span>
-                          <span class="hub-picker-url" dir="ltr">
-                            {entry().baseURL}
-                          </span>
-                        </span>
+                        <PickRow item={item()} />
                       </button>
                     )}
                   </SearchList>
@@ -431,14 +509,82 @@ function AddProviderDialog(props: { onSaved: () => void; fail: Fail }) {
               </Switch>
             </DialogBody>
             <DialogFooter>
-              <Button variant="ghost" onClick={() => setDraft({ step: "custom", id: "", name: "", baseURL: "" })}>
-                {copy.provider.custom}
-              </Button>
+              <Show
+                when={draft().step === "group"}
+                fallback={
+                  <Button variant="ghost" onClick={() => setDraft({ step: "custom", id: "", name: "", baseURL: "" })}>
+                    {copy.provider.custom}
+                  </Button>
+                }
+              >
+                <Button variant="ghost" onClick={() => setDraft({ step: "pick", query: "" })}>
+                  {copy.provider.back}
+                </Button>
+              </Show>
             </DialogFooter>
           </>
         )}
       </Show>
     </Dialog>
+  )
+}
+
+function PickRow(props: { item: PickItem }) {
+  // A company row names the company; its only entry, or an entry row, adds the id and the endpoint.
+  const entry = () =>
+    props.item.kind === "entry"
+      ? props.item.entry
+      : props.item.kind === "group" && props.item.group.entries.length === 1
+        ? props.item.group.entries[0]
+        : undefined
+
+  return (
+    <Switch>
+      <Match when={props.item.kind === "more" && props.item}>
+        {(item) => (
+          <>
+            <Icon name="chevron-down" class="hub-picker-more-icon" aria-hidden="true" />
+            <span class="hub-picker-copy">
+              <span class="hub-picker-name">
+                <span class="hub-picker-label">{copy.provider.showAll(item().count)}</span>
+              </span>
+            </span>
+          </>
+        )}
+      </Match>
+      <Match when={entry()}>
+        {(entry) => (
+          <>
+            <ProviderIcon id={entry().id} class="hub-provider-icon" aria-hidden="true" />
+            <span class="hub-picker-copy">
+              <span class="hub-picker-name">
+                <span class="hub-picker-label">
+                  <SearchHighlight text={entry().name} />
+                </span>
+                <code dir="ltr">{entry().id}</code>
+              </span>
+              <span class="hub-picker-url" dir="ltr">
+                {entry().baseURL}
+              </span>
+            </span>
+          </>
+        )}
+      </Match>
+      <Match when={props.item.kind === "group" && props.item.group}>
+        {(group) => (
+          <>
+            <ProviderIcon id={group().key} class="hub-provider-icon" aria-hidden="true" />
+            <span class="hub-picker-copy">
+              <span class="hub-picker-name">
+                <span class="hub-picker-label">{group().name}</span>
+              </span>
+              <span class="hub-picker-url">{copy.provider.variants(group().entries.length)}</span>
+            </span>
+            <Icon name="chevron-right" size="small" class="hub-picker-more-icon" aria-hidden="true" />
+          </>
+        )}
+      </Match>
+    </Switch>
   )
 }
 
