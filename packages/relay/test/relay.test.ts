@@ -86,7 +86,8 @@ const state = {} as {
   enrollment: Agent.Enrollment
   agent: ReturnType<typeof Agent.connect>
   ready: Agent.Ready
-  configs: Agent.LlmConfig[]
+  instances: Agent.Instance[]
+  dropped: string[]
   statuses: Statuses
   cookie: string
   machineURL: string
@@ -108,7 +109,8 @@ beforeAll(async () => {
     code: state.hub.createEnrollmentCode(state.userID).code,
     name: "Test Machine",
   })
-  state.configs = []
+  state.instances = []
+  state.dropped = []
   state.statuses = { list: [], waiters: [] }
   const ready = Promise.withResolvers<Agent.Ready>()
   state.agent = Agent.connect({
@@ -122,10 +124,13 @@ beforeAll(async () => {
       }
     },
     onReady: ready.resolve,
-    onConfig: (llm) => state.configs.push(llm),
+    onInstance: (instance) => state.instances.push(instance),
+    onDrop: (iid) => state.dropped.push(iid),
     onStatus: record(state.statuses),
   })
   state.ready = await ready.promise
+  // A personal machine gets its owner's instance right after READY, before anyone opens it.
+  await until(() => state.instances.length > 0)
   state.cookie = await login()
   state.machineURL = `http://${state.enrollment.machine.id}.localhost:${state.hub.port}`
 })
@@ -143,7 +148,11 @@ describe("enrollment", () => {
     expect(state.enrollment.machine).toEqual({ id: "test-machine", name: "Test Machine" })
     expect(state.enrollment.url).toBe(`http://localhost:${state.hub.port}`)
     expect(state.ready.machine).toEqual(state.enrollment.machine)
-    expect(state.ready.llm).toEqual({ baseURL: `${state.hub.url}/llm`, providers: [] })
+    expect(state.ready.owner).toBe("user")
+    expect(state.ready.instances).toEqual([state.instances[0]!.iid])
+    expect(state.instances[0]!.llm).toEqual({ baseURL: `${state.hub.url}/llm`, providers: [] })
+    expect(state.instances[0]!.token.length).toBeGreaterThan(20)
+    expect(JSON.stringify(state.enrollment)).not.toContain(state.instances[0]!.token)
   })
 
   test("codes are single use", async () => {
@@ -404,8 +413,9 @@ describe("http proxy", () => {
     expect(echo.headers.origin).toBeUndefined()
     expect(echo.headers.cookie).toBeUndefined()
     expect(echo.headers.host).toBe(`127.0.0.1:${local.port}`)
-    // The closed port from the first resolution was replaced after one failed connection.
-    expect(localCalls.count).toBe(2)
+    // The closed port from the first resolution was replaced after one failed connection; the provider change
+    // since then sent a new INSTANCE, which resolves the instance once more.
+    expect(localCalls.count).toBe(3)
   })
 
   test("refuses requests from another origin, including sibling machine hosts", async () => {
@@ -413,7 +423,7 @@ describe("http proxy", () => {
     sibling.hostname = `other.${sibling.hostname.split(".").slice(1).join(".")}`
     const response = await machine("/echo", { method: "POST", headers: { origin: sibling.origin }, body: "x" })
     expect(response.status).toBe(403)
-    expect(localCalls.count).toBe(2)
+    expect(localCalls.count).toBe(3)
   })
 
   test("passes redirects through and drops machine cookies", async () => {
@@ -502,12 +512,17 @@ describe("llm proxy", () => {
       body: { id: "fake", name: "Fake", baseURL: `http://127.0.0.1:${upstream.port}/v1`, apiKey: "real-key" },
     })
     expect(response.status).toBe(200)
-    await until(() => state.configs.at(-1)?.providers.some((provider) => provider.id === "fake") === true)
-    expect(state.configs.at(-1)).toEqual({ baseURL: `${state.hub.url}/llm`, providers: [{ id: "fake", name: "Fake" }] })
+    await until(() => state.instances.at(-1)?.llm.providers.some((provider) => provider.id === "fake") === true)
+    expect(state.instances.at(-1)?.llm).toEqual({
+      baseURL: `${state.hub.url}/llm`,
+      providers: [{ id: "fake", name: "Fake" }],
+    })
+    // The same instance and token: a configuration change issues no new token.
+    expect(new Set(state.instances.map((instance) => `${instance.iid} ${instance.token}`)).size).toBe(1)
   })
 
   test("replaces the llm token with the real key wherever it was sent", async () => {
-    const token = state.enrollment.llmToken
+    const token = token0()
     const bearer = await llm("/fake/chat/completions?x=1", {
       method: "POST",
       headers: { authorization: `Bearer ${token}` },
@@ -536,14 +551,14 @@ describe("llm proxy", () => {
       (await fetch(`${state.hub.url}/llm/fake/models`, { headers: { authorization: "Bearer nope" } })).status,
     ).toBe(401)
     const unknown = await fetch(`${state.hub.url}/llm/missing/models`, {
-      headers: { authorization: `Bearer ${state.enrollment.llmToken}` },
+      headers: { authorization: `Bearer ${token0()}` },
     })
     expect(unknown.status).toBe(404)
   })
 
   test("streams upstream SSE", async () => {
     const response = await fetch(`${state.hub.url}/llm/fake/stream`, {
-      headers: { authorization: `Bearer ${state.enrollment.llmToken}` },
+      headers: { authorization: `Bearer ${token0()}` },
     })
     const reader = response.body!.getReader()
     expect(await readUntil(reader, "data: one\n\n")).toContain("data: one")
@@ -565,7 +580,7 @@ describe("hub endpoints", () => {
 })
 
 describe("tunnel lifecycle", () => {
-  test("refuses a HELLO for another protocol version with 4400", async () => {
+  test("refuses a protocol 1 HELLO with 4400", async () => {
     const enrollment = await Agent.enroll({
       url: state.hub.url,
       code: state.hub.createEnrollmentCode(state.userID).code,
@@ -574,12 +589,13 @@ describe("tunnel lifecycle", () => {
     const socket = tunnelSocket(enrollment.tunnelToken)
     socket.addEventListener("open", () =>
       socket.send(
-        Protocol.encodeJson(Protocol.Type.HELLO, 0, { protocol: 2, version: "9", name: "future", platform: "x" }),
+        Protocol.encodeJson(Protocol.Type.HELLO, 0, { protocol: 1, version: "9", name: "future", platform: "x" }),
       ),
     )
     const closed = await new Promise<CloseEvent>((resolve) => socket.addEventListener("close", resolve))
     expect(closed.code).toBe(4400)
-    expect(closed.reason).toContain("protocol 1")
+    expect(closed.reason).toContain("unsupported protocol 1")
+    expect(closed.reason).toContain("protocol 2")
   })
 
   test("a second connection for the same machine replaces the first with 4409", async () => {
@@ -636,10 +652,15 @@ describe("tunnel lifecycle", () => {
     silent.stop(true)
   })
 
-  test("revoking a machine closes its tunnel and refuses its token", async () => {
+  test("revoking a machine drops its instances, closes its tunnel and refuses its tokens", async () => {
+    const token = token0()
     const response = await api("machines/test-machine", { method: "DELETE" })
     expect(response.status).toBe(204)
     await waitStatus(state.statuses, (entry) => entry.status === "stopped")
+    expect(state.dropped).toEqual([state.instances[0]!.iid])
+    expect(
+      (await fetch(`${state.hub.url}/llm/fake/models`, { headers: { authorization: `Bearer ${token}` } })).status,
+    ).toBe(401)
     expect(state.statuses.list.at(-1)?.detail).toBe("machine revoked")
     expect((await fetch(`${state.machineURL}/echo`, { headers: { cookie: state.cookie } })).status).toBe(404)
 
@@ -707,6 +728,11 @@ function sse(reader: { read(): Promise<{ done: boolean; value?: Uint8Array }>; c
     return match(list) ? list : until(match)
   }
   return { next, until, cancel: () => reader.cancel() }
+}
+
+/** The LLM token of the owner's instance on the test machine. */
+function token0() {
+  return state.instances.at(-1)!.token
 }
 
 function machine(pathname: string, init: RequestInit = {}) {

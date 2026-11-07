@@ -1,4 +1,5 @@
 import { Agent } from "@opencode/relay/agent/index"
+import { Instances } from "@opencode/relay/agent/instances"
 import { Service } from "@opencode/client/effect/service"
 import { Global } from "@opencode/util/global"
 import { Effect, FileSystem, Option, Schema } from "effect"
@@ -6,13 +7,13 @@ import path from "path"
 import { ServiceConfig } from "./service-config"
 
 // Enrollment with a hub, stored by `opencode agent join`, plus the service environment that routes the local
-// service's LLM calls through the hub.
+// service's LLM calls through the hub with the owner's instance token (personal machines).
 
-export type LlmConfig = Agent.LlmConfig
+export type Instance = Agent.Instance
 
-// The hub's LLM token. Every hub provider reads it through the `env` override that serviceEnv writes into CONFIG.
-export const TOKEN = "OPENCODE_HUB_LLM_TOKEN"
-export const CONFIG = "OPENCODE_CONFIG_CONTENT"
+export const TOKEN = Instances.TOKEN
+export const CONFIG = Instances.CONFIG
+export const INSTANCE = Instances.INSTANCE
 
 const decode = Schema.decodeUnknownOption(Schema.fromJsonString(Agent.Enrollment))
 
@@ -21,18 +22,33 @@ export const file = Effect.fnUntraced(function* () {
   return path.join(global.data, "agent.json")
 })
 
+/** Where an organization machine keeps its members' instances. */
+export const instancesRoot = Effect.fnUntraced(function* () {
+  const global = yield* Global.Service
+  return path.join(global.data, "hub-instances")
+})
+
 export const read = Effect.fn("cli.relay-agent.read")(function* () {
   const fs = yield* FileSystem.FileSystem
   const text = yield* fs.readFileString(yield* file()).pipe(Effect.option)
   if (Option.isNone(text)) return undefined
-  return Option.getOrUndefined(decode(text.value))
+  const enrollment = Option.getOrUndefined(decode(text.value))
+  // Enrollments from protocol 1 also stored a machine-wide LLM token, now useless: the file is rewritten without it.
+  if (enrollment && text.value.includes('"llmToken"')) yield* write(enrollment)
+  return enrollment
 })
 
 export const write = Effect.fn("cli.relay-agent.write")(function* (enrollment: Agent.Enrollment) {
   const fs = yield* FileSystem.FileSystem
   const target = yield* file()
   yield* fs.makeDirectory(path.dirname(target), { recursive: true })
-  yield* fs.writeFileString(target, JSON.stringify(enrollment, null, 2) + "\n", { mode: 0o600 })
+  // Only the declared fields: instance tokens never go into this file.
+  const saved: Agent.Enrollment = {
+    url: enrollment.url,
+    machine: enrollment.machine,
+    tunnelToken: enrollment.tunnelToken,
+  }
+  yield* fs.writeFileString(target, JSON.stringify(saved, null, 2) + "\n", { mode: 0o600 })
   // The mode applies only when the file is created; an earlier enrollment's file keeps its own.
   yield* fs.chmod(target, 0o600)
 })
@@ -45,12 +61,20 @@ export const remove = Effect.fn("cli.relay-agent.remove")(function* () {
   return true
 })
 
+/** The personal instance whose token the service environment holds, so the agent announces it in HELLO. */
+export const held = Effect.fn("cli.relay-agent.held")(function* () {
+  const env = (yield* ServiceConfig.read()).env ?? {}
+  const iid = env[INSTANCE]
+  const token = env[TOKEN]
+  return iid && token ? [{ iid, token }] : []
+})
+
 /**
- * Saves the service environment for `llm` and restarts a running service when it changed, keeping persistent
- * terminals. Returns whether the environment changed.
+ * Saves the service environment for the owner's instance (none to remove the hub's entries) and restarts a running
+ * service when it changed, keeping persistent terminals. Returns whether the environment changed.
  */
-export const apply = Effect.fn("cli.relay-agent.apply")(function* (llm: LlmConfig, token: string) {
-  const next = serviceEnv((yield* ServiceConfig.read()).env, llm, token)
+export const apply = Effect.fn("cli.relay-agent.apply")(function* (instance: Agent.Instance | undefined) {
+  const next = serviceEnv((yield* ServiceConfig.read()).env, instance)
   if (!next.changed) return false
   yield* ServiceConfig.replaceEnv(next.env)
   const options = yield* ServiceConfig.options()
@@ -60,29 +84,23 @@ export const apply = Effect.fn("cli.relay-agent.apply")(function* (llm: LlmConfi
   return true
 })
 
+/** Removes the hub's entries from the service environment when they belong to `iid`, e.g. once it was dropped. */
+export const clear = Effect.fn("cli.relay-agent.clear")(function* (iid: string) {
+  if ((yield* ServiceConfig.read()).env?.[INSTANCE] !== iid) return false
+  return yield* apply(undefined)
+})
+
 /**
- * The service environment that sends every hub provider's calls to `<hub>/llm/<id>` with the LLM token as API key.
- * Each provider's `env` override replaces its catalog variables (ANTHROPIC_API_KEY, ...), so a key inherited from the
- * user's shell is never sent to the hub. Stored credentials still take precedence over environment variables.
+ * The service environment for the owner's instance: its id, its token and the configuration that sends every hub
+ * provider's calls to `<hub>/llm/<id>` (see `Instances.hubEnv`). Stored credentials still take precedence over
+ * environment variables. Without an instance, the hub's entries are removed.
  */
-export function serviceEnv(current: Readonly<Record<string, string>> | undefined, llm: LlmConfig, token: string) {
-  const { [TOKEN]: _token, [CONFIG]: _config, ...rest } = current ?? {}
-  const base = llm.baseURL.replace(/\/+$/, "")
-  const env =
-    llm.providers.length === 0
-      ? rest
-      : {
-          ...rest,
-          [TOKEN]: token,
-          [CONFIG]: JSON.stringify({
-            providers: Object.fromEntries(
-              llm.providers.map((provider) => [
-                provider.id,
-                { env: [TOKEN], settings: { baseURL: `${base}/${encodeURIComponent(provider.id)}` } },
-              ]),
-            ),
-          }),
-        }
+export function serviceEnv(
+  current: Readonly<Record<string, string>> | undefined,
+  instance: Agent.Instance | undefined,
+) {
+  const { [TOKEN]: _token, [CONFIG]: _config, [INSTANCE]: _instance, ...rest } = current ?? {}
+  const env = instance ? { ...rest, ...Instances.hubEnv(instance) } : rest
   return { env, changed: !same(current ?? {}, env) }
 }
 

@@ -4,7 +4,7 @@ import os from "node:os"
 import path from "node:path"
 import { Account } from "../src/account.js"
 import { Agent, Hub } from "../src/index.js"
-import { Llm } from "../src/hub/llm.js"
+import { Store } from "../src/hub/store.js"
 import { browser } from "./fixture/browser.js"
 
 // Organizations, their members and their machines (specs/multi-users.md, step 4).
@@ -60,7 +60,11 @@ const state = {} as {
   dave: Page
   acme: string
   box: Agent.Enrollment
-  configs: Agent.LlmConfig[]
+  instances: Agent.Instance[]
+  dropped: string[]
+  /** How many OPEN frames reached each instance. */
+  opened: Map<string, number>
+  store?: Store.Instance
   agents: ReturnType<typeof Agent.connect>[]
 }
 
@@ -74,12 +78,15 @@ beforeAll(async () => {
   await state.alice.post(`orgs/${state.acme}/members`, { user: await userID("bob") })
   await state.alice.post(`orgs/${state.acme}/members`, { user: await userID("carol") })
   state.box = await enroll(state.bob, "Acme Box", state.acme)
-  state.configs = []
-  state.agents = [await connect(state.box, state.configs)]
+  state.instances = []
+  state.dropped = []
+  state.opened = new Map()
+  state.agents = [await connect(state.box)]
 })
 
 afterAll(async () => {
   await Promise.all(state.agents?.map((agent) => agent.close()) ?? [])
+  state.store?.close()
   await state.hub?.stop()
   local.stop(true)
   upstream.stop(true)
@@ -227,7 +234,9 @@ describe("access", () => {
     const events = sse((await harry.request("events")).body!.getReader())
     expect((await events.next()).map((machine) => machine.id)).toEqual(["acme-box"])
 
+    const iid = store().instance("acme-box", id)!.id
     expect((await state.alice.request(`orgs/${state.acme}/members/${id}`, { method: "DELETE" })).status).toBe(204)
+    await until(() => state.dropped.includes(iid))
     expect(await drained(reader)).toBe(true)
     await gate.cancelled.promise
     expect((await closed).code).toBe(1008)
@@ -243,57 +252,88 @@ describe("access", () => {
   })
 })
 
-describe("LLM relay", () => {
-  test("uses the keys of the member who enrolled the machine, and pushes their provider changes to it", async () => {
+describe("instances and LLM relay", () => {
+  test("each member gets their own instance, every OPEN names it, and its relay uses that member's keys", async () => {
     await addFake(state.bob, "sk-bob")
     await addFake(state.carol, "sk-carol")
-    await until(() => state.configs.at(-1)?.providers.some((provider) => provider.id === "fake") === true)
-    expect((await relay(state.box)).headers.authorization).toBe("Bearer sk-bob")
+    const bob = await instanceOf(state.bob, "bob")
+    const carol = await instanceOf(state.carol, "carol")
+    expect(bob.iid).not.toBe(carol.iid)
+    expect(bob.token).not.toBe(carol.token)
+    expect(state.opened.get(bob.iid)).toBeGreaterThan(0)
+    expect(state.opened.get(carol.iid)).toBeGreaterThan(0)
+    expect((await relay(bob)).headers.authorization).toBe("Bearer sk-bob")
+    expect((await relay(carol)).headers.authorization).toBe("Bearer sk-carol")
+    // A member who never opened the machine has no instance on it.
+    expect(store().instance("acme-box", await userID("dave"))).toBeUndefined()
+  })
 
+  test("pushes a member's provider changes to their own instance only", async () => {
+    const carol = await instanceOf(state.carol, "carol")
+    const bob = await instanceOf(state.bob, "bob")
     await state.bob.post("providers", { id: "bob-extra", name: "Extra", baseURL: upstreamURL(), apiKey: "sk-x" })
-    await until(() => state.configs.at(-1)?.providers.length === 2)
-    expect(state.configs.at(-1)?.providers.map((provider) => provider.id)).toEqual(["bob-extra", "fake"])
-    // Another member's providers never reach it.
-    const count = state.configs.length
-    await state.carol.post("providers", { id: "carol-extra", name: "Extra", baseURL: upstreamURL(), apiKey: "sk-y" })
+    await until(() => latest(bob.iid).llm.providers.length === 2)
+    expect(latest(bob.iid).llm.providers.map((provider) => provider.id)).toEqual(["bob-extra", "fake"])
+    // A configuration change keeps the token.
+    expect(latest(bob.iid).token).toBe(bob.token)
+    expect(latest(carol.iid).llm.providers.map((provider) => provider.id)).toEqual(["fake"])
     expect((await state.bob.request("providers/bob-extra", { method: "DELETE" })).status).toBe(204)
-    await until(() => state.configs.at(-1)?.providers.length === 1)
-    expect(state.configs.length).toBe(count + 1)
+    await until(() => latest(bob.iid).llm.providers.length === 1)
   })
 
-  test("answers 423 while the enroller's keys are locked", async () => {
+  test("answers 423 while that member's keys are locked, and only for them", async () => {
+    const bob = await instanceOf(state.bob, "bob")
+    const carol = await instanceOf(state.carol, "carol")
     await state.bob.post("account/lock", {})
-    expect((await relayResponse(state.box)).status).toBe(423)
+    expect((await relayResponse(bob)).status).toBe(423)
+    expect((await relay(carol)).headers.authorization).toBe("Bearer sk-carol")
     await Account.login({ post: state.bob.post, login: "bob", password: "bob-password" })
-    expect((await relay(state.box)).headers.authorization).toBe("Bearer sk-bob")
+    expect((await relay(bob)).headers.authorization).toBe("Bearer sk-bob")
   })
 
-  test("refuses with 403 once the enroller left the organization, and stops listing their providers", async () => {
-    const bob = await userID("bob")
-    await state.alice.request(`orgs/${state.acme}/members/${bob}`, { method: "DELETE" })
-    const refused = await relayResponse(state.box)
-    expect(refused.status).toBe(403)
-    expect(((await refused.json()) as { error: string }).error).toBe(Llm.ENROLLER_GONE)
-    await until(() => state.configs.at(-1)?.providers.length === 0)
+  test("removing a member drops their instance and refuses its token; the others keep theirs", async () => {
+    const bob = await instanceOf(state.bob, "bob")
+    const carol = await instanceOf(state.carol, "carol")
+    const id = await userID("bob")
+    await state.alice.request(`orgs/${state.acme}/members/${id}`, { method: "DELETE" })
+    await until(() => state.dropped.includes(bob.iid))
+    expect(state.dropped).not.toContain(carol.iid)
+    expect(store().instance("acme-box", id)).toBeUndefined()
+    expect((await relayResponse(bob)).status).toBe(401)
+    expect((await relay(carol)).headers.authorization).toBe("Bearer sk-carol")
 
-    await state.alice.post(`orgs/${state.acme}/members`, { user: bob })
-    await until(() => state.configs.at(-1)?.providers.length === 1)
-    expect((await relay(state.box)).headers.authorization).toBe("Bearer sk-bob")
+    // Added again, Bob starts over with a new instance.
+    await state.alice.post(`orgs/${state.acme}/members`, { user: id })
+    const again = await instanceOf(state.bob, "bob")
+    expect(again.iid).not.toBe(bob.iid)
+    expect((await relay(again)).headers.authorization).toBe("Bearer sk-bob")
   })
 
-  test("refuses with 403 while the enroller's account is disabled", async () => {
+  test("disabling a member drops their instances; the relay refuses with 403 whenever access is gone", async () => {
     const page = await signUp(await invite(), "ivan")
     const id = await userID("ivan")
     await state.alice.post(`orgs/${state.acme}/members`, { user: id })
-    const machine = await enroll(page, "Ivan Acme", state.acme)
     await addFake(page, "sk-ivan")
-    expect((await relay(machine)).headers.authorization).toBe("Bearer sk-ivan")
+    const ivan = await instanceOf(page, "ivan")
+    expect((await relay(ivan)).headers.authorization).toBe("Bearer sk-ivan")
     await state.alice.post(`users/${id}/disable`, {})
-    expect((await relayResponse(machine)).status).toBe(403)
+    await until(() => state.dropped.includes(ivan.iid))
+    expect((await relayResponse(ivan)).status).toBe(401)
     await state.alice.post(`users/${id}/enable`, {})
-    // Enabled again, its key stays locked until it signs in.
-    expect((await relayResponse(machine)).status).toBe(423)
-    expect((await state.alice.request(`machines/${machine.machine.id}`, { method: "DELETE" })).status).toBe(204)
+
+    // An instance whose user may not open the machine, had it not been deleted: the relay checks access itself.
+    const row = store().ensureInstance("acme-box", await userID("dave"))
+    const token = store().issueInstanceToken(row.id)
+    expect(
+      (
+        await fetch(`${state.hub.url}/llm/fake/chat/completions`, {
+          method: "POST",
+          headers: { authorization: `Bearer ${token}` },
+          body: "{}",
+        })
+      ).status,
+    ).toBe(403)
+    expect(store().pruneInstances()).toEqual([{ id: row.id, machine_id: "acme-box" }])
   })
 })
 
@@ -337,16 +377,39 @@ async function enroll(page: Page, name: string, org?: string) {
   return Agent.enroll({ url: state.hub.url, code, name })
 }
 
-async function connect(enrollment: Agent.Enrollment, configs: Agent.LlmConfig[]) {
+async function connect(enrollment: Agent.Enrollment) {
   const ready = Promise.withResolvers<void>()
   const agent = Agent.connect({
     enrollment,
-    local: async () => ({ url: `http://127.0.0.1:${local.port}` }),
+    local: async (iid) => {
+      state.opened.set(iid, (state.opened.get(iid) ?? 0) + 1)
+      return { url: `http://127.0.0.1:${local.port}` }
+    },
     onReady: () => ready.resolve(),
-    onConfig: (llm) => configs.push(llm),
+    onInstance: (instance) => state.instances.push(instance),
+    onDrop: (iid) => state.dropped.push(iid),
   })
   await ready.promise
   return agent
+}
+
+/** The hub's database, opened once alongside the running hub. */
+function store() {
+  state.store ??= Store.open(data)
+  return state.store
+}
+
+/** The latest configuration the agent received for an instance. */
+function latest(iid: string) {
+  return state.instances.findLast((instance) => instance.iid === iid)!
+}
+
+/** Opens the organization machine as this member, then returns their instance as the agent last received it. */
+async function instanceOf(page: Page, login: string) {
+  expect(await (await host("acme-box", "/", page)).text()).toBe("local ok")
+  const row = store().instance("acme-box", await userID(login))
+  expect(row).toBeDefined()
+  return latest(row!.id)
 }
 
 async function list(page: Page) {
@@ -374,16 +437,16 @@ async function addFake(page: Page, apiKey: string) {
   await page.post("providers", { id: "fake", name: "Fake", baseURL: upstreamURL(), apiKey })
 }
 
-function relayResponse(machine: Agent.Enrollment) {
+function relayResponse(instance: Agent.Instance) {
   return fetch(`${state.hub.url}/llm/fake/chat/completions`, {
     method: "POST",
-    headers: { authorization: `Bearer ${machine.llmToken}`, "content-type": "application/json" },
+    headers: { authorization: `Bearer ${instance.token}`, "content-type": "application/json" },
     body: "{}",
   })
 }
 
-async function relay(machine: Agent.Enrollment) {
-  const response = await relayResponse(machine)
+async function relay(instance: Agent.Instance) {
+  const response = await relayResponse(instance)
   expect(response.status).toBe(200)
   return (await response.json()) as Echo
 }

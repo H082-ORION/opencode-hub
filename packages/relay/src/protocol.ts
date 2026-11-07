@@ -2,7 +2,7 @@ import { Option, Schema } from "effect"
 
 export * as Protocol from "./protocol.js"
 
-export const VERSION = 1
+export const VERSION = 2
 
 export const Type = {
   OPEN: 0x01,
@@ -14,9 +14,12 @@ export const Type = {
   CLOSE: 0x07,
   HELLO: 0x10,
   READY: 0x11,
-  CONFIG: 0x12,
+  // 0x12 was CONFIG in protocol 1; INSTANCE replaces it.
   PING: 0x13,
   PONG: 0x14,
+  INSTANCE: 0x15,
+  SKILLS: 0x16,
+  DROP: 0x17,
 } as const
 
 export type Type = (typeof Type)[keyof typeof Type]
@@ -33,8 +36,16 @@ const types = new Set<number>(Object.values(Type))
 
 export const Header = Schema.Tuple([Schema.String, Schema.String])
 
+/**
+ * An instance id: random base64url from the hub. The agent names a directory after it, so anything else (dots,
+ * slashes) is refused at decoding.
+ */
+export const InstanceID = Schema.String.check(Schema.isPattern(/^[A-Za-z0-9_-]{16,64}$/))
+
 export const OpenHttp = Schema.Struct({
   kind: Schema.Literal("http"),
+  /** The instance the stream goes to: the opening user's, on this machine. */
+  instance: InstanceID,
   method: Schema.String,
   path: Schema.String,
   headers: Schema.Array(Header),
@@ -43,6 +54,7 @@ export type OpenHttp = typeof OpenHttp.Type
 
 export const OpenWs = Schema.Struct({
   kind: Schema.Literal("ws"),
+  instance: InstanceID,
   path: Schema.String,
   headers: Schema.Array(Header),
   protocols: Schema.Array(Schema.String),
@@ -71,6 +83,11 @@ export const Hello = Schema.Struct({
   version: Schema.String,
   name: Schema.String,
   platform: Schema.String,
+  /**
+   * The instances whose token the agent still holds, each with the SHA-256 (hex) of that token, so the hub only sends
+   * a new token when the agent lacks the current one.
+   */
+  instances: Schema.optional(Schema.Array(Schema.Struct({ iid: InstanceID, hash: Schema.String }))),
 })
 export type Hello = typeof Hello.Type
 
@@ -85,9 +102,38 @@ export type LlmConfig = typeof LlmConfig.Type
 
 export const Ready = Schema.Struct({
   machine: Schema.Struct({ id: Schema.String, name: Schema.String }),
-  llm: LlmConfig,
+  owner: Schema.Literals(["user", "org"]),
+  /** Every instance this machine still has: the agent deletes the others (dropped while it was offline). */
+  instances: Schema.Array(InstanceID),
 })
 export type Ready = typeof Ready.Type
+
+export const Connector = Schema.Struct({ id: Schema.String, name: Schema.String })
+
+/**
+ * One user's instance on this machine and its configuration. `token` (the instance's LLM token) is only present when
+ * the hub issued a new one; without it the agent keeps the token it holds.
+ */
+export const Instance = Schema.Struct({
+  iid: InstanceID,
+  token: Schema.optional(Schema.String),
+  llm: LlmConfig,
+  mcp: Schema.Array(Connector),
+  skills: Schema.Struct({ version: Schema.String }),
+})
+export type Instance = typeof Instance.Type
+
+export const SkillFile = Schema.Struct({ path: Schema.String, content: Schema.String })
+
+export const Skills = Schema.Struct({
+  iid: InstanceID,
+  version: Schema.String,
+  skills: Schema.Array(Schema.Struct({ name: Schema.String, files: Schema.Array(SkillFile) })),
+})
+export type Skills = typeof Skills.Type
+
+export const Drop = Schema.Struct({ iid: InstanceID })
+export type Drop = typeof Drop.Type
 
 export function encode(type: Type, stream: number, payload: Uint8Array = new Uint8Array(0)) {
   if (!Number.isInteger(stream) || stream < 0 || stream > MAX_STREAM)
@@ -127,7 +173,9 @@ export const decodeReset = jsonDecoder(Reset)
 export const decodeClose = jsonDecoder(Close)
 export const decodeHello = jsonDecoder(Hello)
 export const decodeReady = jsonDecoder(Ready)
-export const decodeLlmConfig = jsonDecoder(LlmConfig)
+export const decodeInstance = jsonDecoder(Instance)
+export const decodeSkills = jsonDecoder(Skills)
+export const decodeDrop = jsonDecoder(Drop)
 
 /** Builds a decoder for a JSON payload; it returns undefined when the payload does not match the schema. */
 function jsonDecoder<S extends Schema.Top & { readonly DecodingServices: never }>(schema: S) {

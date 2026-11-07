@@ -202,9 +202,16 @@ describe("machines enrolled before owners existed", () => {
 
     // An ownerless row found at start, e.g. restored from an old backup, is adopted the same way.
     const restored = new Database(path.join(dir, "hub.db"))
-    restored.run(
-      "INSERT INTO machine (id, name, tunnel_token_hash, llm_token_hash, created_at) VALUES ('restored', 'R', 't2', 'l2', 2)",
-    )
+    // The protocol 1 llm token column is gone; the tunnel token survives the rebuild.
+    const columns = restored
+      .query<{ name: string }, []>("PRAGMA table_info(machine)")
+      .all()
+      .map((row) => row.name)
+    expect(columns).not.toContain("llm_token_hash")
+    expect(restored.query("SELECT tunnel_token_hash FROM machine WHERE id = 'old'").get()).toEqual({
+      tunnel_token_hash: "t1",
+    })
+    restored.run("INSERT INTO machine (id, name, tunnel_token_hash, created_at) VALUES ('restored', 'R', 't2', 2)")
     restored.close()
     const store = Store.open(dir)
     const owners = store.machines().map((machine) => [machine.id, machine.owner_login, machine.enrolled_by])

@@ -10,11 +10,13 @@ import { Secrets } from "../src/hub/secrets.js"
 import { Store } from "../src/hub/store.js"
 import { browser } from "./fixture/browser.js"
 
-// API keys sealed under each user's key, and the LLM relay that uses the machine owner's (specs/multi-users.md,
-// step 3).
+// API keys sealed under each user's key, and the LLM relay that uses the instance user's (specs/multi-users.md,
+// steps 3 and 5).
 
 type Page = ReturnType<typeof browser>
 type Echo = { path: string; headers: Record<string, string> }
+/** An enrolled machine and the instances its agent was sent, latest last. */
+type Box = { enrollment: Agent.Enrollment; instances: Agent.Instance[]; dropped: string[] }
 
 const ALICE_KEY = "sk-alice-0123456789-plaintext"
 const BOB_KEY = "sk-bob-9876543210-plaintext"
@@ -36,8 +38,7 @@ const state = {} as {
   hub: Awaited<ReturnType<typeof Hub.start>>
   alice: Page
   bob: Page
-  machines: { alice: Agent.Enrollment; bob: Agent.Enrollment }
-  configs: { alice: Agent.LlmConfig[]; bob: Agent.LlmConfig[] }
+  machines: { alice: Box; bob: Box }
   agents: ReturnType<typeof Agent.connect>[]
 }
 
@@ -49,11 +50,7 @@ beforeAll(async () => {
     alice: await enroll(state.hub.url, state.alice, "Alice Box"),
     bob: await enroll(state.hub.url, state.bob, "Bob Box"),
   }
-  state.configs = { alice: [], bob: [] }
-  state.agents = await Promise.all([
-    connect(state.machines.alice, state.configs.alice),
-    connect(state.machines.bob, state.configs.bob),
-  ])
+  state.agents = await Promise.all([connect(state.machines.alice), connect(state.machines.bob)])
 })
 
 afterAll(async () => {
@@ -115,31 +112,32 @@ describe("providers per user", () => {
     expect(listed).not.toContain(BOB_KEY)
   })
 
-  test("pushes a user's provider list to that user's machines only", async () => {
-    const before = state.configs.bob.length
+  test("pushes a user's provider list to that user's instances only", async () => {
+    const alice = state.machines.alice.instances
+    const before = state.machines.bob.instances.length
     expect((await state.alice.request("providers", { method: "POST", body: extra("alice-only") })).status).toBe(200)
-    await until(() => state.configs.alice.at(-1)?.providers.some((provider) => provider.id === "alice-only") === true)
-    expect(state.configs.alice.at(-1)?.providers.map((provider) => provider.id)).toEqual(["alice-only", "fake"])
+    await until(() => alice.at(-1)?.llm.providers.some((provider) => provider.id === "alice-only") === true)
+    expect(alice.at(-1)?.llm.providers.map((provider) => provider.id)).toEqual(["alice-only", "fake"])
     expect((await state.alice.request("providers/alice-only", { method: "DELETE" })).status).toBe(204)
-    await until(() => state.configs.alice.at(-1)?.providers.length === 1)
+    await until(() => alice.at(-1)?.llm.providers.length === 1)
     // Bob's machine heard nothing, and Alice cannot delete Bob's provider.
-    expect(state.configs.bob.length).toBe(before)
+    expect(state.machines.bob.instances.length).toBe(before)
     expect((await state.alice.request("providers/alice-only", { method: "DELETE" })).status).toBe(404)
   })
 
-  test("READY carries the owner's providers", async () => {
-    const configs: Agent.LlmConfig[] = []
-    const ready = Promise.withResolvers<Agent.Ready>()
-    const agent = Agent.connect({
-      enrollment: state.machines.bob,
-      local: async () => ({ url: `http://127.0.0.1:${local.port}` }),
-      onReady: ready.resolve,
-      onConfig: (llm) => configs.push(llm),
-    })
-    expect((await ready.promise).llm.providers).toEqual([{ id: "fake", name: "Fake" }])
+  test("a new connection gets the owner's instance with their providers, and a new token", async () => {
+    const before = state.machines.bob.instances.at(-1)!
+    const box: Box = { enrollment: state.machines.bob.enrollment, instances: [], dropped: [] }
+    const agent = await connect(box)
+    expect(box.instances[0]?.iid).toBe(before.iid)
+    expect(box.instances[0]?.llm.providers).toEqual([{ id: "fake", name: "Fake" }])
+    // This agent did not hold the token, so the hub issued a new one and the old one stopped working.
+    expect(box.instances[0]?.token).not.toBe(before.token)
+    expect((await relay(box)).headers.authorization).toBe(`Bearer ${BOB_KEY}`)
+    expect((await relayResponse(state.machines.bob)).status).toBe(401)
     await agent.close()
     // That connection replaced Bob's agent; bring it back for the next tests.
-    state.agents.push(await connect(state.machines.bob, state.configs.bob))
+    state.agents.push(await connect(state.machines.bob))
   })
 
   test("no key is stored in clear", async () => {
@@ -179,29 +177,32 @@ describe("locked keys", () => {
     expect(await waiting(state.alice)).toEqual({ alice: false, bob: false })
   })
 
-  test("disabling the owner makes the relays 423", async () => {
+  test("disabling the owner drops their instance and refuses its token; enabled again, a new one is locked", async () => {
     const carol = await signUp(state.hub.url, await invite(state.alice), "carol")
     const machine = await enroll(state.hub.url, carol, "Carol Box")
+    state.agents.push(await connect(machine))
     await addFake(carol, "sk-carol")
     expect((await relay(machine)).headers.authorization).toBe("Bearer sk-carol")
+    const first = machine.instances.at(-1)!
     const id = await userID("carol")
     await state.alice.post(`users/${id}/disable`, {})
-    expect((await relayResponse(machine)).status).toBe(423)
-    // Enabled again, the key stays locked until Carol signs in.
+    await until(() => machine.dropped.includes(first.iid))
+    expect((await relayResponse(machine)).status).toBe(401)
+    // Enabled again, the personal machine gets a new instance, whose key stays locked until Carol signs in.
     await state.alice.post(`users/${id}/enable`, {})
+    await until(() => machine.instances.at(-1)!.iid !== first.iid)
     expect((await relayResponse(machine)).status).toBe(423)
   })
 
-  test("a reset deletes the user's providers and pushes the empty list", async () => {
+  test("a reset deletes the user's providers and drops their instance", async () => {
     const dave = await signUp(state.hub.url, await invite(state.alice), "dave")
-    const enrollment = await enroll(state.hub.url, dave, "Dave Box")
-    const configs: Agent.LlmConfig[] = []
-    state.agents.push(await connect(enrollment, configs))
+    const machine = await enroll(state.hub.url, dave, "Dave Box")
+    state.agents.push(await connect(machine))
     await addFake(dave, "sk-dave")
-    await until(() => configs.at(-1)?.providers.length === 1)
+    await until(() => machine.instances.at(-1)?.llm.providers.length === 1)
     await state.alice.post(`users/${await userID("dave")}/reset`, {})
-    await until(() => configs.at(-1)?.providers.length === 0)
-    expect((await relayResponse(enrollment)).status).toBe(423)
+    await until(() => machine.dropped.length === 1)
+    expect((await relayResponse(machine)).status).toBe(401)
     const store = Store.open(dirs[0]!)
     const left = store.providerSummaries(await userID("dave"))
     store.close()
@@ -215,8 +216,10 @@ describe("restart", () => {
     const first = await Hub.start({ hostname: "127.0.0.1", port: 0, data, catalog: { fetch: offline } })
     const page = await signUp(first.url, first.invite("admin").url, "erin")
     const machine = await enroll(first.url, page, "Erin Box")
+    const agent = await connect(machine)
     await addFake(page, "sk-erin")
     expect((await relay(machine, first.url)).headers.authorization).toBe("Bearer sk-erin")
+    await agent.close()
     await first.stop()
 
     const second = await Hub.start({ hostname: "127.0.0.1", port: 0, data, catalog: { fetch: offline } })
@@ -299,20 +302,21 @@ async function invite(admin: Page) {
   return (await admin.post<{ url: string }>("invitations", { role: "user" })).url
 }
 
-async function enroll(hub: string, page: Page, name: string) {
+async function enroll(hub: string, page: Page, name: string): Promise<Box> {
   const code = (await page.post<{ code: string }>("machines/code", {})).code
-  return Agent.enroll({ url: hub, code, name })
+  return { enrollment: await Agent.enroll({ url: hub, code, name }), instances: [], dropped: [] }
 }
 
-async function connect(enrollment: Agent.Enrollment, configs: Agent.LlmConfig[]) {
-  const ready = Promise.withResolvers<void>()
+/** Connects the machine's agent and waits for its owner's instance, which a personal machine gets at once. */
+async function connect(box: Box) {
+  const count = box.instances.length
   const agent = Agent.connect({
-    enrollment,
+    enrollment: box.enrollment,
     local: async () => ({ url: `http://127.0.0.1:${local.port}` }),
-    onReady: () => ready.resolve(),
-    onConfig: (llm) => configs.push(llm),
+    onInstance: (instance) => box.instances.push(instance),
+    onDrop: (iid) => box.dropped.push(iid),
   })
-  await ready.promise
+  await until(() => box.instances.length > count)
   return agent
 }
 
@@ -324,15 +328,15 @@ async function addFake(page: Page, apiKey: string) {
   await page.post("providers", { id: "fake", name: "Fake", baseURL: `http://127.0.0.1:${upstream.port}/v1`, apiKey })
 }
 
-function relayResponse(machine: Agent.Enrollment, hub = state.hub.url) {
+function relayResponse(machine: Box, hub = state.hub.url) {
   return fetch(`${hub}/llm/fake/chat/completions`, {
     method: "POST",
-    headers: { authorization: `Bearer ${machine.llmToken}`, "content-type": "application/json" },
+    headers: { authorization: `Bearer ${machine.instances.at(-1)!.token}`, "content-type": "application/json" },
     body: "{}",
   })
 }
 
-async function relay(machine: Agent.Enrollment, hub = state.hub.url) {
+async function relay(machine: Box, hub = state.hub.url) {
   const response = await relayResponse(machine, hub)
   expect(response.status).toBe(200)
   return (await response.json()) as Echo

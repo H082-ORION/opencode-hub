@@ -95,7 +95,10 @@ export function create(input: {
   closed: (sessions: string[]) => void
   /** Called after an administrator reset a user, whose providers are gone with their key. */
   reset: (user: string) => void
-  /** Called after an administrator disabled or enabled a user, whose machines' providers follow. */
+  /**
+   * Called after an administrator disabled, enabled or changed the role of a user, whose instances follow (a role
+   * change may give an administrator machines enrolled before owners existed).
+   */
   updated: (user: string) => void
 }) {
   const store = input.store
@@ -407,7 +410,7 @@ export function create(input: {
     if (result === "unknown") return json(404, { error: "Unknown user." })
     if (result === "last-admin") return json(409, { error: "The hub needs at least one active administrator." })
     if (action[2] === "disable") signOut(id)
-    if (action[2] !== "role") input.updated(id)
+    input.updated(id)
     return json(200, {})
   }
 

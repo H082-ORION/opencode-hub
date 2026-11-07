@@ -9,7 +9,7 @@ export default Runtime.handler(
   Effect.fn("cli.agent.leave")(function* () {
     const removed = yield* RelayAgent.remove()
     // Stop routing the background service's LLM calls through the hub.
-    yield* RelayAgent.apply({ baseURL: "", providers: [] }, "")
+    yield* RelayAgent.apply(undefined)
     process.stdout.write(
       (removed
         ? "Forgot this machine's enrollment. Revoke it from the hub dashboard to invalidate its tokens."

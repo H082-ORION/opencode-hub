@@ -13,7 +13,6 @@ const hub = Bun.serve({
       url: announced.url,
       machine: { id: "box", name: "Box" },
       tunnelToken: "tunnel",
-      llmToken: "llm",
     })
   },
 })

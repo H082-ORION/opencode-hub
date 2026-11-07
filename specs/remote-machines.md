@@ -16,8 +16,12 @@ browser ──https──> Caddy ──http──> opencode hub (127.0.0.1:4800)
                                      ▼
                               WebSocket tunnel (outbound from the machine)
                                      ▼
-            machine: opencode agent ──http/ws──> local opencode background service (127.0.0.1:<port>)
+            machine: opencode agent ──http/ws──> the opening user's opencode instance (127.0.0.1:<port>)
 ```
+
+- Each user who opens a machine has their own **instance** there (`specs/multi-users.md`, step 5): on a personal
+  machine, the owner's instance is the account's usual background service; on an organization machine, each member
+  gets their own opencode server, started on demand by the agent.
 
 - Machines are addressed by **subdomain**, `<machine-id>.<domain>`. The web UI is then served by the machine's own
   server at `/`, so UI and API versions always match and the app needs no path-prefix support.
@@ -31,11 +35,11 @@ browser ──https──> Caddy ──http──> opencode hub (127.0.0.1:4800)
 | --------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------- |
 | A user (browser)                  | login and password through OPAQUE (the hub never sees the password) -> `opencode_hub` session cookie of that user (host-only, HttpOnly, SameSite=Lax, Secure when the hub URL is https, 30 days, in memory) | hub, on the hub host and on every machine host; the account must exist and be active, and own the machine, on every request |
 | A machine's tunnel                | `tunnel token`, issued at enrollment, sent as `Authorization: Bearer` on the WebSocket upgrade                                                                                                              | hub `/hub/agent/connect`                                                                                                    |
-| A machine's LLM calls             | `llm token`, issued at enrollment, used as the provider API key on the machine; it stands for the machine, hence its owner                                                                                  | hub `/llm/<provider>/...`                                                                                                   |
+| An instance's LLM calls           | `instance token`, issued by the hub in INSTANCE, used as the provider API key by that instance only; it stands for one user on one machine                                                                  | hub `/llm/<provider>/...`, which also checks that the user may still open the machine                                       |
 | The hub reaching the local server | the local service password (Basic `opencode:<password>`)                                                                                                                                                    | injected by the **agent**, never known to the hub                                                                           |
 
-Tokens are 32 random bytes base64url, stored hashed (sha256) in the hub DB. Revoking a machine deletes both hashes and
-closes its tunnel.
+Tokens are 32 random bytes base64url, stored hashed (sha256) in the hub DB. Revoking a machine deletes its tunnel token
+and its instances (and their tokens), sends DROP for each instance, then closes its tunnel.
 
 Cookie handoff to machine hosts (cookies are host-only, so no `Domain=` attribute is needed and `localhost` works):
 
@@ -49,30 +53,42 @@ Cookie handoff to machine hosts (cookies are host-only, so no `Domain=` attribut
 Every WebSocket message is one frame: `[type: u8][stream: u32 big-endian][payload]`. JSON payloads are UTF-8 JSON.
 Stream 0 is the control stream. Streams are opened only by the hub; ids are allocated by the hub, increasing.
 
-| Type | Name     | Direction               | Payload                                                                                                                                             |
-| ---- | -------- | ----------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------- |
-| 0x01 | OPEN     | hub -> agent            | JSON `{ kind: "http", method, path, headers: [k, v][] }` or `{ kind: "ws", path, headers, protocols: string[] }` (`path` includes the query string) |
-| 0x02 | DATA     | both                    | raw bytes: request body chunk, response body chunk, or binary WebSocket message                                                                     |
-| 0x03 | END      | both                    | empty: the sender will send no more DATA on this stream (half close)                                                                                |
-| 0x04 | RESPONSE | agent -> hub            | JSON `{ status, headers: [k, v][] }` for http; for ws, `{ status: 101, protocol? }` on success or a non-101 status on failure                       |
-| 0x05 | RESET    | both                    | JSON `{ message? }`: abort the stream, both sides forget it                                                                                         |
-| 0x06 | TEXT     | both                    | UTF-8 text WebSocket message                                                                                                                        |
-| 0x07 | CLOSE    | both                    | JSON `{ code, reason }`: WebSocket closed                                                                                                           |
-| 0x10 | HELLO    | agent -> hub (stream 0) | JSON `{ protocol: 1, version, name, platform }` — first frame after connecting                                                                      |
-| 0x11 | READY    | hub -> agent (stream 0) | JSON `{ machine: { id, name }, llm: { baseURL, providers: [{ id, name }] } }`; `providers` are the key holder's (see LLM proxy)                     |
-| 0x12 | CONFIG   | hub -> agent (stream 0) | same `llm` object as READY, pushed when the key holder's provider list or right to the keys changes                                                 |
-| 0x13 | PING     | hub -> agent (stream 0) | empty, every 25 s                                                                                                                                   |
-| 0x14 | PONG     | agent -> hub (stream 0) | empty                                                                                                                                               |
+| Type | Name     | Direction               | Payload                                                                                                                                                                                                       |
+| ---- | -------- | ----------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 0x01 | OPEN     | hub -> agent            | JSON `{ kind: "http", instance, method, path, headers: [k, v][] }` or `{ kind: "ws", instance, path, headers, protocols: string[] }` (`path` includes the query string; `instance` is the opening user's iid) |
+| 0x02 | DATA     | both                    | raw bytes: request body chunk, response body chunk, or binary WebSocket message                                                                                                                               |
+| 0x03 | END      | both                    | empty: the sender will send no more DATA on this stream (half close)                                                                                                                                          |
+| 0x04 | RESPONSE | agent -> hub            | JSON `{ status, headers: [k, v][] }` for http; for ws, `{ status: 101, protocol? }` on success or a non-101 status on failure                                                                                 |
+| 0x05 | RESET    | both                    | JSON `{ message? }`: abort the stream, both sides forget it                                                                                                                                                   |
+| 0x06 | TEXT     | both                    | UTF-8 text WebSocket message                                                                                                                                                                                  |
+| 0x07 | CLOSE    | both                    | JSON `{ code, reason }`: WebSocket closed                                                                                                                                                                     |
+| 0x10 | HELLO    | agent -> hub (stream 0) | JSON `{ protocol: 2, version, name, platform, instances?: [{ iid, hash }] }` — first frame after connecting; `instances` are the instance tokens the agent still holds, as SHA-256 hex                        |
+| 0x11 | READY    | hub -> agent (stream 0) | JSON `{ machine: { id, name }, owner: "user" \| "org", instances: iid[] }`: every instance the machine still has                                                                                              |
+| 0x13 | PING     | hub -> agent (stream 0) | empty, every 25 s                                                                                                                                                                                             |
+| 0x14 | PONG     | agent -> hub (stream 0) | empty                                                                                                                                                                                                         |
+| 0x15 | INSTANCE | hub -> agent (stream 0) | JSON `{ iid, token?, llm: { baseURL, providers: [{ id, name }] }, mcp: [], skills: { version } }`: an instance's configuration (its user's providers)                                                         |
+| 0x16 | SKILLS   | hub -> agent (stream 0) | JSON `{ iid, version, skills: [{ name, files: [{ path, content }] }] }`; defined and decoded, not sent yet (skills are step 6)                                                                                |
+| 0x17 | DROP     | hub -> agent (stream 0) | JSON `{ iid }`: stop the instance and delete it                                                                                                                                                               |
 
 Rules:
 
-- A protocol mismatch in HELLO makes the hub close with code 4400 and a reason. A revoked or unknown token is refused at
+- This is protocol 2. 0x12 (CONFIG in protocol 1) is gone. A protocol mismatch in HELLO, protocol 1 included, makes the
+  hub close with code 4400 and a reason. A revoked or unknown token is refused at
   the upgrade (401). Hub closes a replaced connection (same machine connects twice) with 4409.
 - The agent treats 60 s without PING as a dead connection and reconnects. Reconnect backoff: 1 s doubling to 30 s, ±20%
   jitter, reset after a connection has stayed up 60 s.
 - Request bodies stream hub -> agent as DATA then END. Response bodies stream agent -> hub as RESPONSE, DATA\*, END.
   SSE (`/api/event`) is just a long response body and must be streamed without buffering.
-- No flow control in protocol 1: senders rely on WebSocket buffering. Known limitation.
+- Instances (`specs/multi-users.md`, "Instances"): an iid is 16 to 64 base64url characters (the agent names a folder
+  after it; anything else fails to decode). The hub creates a user's instance at their first request to the machine
+  (a personal machine's owner instance at connection), and sends INSTANCE before the first OPEN for it on a
+  connection, then again whenever that user's providers change. `token` is present only when the hub issued a new
+  one, which replaces the previous hash: the agent announces in HELLO the tokens it still holds, and the hub omits
+  `token` for an instance whose hash matches. The agent keeps instance tokens in memory and in each instance's own
+  configuration only, never in `agent.json`. When a user loses access (removed from the organization, disabled,
+  reset) or the machine is revoked, the hub deletes the instance and sends DROP; an agent that was offline learns it
+  from READY, whose `instances` omits it, and deletes it too. OPEN for an instance the agent was not given is reset.
+- No flow control: senders rely on WebSocket buffering. Known limitation.
 - Header hygiene, applied by the **agent** before calling the local server: drop `host`, `origin`, `cookie`,
   `authorization`, `connection`, `upgrade`, `keep-alive`, `transfer-encoding`, `te`, `trailer`,
   `proxy-authorization`, `proxy-connection`, every `sec-websocket-*` for http, and add
@@ -107,7 +123,7 @@ Rules:
   checked when the code is created and again at enrollment (403 otherwise, with the same message as an invalid code).
   The machine then has `owner_org_id` (and no `owner_user_id`) and `enrolled_by`. Every current member lists, follows,
   opens and gets tickets for it, checked on every request; removing a member cuts their open streams at once, as a
-  disabled account does. At this step all members share the machine's single opencode instance. A machine
+  disabled account does, and deletes their instance there (DROP). Each member uses their own instance. A machine
   belonging to an organization is revoked by the member who enrolled it (while still a member) or by an
   administrator; another member gets 403, a non-member 404.
 - Providers (step 3): each user has their own, keyed `(user_id, id)`, so two users can both have an `anthropic` with
@@ -118,8 +134,7 @@ Rules:
   the OPAQUE export key) with an HMAC check value. At sign-in the browser unwraps it and sends it; the hub checks it
   against the stored check and keeps it in memory until it stops, the user locks it or the account is disabled or
   reset. It seals the user's secrets (below); the administrators' user list shows `waiting` for a user whose key is
-  locked while they have a saved provider and a personal machine, or an organization machine they enrolled and whose
-  organization they still belong to, i.e. machines that get 423.
+  locked while they have a saved provider and at least one instance, i.e. instances that get 423.
 - Sealed secrets (`hub/secrets.ts`): an API key, or a ChatGPT OAuth credential as JSON, is stored as unpadded base64url
   of `1 | nonce (12 bytes) | ciphertext + tag`, AES-256-GCM under the user key, with additional data
   `"opencode-hub/v1|provider|" + provider id + "|" + user id`, so a secret cannot move to another row or user. Only
@@ -128,7 +143,9 @@ Rules:
   key_check, created_at, updated_at, disabled_at), `invitation` (id, code_hash, role, created_by, user_id for a reset,
   created_at, expires_at, used_at), `invitation_org` (invitation_id, org_id: the organizations a new account joins),
   `org` (id, name unique without case, created_at), `membership` (org_id, user_id, created_at), `machine` (id, name,
-  tunnel_token_hash, llm_token_hash, owner_user_id, owner_org_id, enrolled_by, created_at, last_seen_at), `provider` (user_id, id, name, base_url, auth `key` or
+  tunnel_token_hash, owner_user_id, owner_org_id, enrolled_by, created_at, last_seen_at; a table from protocol 1 is
+  rebuilt without its `llm_token_hash`), `instance` (id: the iid, machine_id, user_id, token_hash null until first
+  sent, created_at, token_issued_at; unique `(machine_id, user_id)`), `provider` (user_id, id, name, base_url, auth `key` or
   `chatgpt`, api_key and oauth sealed, created_at, updated_at; primary key `(user_id, id)`),
   `setting` (key, value; `url` is the public URL the hub last started with, for `hub invite`). The OPAQUE server key lives in `<data>/opaque-server-setup`, outside
   the database. The data dir is `0700`; `hub.db`, its WAL files, `opaque-server-setup` and `catalog.json` are `0600`.
@@ -150,7 +167,7 @@ Rules:
     `admin/machines` (administrators: every machine with its owner or organization), `providers`, `DELETE providers/<id>`, `presets` (provider catalog),
     `providers/chatgpt/begin`, `providers/chatgpt/complete`. Mutations need a JSON body and `Origin` = hub origin.
   - `GET /hub/handoff`.
-  - `POST /hub/agent/enroll` JSON `{ code, name }` -> `{ machine: { id, name }, tunnelToken, llmToken, url }`. The
+  - `POST /hub/agent/enroll` JSON `{ code, name }` -> `{ machine: { id, name }, tunnelToken, url }`. The
     machine belongs to the code's author, or to the organization the code names; a code whose author was disabled
     meanwhile, or left that organization, is refused (403).
   - `GET /hub/agent/connect` WebSocket upgrade for the tunnel.
@@ -178,30 +195,41 @@ Rules:
   first SDK-backed API of each chat model). Templated URLs (Azure, Bedrock, Vertex) are excluded; custom providers
   remain possible.
 - Anthropic subscriptions cannot be proxied: opencode only uses them through the local `claude` CLI.
-- `<hub>/llm/<id>/<rest>` -> `<baseURL>/<rest>` with the same query string. The machine's llm token is looked for in
+- `<hub>/llm/<id>/<rest>` -> `<baseURL>/<rest>` with the same query string. The instance token is looked for in
   `authorization: Bearer`, `x-api-key`, `x-goog-api-key` and the `key` query parameter; whichever carried it is rewritten
-  with the real key, the others are left alone. The token gives the machine, the machine its key holder, and the hub
-  uses that user's provider `<id>`, opened with their user key in memory. The key holder of a personal machine is its
-  owner; that of an organization machine is the member who enrolled it, only while that account is active and still a
-  member of the organization.
-- Answers, in this order: no valid llm token, or tokens of two machines -> 401; ownerless machine, or one with both
-  owners -> 403; organization machine whose enroller is disabled, reset or no longer a member -> 403 with a message
-  that says so; personal owner disabled or reset, or the key holder's key not in memory (hub restarted, keys locked,
-  never signed in since) -> `423 { error: "Keys locked: sign in to the hub to unlock them." }`; unknown provider of
-  that user -> 404; a secret that does not open -> 500.
+  with the real key, the others are left alone. The token gives the instance, hence one user on one machine, and the hub
+  uses **that user's** provider `<id>`, opened with their user key in memory.
+- Answers, in this order: no valid instance token, tokens of two instances, or a machine that no longer exists -> 401;
+  the user may no longer open the machine (account disabled or reset, no longer its owner or a member of its
+  organization) -> 403 `This account no longer has access to this machine.`, a fail-closed check on every call besides
+  the instance being deleted; the user's key not in memory (hub restarted, keys locked, never signed in since) ->
+  `423 { error: "Keys locked: sign in to the hub to unlock them." }` (after the provider lookup, so an unknown provider
+  of a locked user is 404); unknown provider of that user -> 404; a secret that does not open -> 500.
 - Responses (including SSE) are streamed back unchanged except hop-by-hop headers.
 
 ## Agent
 
 - `opencode agent join <hub-url> --code <code> [--name <name>]`: enrolls and stores
-  `{ url, machine, tunnelToken, llmToken }` in `<global data>/agent.json` (mode 0600).
-- `opencode agent run`: ensures the local background service (same mechanism as `opencode service start`), applies the
-  LLM config, then keeps the tunnel open forever (reconnecting). It re-resolves the local service endpoint when a local
-  request fails to connect.
-- `opencode agent status`, `opencode agent leave` (forget local enrollment).
-- LLM config: the agent makes the local service use `<hub>/llm/<id>` as base URL and the llm token as API key for every
-  provider listed in READY/CONFIG, through the service's saved environment (`opencode service set env ...` mechanism),
-  and restarts the service only when that environment actually changes.
+  `{ url, machine, tunnelToken }` in `<global data>/agent.json` (mode 0600). An `agent.json` from protocol 1 still
+  loads; its `llmToken` is ignored and dropped from the file the next time it is read.
+- `opencode agent run`: ensures the local background service, then keeps the tunnel open forever (reconnecting). What
+  it serves depends on READY's `owner`:
+  - **Personal machine**: its only instance, the owner's, is the background service (same mechanism as `opencode
+service start`), so the owner's existing sessions stay visible. INSTANCE is applied to the service's saved
+    environment (`OPENCODE_HUB_INSTANCE`, `OPENCODE_HUB_LLM_TOKEN`, and `OPENCODE_CONFIG_CONTENT` that points every
+    provider at `<hub>/llm/<id>` with the token as API key), and the service restarts only when that environment
+    actually changes. At start the agent reads the instance and token back from there to announce them in HELLO.
+    DROP removes those three entries (the account's own data stays).
+  - **Organization machine**: one opencode server per member's instance, started at its first OPEN as
+    `opencode serve --stdio --hostname 127.0.0.1 --port 0` with its own `XDG_DATA_HOME`, `XDG_CONFIG_HOME`,
+    `XDG_STATE_HOME` and `XDG_CACHE_HOME` under `<global data>/hub-instances/<iid>/` (folders `0700`), a random local
+    password, and the same three variables. All run under the agent's system account. A configuration change stops
+    the instance, which starts again with it at the next request. DROP stops it and deletes its folder; READY deletes
+    the folders of instances it does not list. The servers hold their stdin as a lease: stopping the agent stops them
+    (they also exit if it dies), their folders stay.
+    It re-resolves an instance's local endpoint when a local request fails to connect or its configuration changes.
+- `opencode agent status`, `opencode agent leave` (forget local enrollment and remove the hub's entries from the
+  service environment).
 
 ## Library API (`@opencode/relay`)
 
@@ -213,14 +241,18 @@ Hub.invite(input: { data: string; role: "admin" | "user"; orgs?: string[] /* nam
 Agent.enroll(input: { url: string; code: string; name: string }) -> Promise<Enrollment>
 Agent.connect(input: {
   enrollment: Enrollment
-  local: () => Promise<{ url: string; password?: string }>
+  instances?: { iid: string; token: string }[] // tokens already held, announced in HELLO
+  local: (iid: string) => Promise<{ url: string; password?: string }>
   onReady?: (ready: Ready) => void
-  onConfig?: (llm: LlmConfig) => void
+  onInstance?: (instance: Instance /* token always set */) => void
+  onDrop?: (iid: string) => void
   onStatus?: (status: "connecting" | "connected" | "disconnected", detail?: string) => void
 }) -> { close(): Promise<void> }
+Instances.create(input: { root: string; command: string[]; env?; cwd?; log? }) // `@opencode/relay/agent/instances`
+  -> { configure(instance), local(iid), drop(iid), prune(validIids), running(iid), stop() }
 ```
 
 ## Out of scope for the first version
 
-Per-user instances, organization skills (see `specs/multi-users.md`), flow control, a queue for prompts sent while a machine is offline, mTLS, OAuth-based providers in the
+Organization skills (see `specs/multi-users.md`), flow control, a queue for prompts sent while a machine is offline, mTLS, OAuth-based providers in the
 LLM proxy.

@@ -27,6 +27,19 @@ export type MachineSummary = Machine & { owner_login: string | null; org_name: s
 /** A machine a user may open, with the name of its organization (null for a personal machine). */
 export type VisibleMachine = Machine & { org_name: string | null }
 
+/**
+ * One user's opencode instance on one machine. `token_hash` is the SHA-256 of its LLM token, null until the hub first
+ * sends the instance to the machine's agent.
+ */
+export type InstanceRow = {
+  id: string
+  machine_id: string
+  user_id: string
+  token_hash: string | null
+  created_at: number
+  token_issued_at: number | null
+}
+
 export type Org = { id: string; name: string; created_at: number }
 
 /** An organization as administrators list it, with how many machines it owns. */
@@ -115,17 +128,17 @@ export function open(dir: string) {
   const db = new Database(file, { create: true, strict: true })
   db.run("PRAGMA journal_mode = WAL")
   DATABASE_FILES.forEach((name) => existsSync(path.join(dir, name)) && chmodSync(path.join(dir, name), 0o600))
-  db.run(`CREATE TABLE IF NOT EXISTS machine (
+  const machineTable = `(
     id TEXT PRIMARY KEY,
     name TEXT NOT NULL,
     tunnel_token_hash TEXT NOT NULL UNIQUE,
-    llm_token_hash TEXT NOT NULL UNIQUE,
     owner_user_id TEXT,
     owner_org_id TEXT,
     enrolled_by TEXT,
     created_at INTEGER NOT NULL,
     last_seen_at INTEGER
-  )`)
+  )`
+  db.run(`CREATE TABLE IF NOT EXISTS machine ${machineTable}`)
   // Earlier versions kept every provider's key in clear, shared by all users. That table is dropped unread: its keys
   // have to be entered again by each user. secure_delete zeroes the freed pages, and the checkpoint below moves that
   // into the main file, so the old keys do not linger on disk.
@@ -159,6 +172,31 @@ export function open(dir: string) {
   ;["owner_user_id", "owner_org_id", "enrolled_by"]
     .filter((column) => !ownerColumns.has(column))
     .forEach((column) => db.run(`ALTER TABLE machine ADD COLUMN ${column} TEXT`))
+  // Protocol 1 gave each machine one LLM token; instances now have their own. SQLite cannot drop a UNIQUE column, so
+  // the table is rebuilt without it.
+  if (ownerColumns.has("llm_token_hash"))
+    db.transaction(() => {
+      db.run(`CREATE TABLE machine_next ${machineTable}`)
+      db.run(
+        `INSERT INTO machine_next (id, name, tunnel_token_hash, owner_user_id, owner_org_id, enrolled_by, created_at,
+           last_seen_at)
+         SELECT id, name, tunnel_token_hash, owner_user_id, owner_org_id, enrolled_by, created_at, last_seen_at
+         FROM machine`,
+      )
+      db.run("DROP TABLE machine")
+      db.run("ALTER TABLE machine_next RENAME TO machine")
+    })()
+  // One opencode instance per (machine, user who opened it). Its LLM token is issued when the hub sends it to the
+  // agent, so it stays null until then.
+  db.run(`CREATE TABLE IF NOT EXISTS instance (
+    id TEXT PRIMARY KEY,
+    machine_id TEXT NOT NULL,
+    user_id TEXT NOT NULL,
+    token_hash TEXT UNIQUE,
+    created_at INTEGER NOT NULL,
+    token_issued_at INTEGER,
+    UNIQUE (machine_id, user_id)
+  )`)
   db.run("CREATE TABLE IF NOT EXISTS setting (key TEXT PRIMARY KEY, value TEXT NOT NULL)")
   // The single hub password of earlier versions is gone: accounts replace it.
   db.run("DELETE FROM setting WHERE key = 'password_hash'")
@@ -224,21 +262,16 @@ export function open(dir: string) {
     ),
     machine: db.query<Machine, [string]>(`SELECT ${machineColumns} FROM machine WHERE id = ?`),
     byTunnel: db.query<Machine, [string]>(`SELECT ${machineColumns} FROM machine WHERE tunnel_token_hash = ?`),
-    byLlm: db.query<Machine, [string]>(`SELECT ${machineColumns} FROM machine WHERE llm_token_hash = ?`),
+    instance: db.query<InstanceRow, [string, string]>("SELECT * FROM instance WHERE machine_id = ? AND user_id = ?"),
+    instanceByToken: db.query<InstanceRow, [string]>("SELECT * FROM instance WHERE token_hash = ?"),
+    instancesOf: db.query<InstanceRow, [string]>("SELECT * FROM instance WHERE machine_id = ? ORDER BY created_at"),
     provider: db.query<ProviderRow, [string, string]>("SELECT * FROM provider WHERE user_id = ? AND id = ?"),
     summaries: db.query<ProviderSummary, [string]>(
       "SELECT id, name, base_url, auth FROM provider WHERE user_id = ? ORDER BY id",
     ),
-    /**
-     * Users whose machines rely on providers they saved, i.e. need their key in memory: their personal machines, and
-     * the organization machines they enrolled while they are still members.
-     */
+    /** Users whose instances rely on providers they saved, i.e. need their key in memory. */
     keysInUse: db.query<{ user_id: string }, []>(
-      `SELECT DISTINCT provider.user_id FROM provider
-       JOIN machine ON (machine.owner_user_id = provider.user_id AND machine.owner_org_id IS NULL)
-         OR (machine.owner_user_id IS NULL AND machine.enrolled_by = provider.user_id
-           AND EXISTS (SELECT 1 FROM membership
-             WHERE membership.org_id = machine.owner_org_id AND membership.user_id = provider.user_id))`,
+      "SELECT DISTINCT provider.user_id FROM provider JOIN instance ON instance.user_id = provider.user_id",
     ),
     setting: db.query<{ value: string }, [string]>("SELECT value FROM setting WHERE key = ?"),
     users: db.query<User, []>("SELECT * FROM user ORDER BY created_at"),
@@ -333,26 +366,22 @@ export function open(dir: string) {
     machinesFor: (user: string) => queries.machinesFor.all(user, user),
     machine: (id: string) => queries.machine.get(id) ?? undefined,
     machineByTunnelToken: (token: string) => queries.byTunnel.get(hashToken(token)) ?? undefined,
-    machineByLlmToken: (token: string) => queries.byLlm.get(hashToken(token)) ?? undefined,
     /**
      * Creates a machine with an id derived from `name`, owned by the user who enrolled it or by an organization, and
-     * returns it with its fresh plaintext tokens.
+     * returns it with its fresh plaintext tunnel token.
      */
     createMachine(input: { name: string; enrolledBy: string; org?: string }) {
       const name = input.name
       const tunnelToken = randomToken()
-      const llmToken = randomToken()
       const id = db.transaction(() => {
         const machineID = availableID(slug(name), (candidate) => queries.machine.get(candidate) !== null)
         db.run(
-          `INSERT INTO machine (id, name, tunnel_token_hash, llm_token_hash, owner_user_id, owner_org_id, enrolled_by,
-             created_at)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+          `INSERT INTO machine (id, name, tunnel_token_hash, owner_user_id, owner_org_id, enrolled_by, created_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?)`,
           [
             machineID,
             name,
             hashToken(tunnelToken),
-            hashToken(llmToken),
             input.org === undefined ? input.enrolledBy : null,
             input.org ?? null,
             input.enrolledBy,
@@ -361,15 +390,59 @@ export function open(dir: string) {
         )
         return machineID
       })()
-      return { machine: { id, name }, tunnelToken, llmToken }
+      return { machine: { id, name }, tunnelToken }
     },
-    deleteMachine: (id: string) => db.run("DELETE FROM machine WHERE id = ?", [id]).changes > 0,
+    /** Deletes a machine with its instances, whose tokens stop working with them. */
+    deleteMachine: (id: string) =>
+      db.transaction(() => {
+        db.run("DELETE FROM instance WHERE machine_id = ?", [id])
+        return db.run("DELETE FROM machine WHERE id = ?", [id]).changes > 0
+      })(),
+    /** A user's instance on a machine, if it has one. */
+    instance: (machine: string, user: string) => queries.instance.get(machine, user) ?? undefined,
+    /** Creates the user's instance on a machine unless it exists, and returns it. */
+    ensureInstance(machine: string, user: string) {
+      db.run("INSERT OR IGNORE INTO instance (id, machine_id, user_id, created_at) VALUES (?, ?, ?, ?)", [
+        randomID(),
+        machine,
+        user,
+        Date.now(),
+      ])
+      return queries.instance.get(machine, user)!
+    },
+    instanceByToken: (token: string) => queries.instanceByToken.get(hashToken(token)) ?? undefined,
+    instancesOf: (machine: string) => queries.instancesOf.all(machine),
+    /** Issues a new token for an instance, replacing the previous one; the plaintext exists only in the result. */
+    issueInstanceToken(id: string) {
+      const token = randomToken()
+      db.run("UPDATE instance SET token_hash = ?, token_issued_at = ? WHERE id = ?", [hashToken(token), Date.now(), id])
+      return token
+    },
+    /**
+     * Deletes every instance whose user may no longer open its machine: account disabled, reset or gone, machine gone,
+     * no longer its personal owner or a member of its organization (the same rules as opening the machine). Returns
+     * what was deleted, so the agents can be told.
+     */
+    pruneInstances: () =>
+      db
+        .query<{ id: string; machine_id: string }, []>(
+          `DELETE FROM instance WHERE NOT EXISTS (
+             SELECT 1 FROM machine JOIN user ON user.id = instance.user_id
+             WHERE machine.id = instance.machine_id AND user.disabled_at IS NULL
+               AND user.registration_record IS NOT NULL
+               AND ((machine.owner_org_id IS NULL AND machine.owner_user_id = instance.user_id)
+                 OR (machine.owner_user_id IS NULL AND machine.owner_org_id IS NOT NULL AND EXISTS (
+                   SELECT 1 FROM membership
+                   WHERE membership.org_id = machine.owner_org_id AND membership.user_id = instance.user_id)))
+           ) RETURNING id, machine_id`,
+        )
+        .all(),
     touchMachine: (id: string) => db.run("UPDATE machine SET last_seen_at = ? WHERE id = ?", [Date.now(), id]),
     /** A user's provider with its sealed secret; only `Providers` reads these. */
     provider: (user: string, id: string) => queries.provider.get(user, id) ?? undefined,
     /** A user's providers, without secrets. */
     providerSummaries: (user: string) => queries.summaries.all(user),
-    /** The users who have both a personal machine and a saved provider. */
+    /** The users who have both an instance and a saved provider. */
     usersWithKeysInUse: () => new Set(queries.keysInUse.all().map((row) => row.user_id)),
     /** Inserts or replaces a user's provider; exactly one of `apiKey` and `oauth` is set, both already sealed. */
     saveProvider: (input: {

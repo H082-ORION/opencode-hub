@@ -311,12 +311,12 @@ describe("access tokens", () => {
 describe("llm proxy", () => {
   test("injects the owner's ChatGPT access token and compresses the body with zstd", async () => {
     const deps = setup()
-    const machine = deps.store.createMachine({ name: "box", enrolledBy: ALICE })
+    const machine = instanceToken(deps, "box", ALICE)
     await saveChatGPT(deps.providers, Date.now() + 3_600_000, `http://127.0.0.1:${upstream.port}/v1`)
     const payload = JSON.stringify({ input: "x".repeat(2 * 1024 * 1024) })
     const bearer = await proxyJSON(deps, "/llm/openai/responses?stream=1", {
       method: "POST",
-      headers: { authorization: `Bearer ${machine.llmToken}`, "content-type": "application/json" },
+      headers: { authorization: `Bearer ${machine}`, "content-type": "application/json" },
       body: payload,
     })
     expect(bearer.path).toBe("/v1/responses?stream=1")
@@ -325,8 +325,8 @@ describe("llm proxy", () => {
     expect(bearer.body).toBe(payload)
     expect(bearer.size).toBeLessThan(payload.length / 10)
 
-    const other = await proxyJSON(deps, `/llm/openai/models?key=${machine.llmToken}`, {
-      headers: { "x-api-key": machine.llmToken },
+    const other = await proxyJSON(deps, `/llm/openai/models?key=${machine}`, {
+      headers: { "x-api-key": machine },
     })
     expect(other.path).toBe("/v1/models")
     expect(other.headers.authorization).toBe("Bearer access-saved")
@@ -334,18 +334,18 @@ describe("llm proxy", () => {
     expect(other.headers["content-encoding"]).toBeUndefined()
 
     // Bob's machine does not see Alice's sign-in.
-    const bobs = deps.store.createMachine({ name: "bob box", enrolledBy: BOB })
-    const missing = await proxy(deps, "/llm/openai/models", { headers: { authorization: `Bearer ${bobs.llmToken}` } })
+    const bobs = instanceToken(deps, "bob box", BOB)
+    const missing = await proxy(deps, "/llm/openai/models", { headers: { authorization: `Bearer ${bobs}` } })
     expect(missing.status).toBe(404)
   })
 
   test("answers 423 when the owner's key is locked, refresh due or not", async () => {
     const deps = setup()
-    const machine = deps.store.createMachine({ name: "box", enrolledBy: ALICE })
+    const machine = instanceToken(deps, "box", ALICE)
     await saveChatGPT(deps.providers, Date.now() - 1000, `http://127.0.0.1:${upstream.port}/v1`)
     deps.keys.delete(ALICE)
     const response = await proxy(deps, "/llm/openai/models", {
-      headers: { authorization: `Bearer ${machine.llmToken}` },
+      headers: { authorization: `Bearer ${machine}` },
     })
     expect(response.status).toBe(423)
     expect(((await response.json()) as { error: string }).error).toBe(Providers.LOCKED)
@@ -354,17 +354,17 @@ describe("llm proxy", () => {
 
   test("rejects bad llm tokens, foreign machines and reports refresh failures", async () => {
     const deps = setup()
-    const machine = deps.store.createMachine({ name: "box", enrolledBy: ALICE })
+    const machine = instanceToken(deps, "box", ALICE)
     await saveChatGPT(deps.providers, Date.now() - 1000, `http://127.0.0.1:${upstream.port}/v1`, "bad-refresh")
     const unauthorized = await proxy(deps, "/llm/openai/models", { headers: { authorization: "Bearer nope" } })
     expect(unauthorized.status).toBe(401)
-    // Two machines' tokens in one request could pick either owner's keys.
-    const bobs = deps.store.createMachine({ name: "bob box", enrolledBy: BOB })
+    // Two instances' tokens in one request could pick either user's keys.
+    const bobs = instanceToken(deps, "bob box", BOB)
     const mixed = await proxy(deps, "/llm/openai/models", {
-      headers: { authorization: `Bearer ${machine.llmToken}`, "x-api-key": bobs.llmToken },
+      headers: { authorization: `Bearer ${machine}`, "x-api-key": bobs },
     })
     expect(mixed.status).toBe(401)
-    const failed = await proxy(deps, "/llm/openai/models", { headers: { authorization: `Bearer ${machine.llmToken}` } })
+    const failed = await proxy(deps, "/llm/openai/models", { headers: { authorization: `Bearer ${machine}` } })
     expect(failed.status).toBe(502)
     expect(((await failed.json()) as { error: string }).error).toContain("ChatGPT token refresh failed")
   })
@@ -384,11 +384,17 @@ async function saveChatGPT(
   })
 }
 
+/** A machine of `user` with that user's instance on it, and the instance's LLM token. */
+function instanceToken(deps: ReturnType<typeof setup>, name: string, user: string) {
+  const machine = deps.store.createMachine({ name, enrolledBy: user })
+  return deps.store.issueInstanceToken(deps.store.ensureInstance(machine.machine.id, user).id)
+}
+
 function proxy(deps: ReturnType<typeof setup>, target: string, init: RequestInit) {
   return Llm.proxy(new Request(`http://hub${target}`, init), new URL(`http://hub${target}`), {
     store: deps.store,
     providers: deps.providers,
-    activeUser: deps.active,
+    allowed: (user, machine) => deps.active(user) !== undefined && machine.owner_user_id === user,
     chatgpt: deps.chatgpt,
   })
 }

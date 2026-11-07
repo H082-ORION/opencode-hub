@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto"
 import { Option, Schema } from "effect"
 import { HOP_BY_HOP, withoutDecodedHeaders } from "../headers.js"
 import { Protocol } from "../protocol.js"
@@ -9,11 +10,12 @@ export const Enrollment = Schema.Struct({
   url: Schema.String,
   machine: Schema.Struct({ id: Schema.String, name: Schema.String }),
   tunnelToken: Schema.String,
-  llmToken: Schema.String,
 })
 export type Enrollment = typeof Enrollment.Type
 export type Ready = Protocol.Ready
 export type LlmConfig = Protocol.LlmConfig
+/** An instance as the agent hands it on: always with the token it holds for it. */
+export type Instance = Protocol.Instance & { token: string }
 /** `stopped` is final: the hub refused this agent for good (protocol mismatch, revoked, or replaced). */
 export type Status = "connecting" | "connected" | "disconnected" | "stopped"
 export type Local = { url: string; password?: string }
@@ -28,10 +30,19 @@ const BunWebSocket = globalThis.WebSocket as unknown as BunWebSocketConstructor
 
 export type ConnectInput = {
   enrollment: Enrollment
-  /** Resolves the local opencode server; called again after a local request fails to connect. */
-  local: () => Promise<Local>
+  /**
+   * Instance tokens the agent already holds when it starts, e.g. the personal instance's from the service
+   * environment: announced in HELLO (as hashes) so the hub does not issue new ones.
+   */
+  instances?: readonly { iid: string; token: string }[]
+  /** Resolves an instance's local opencode server; called again after a local request to it fails to connect. */
+  local: (iid: string) => Promise<Local>
+  /** READY: `ready.instances` lists the instances that still exist; the others were already forgotten. */
   onReady?: (ready: Ready) => void
-  onConfig?: (llm: LlmConfig) => void
+  /** INSTANCE: an instance's configuration, new or changed. */
+  onInstance?: (instance: Instance) => void
+  /** DROP, or an instance missing from READY: the instance is gone and its data should be deleted. */
+  onDrop?: (iid: string) => void
   onStatus?: (status: Status, detail?: string) => void
   /** Overrides for timing constants, in milliseconds. */
   timing?: Partial<typeof TIMING>
@@ -107,8 +118,13 @@ export async function enroll(input: {
   return enrollment
 }
 
-type HttpStream = { kind: "http"; abort: AbortController; body?: ReadableStreamDefaultController<Uint8Array> }
-type WsStream = { kind: "ws"; socket?: WebSocket }
+type HttpStream = {
+  kind: "http"
+  instance: string
+  abort: AbortController
+  body?: ReadableStreamDefaultController<Uint8Array>
+}
+type WsStream = { kind: "ws"; instance: string; socket?: WebSocket }
 
 /** Keeps a tunnel to the hub open, reconnecting with backoff, and serves its streams from the local server. */
 export function connect(input: ConnectInput) {
@@ -116,6 +132,9 @@ export function connect(input: ConnectInput) {
   const target = new URL("/hub/agent/connect", input.enrollment.url)
   target.protocol = target.protocol === "https:" ? "wss:" : "ws:"
   const streams = new Map<number, HttpStream | WsStream>()
+  // Instance tokens live only here and in each instance's own configuration, never in agent.json.
+  const tokens = new Map((input.instances ?? []).map((entry) => [entry.iid, entry.token]))
+  const locals = new Map<string, Promise<Local>>()
   const state: {
     stopped: boolean
     socket?: WebSocket
@@ -123,7 +142,6 @@ export function connect(input: ConnectInput) {
     attempt: number
     retry?: Timer
     watchdog?: Timer
-    local?: Promise<Local>
     closed?: PromiseWithResolvers<void>
   } = { stopped: false, attempt: 0 }
 
@@ -156,6 +174,10 @@ export function connect(input: ConnectInput) {
           version: pkg.version,
           name: input.enrollment.machine.name,
           platform: process.platform,
+          instances: Array.from(tokens, (entry) => ({
+            iid: entry[0],
+            hash: createHash("sha256").update(entry[1]).digest("hex"),
+          })),
         }),
       )
     })
@@ -210,6 +232,9 @@ export function connect(input: ConnectInput) {
       const open = Protocol.decodeOpen(frame.payload)
       if (!open || streams.has(frame.stream) || !open.path.startsWith("/"))
         return send(Protocol.encodeJson(Protocol.Type.RESET, frame.stream, { message: "invalid OPEN" }))
+      // Only instances the hub configured on this agent are served.
+      if (!tokens.has(open.instance))
+        return send(Protocol.encodeJson(Protocol.Type.RESET, frame.stream, { message: "unknown instance" }))
       if (open.kind === "http") return void http(frame.stream, open, send)
       return void websocket(frame.stream, open, send)
     }
@@ -242,15 +267,46 @@ export function connect(input: ConnectInput) {
       if (!ready) return
       state.connectedAt = Date.now()
       input.onStatus?.("connected")
-      return input.onReady?.(ready)
+      input.onReady?.(ready)
+      // Instances dropped while this agent was offline are forgotten before any stream reaches them.
+      const valid = new Set(ready.instances)
+      Array.from(tokens.keys())
+        .filter((iid) => !valid.has(iid))
+        .forEach((iid) => forget(iid, send))
+      return
     }
-    if (frame.type !== Protocol.Type.CONFIG) return
-    const llm = Protocol.decodeLlmConfig(frame.payload)
-    if (llm) input.onConfig?.(llm)
+    if (frame.type === Protocol.Type.INSTANCE) {
+      const instance = Protocol.decodeInstance(frame.payload)
+      const token = instance?.token ?? (instance ? tokens.get(instance.iid) : undefined)
+      // Without a token the instance could not reach the hub's relays; the hub sends one whenever it is needed.
+      if (!instance || token === undefined) return
+      tokens.set(instance.iid, token)
+      // The instance may be restarted with its new configuration: its address is resolved again.
+      locals.delete(instance.iid)
+      return input.onInstance?.({ ...instance, token })
+    }
+    if (frame.type !== Protocol.Type.DROP) return
+    const drop = Protocol.decodeDrop(frame.payload)
+    if (drop) forget(drop.iid, send)
+  }
+
+  /** Forgets an instance: its token, its address and its open streams, then lets the caller delete it. */
+  function forget(iid: string, send: (data: Uint8Array<ArrayBuffer>) => void) {
+    tokens.delete(iid)
+    locals.delete(iid)
+    Array.from(streams)
+      .filter((entry) => entry[1].instance === iid)
+      .forEach((entry) => {
+        streams.delete(entry[0])
+        send(Protocol.encodeJson(Protocol.Type.RESET, entry[0], { message: "instance dropped" }))
+        if (entry[1].kind === "http") return entry[1].abort.abort()
+        entry[1].socket?.close(1001, "instance dropped")
+      })
+    input.onDrop?.(iid)
   }
 
   async function http(id: number, open: Protocol.OpenHttp, send: (data: Uint8Array<ArrayBuffer>) => void) {
-    const stream: HttpStream = { kind: "http", abort: new AbortController() }
+    const stream: HttpStream = { kind: "http", instance: open.instance, abort: new AbortController() }
     const bodied = open.method !== "GET" && open.method !== "HEAD"
     const body = bodied
       ? new ReadableStream<Uint8Array>({
@@ -264,7 +320,7 @@ export function connect(input: ConnectInput) {
       : undefined
     streams.set(id, stream)
     const request = async () => {
-      const local = await resolveLocal()
+      const local = await resolveLocal(open.instance)
       return fetch(`${local.url.replace(/\/+$/, "")}${open.path}`, {
         method: open.method,
         headers: localHeaders(open.headers, local),
@@ -276,12 +332,12 @@ export function connect(input: ConnectInput) {
     // A request without a body can be replayed once against a re-resolved local server.
     const response = await request()
       .catch((error: unknown) => {
-        state.local = undefined
+        locals.delete(open.instance)
         if (bodied || stream.abort.signal.aborted) throw error
         return request()
       })
       .catch((error: unknown) => {
-        state.local = undefined
+        locals.delete(open.instance)
         return error instanceof Error ? error : new Error(String(error))
       })
     if (!streams.has(id)) return
@@ -313,9 +369,9 @@ export function connect(input: ConnectInput) {
   }
 
   async function websocket(id: number, open: Protocol.OpenWs, send: (data: Uint8Array<ArrayBuffer>) => void) {
-    const stream: WsStream = { kind: "ws" }
+    const stream: WsStream = { kind: "ws", instance: open.instance }
     streams.set(id, stream)
-    const local = await resolveLocal().catch(() => undefined)
+    const local = await resolveLocal(open.instance).catch(() => undefined)
     if (!streams.has(id)) return
     if (!local) {
       streams.delete(id)
@@ -343,16 +399,21 @@ export function connect(input: ConnectInput) {
     socket.addEventListener("close", (event) => {
       if (!streams.delete(id)) return
       if (!opened.value) {
-        state.local = undefined
+        locals.delete(open.instance)
         return send(Protocol.encodeJson(Protocol.Type.RESPONSE, id, { status: 502 }))
       }
       send(Protocol.encodeJson(Protocol.Type.CLOSE, id, { code: event.code, reason: event.reason }))
     })
   }
 
-  function resolveLocal() {
-    state.local ??= input.local()
-    return state.local
+  function resolveLocal(iid: string) {
+    const known = locals.get(iid)
+    if (known) return known
+    const local = input.local(iid)
+    locals.set(iid, local)
+    // A failed resolution is not cached, so the next request tries again.
+    local.catch(() => locals.get(iid) === local && locals.delete(iid))
+    return local
   }
 }
 
