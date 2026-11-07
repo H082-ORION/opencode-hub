@@ -17,6 +17,12 @@ asks the hub (`/hub/tls-allowed`) first, so only the hub host and enrolled machi
 
 ## Install
 
+The interactive installer at the repository root, `sudo ./install.sh`, first asks for the language (French or
+English, or `--lang fr|en`), then offers Caddy, the hub and the client (agent), each with an optional systemd
+service started at boot. `./install.sh --help` lists the options for unattended installs. `./install.sh --status` shows the state of Caddy, the hub, the agent and the binary, and
+`sudo ./install.sh --uninstall` removes the chosen components (`--purge` also deletes the hub data, the enrollment,
+the Caddy package and the binary). The script below installs Caddy and the hub only.
+
 ```sh
 sudo ./install.sh --domain hub.example.com --email you@example.com --binary ./opencode
 ```
