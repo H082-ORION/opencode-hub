@@ -91,6 +91,32 @@ export type ProviderRow = {
   updated_at: number
 }
 
+/** `headers` connectors inject saved headers; `oauth` ones a bearer token the hub obtained and refreshes. */
+export type ConnectorAuth = "headers" | "oauth"
+
+/**
+ * A remote MCP server of one user as stored: `headers` (JSON `[name, value][]`, for `headers`) or `oauth` (JSON, for
+ * `oauth`) is sealed under the user's key (see `Secrets`), and the other is null. `header_names` lists the injected
+ * header names in clear, for the dashboard; `connected_at` is when an `oauth` connector last got its tokens. Only
+ * `Connectors` opens the sealed columns.
+ */
+export type ConnectorRow = {
+  user_id: string
+  id: string
+  name: string
+  url: string
+  auth: ConnectorAuth
+  header_names: string
+  headers: string | null
+  oauth: string | null
+  connected_at: number | null
+  created_at: number
+  updated_at: number
+}
+
+/** Connector fields that are safe to show in the UI and to send to machines. */
+export type ConnectorSummary = Pick<ConnectorRow, "id" | "name" | "url" | "auth" | "header_names" | "connected_at">
+
 export type Role = "admin" | "user"
 
 export type User = {
@@ -177,6 +203,21 @@ export function open(dir: string) {
     PRIMARY KEY (user_id, id)
   )`)
   if (legacyProviders) db.run("PRAGMA wal_checkpoint(TRUNCATE)")
+  // Remote MCP servers per user (specs/multi-users.md, "Connecteurs MCP"), secrets sealed like providers'.
+  db.run(`CREATE TABLE IF NOT EXISTS connector (
+    user_id TEXT NOT NULL,
+    id TEXT NOT NULL,
+    name TEXT NOT NULL,
+    url TEXT NOT NULL,
+    auth TEXT NOT NULL CHECK (auth IN ('headers', 'oauth')),
+    header_names TEXT NOT NULL,
+    headers TEXT,
+    oauth TEXT,
+    connected_at INTEGER,
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL,
+    PRIMARY KEY (user_id, id)
+  )`)
   // Databases created before machines had owners lack these columns; their machines are adopted below.
   const ownerColumns = new Set(
     db
@@ -296,10 +337,16 @@ export function open(dir: string) {
     summaries: db.query<ProviderSummary, [string]>(
       "SELECT id, name, base_url, auth FROM provider WHERE user_id = ? ORDER BY id",
     ),
-    /** Users whose instances rely on providers they saved, i.e. need their key in memory. */
+    /** Users whose instances rely on providers or connectors they saved, i.e. need their key in memory. */
     keysInUse: db.query<{ user_id: string }, []>(
-      "SELECT DISTINCT provider.user_id FROM provider JOIN instance ON instance.user_id = provider.user_id",
+      `SELECT provider.user_id FROM provider JOIN instance ON instance.user_id = provider.user_id
+       UNION SELECT connector.user_id FROM connector JOIN instance ON instance.user_id = connector.user_id`,
     ),
+    connector: db.query<ConnectorRow, [string, string]>("SELECT * FROM connector WHERE user_id = ? AND id = ?"),
+    connectors: db.query<ConnectorSummary, [string]>(
+      "SELECT id, name, url, auth, header_names, connected_at FROM connector WHERE user_id = ? ORDER BY id",
+    ),
+    connectorCount: db.query<{ count: number }, [string]>("SELECT count(*) AS count FROM connector WHERE user_id = ?"),
     setting: db.query<{ value: string }, [string]>("SELECT value FROM setting WHERE key = ?"),
     users: db.query<User, []>("SELECT * FROM user ORDER BY created_at"),
     user: db.query<User, [string]>("SELECT * FROM user WHERE id = ?"),
@@ -476,7 +523,69 @@ export function open(dir: string) {
     provider: (user: string, id: string) => queries.provider.get(user, id) ?? undefined,
     /** A user's providers, without secrets. */
     providerSummaries: (user: string) => queries.summaries.all(user),
-    /** The users who have both an instance and a saved provider. */
+    /** A user's connector with its sealed secrets; only `Connectors` reads these. */
+    connector: (user: string, id: string) => queries.connector.get(user, id) ?? undefined,
+    /** A user's connectors, without secrets. */
+    connectorSummaries: (user: string) => queries.connectors.all(user),
+    /**
+     * Inserts a connector (`create`, refused when the id is taken or the user has `limit` already) or replaces an
+     * existing one of the user; its secrets are already sealed.
+     */
+    saveConnector: (input: {
+      user: string
+      id: string
+      name: string
+      url: string
+      auth: ConnectorAuth
+      headerNames: readonly string[]
+      headers: string | null
+      oauth: string | null
+      connectedAt: number | null
+      create: boolean
+      limit: number
+    }) =>
+      db.transaction((): "ok" | "taken" | "limit" | "unknown" => {
+        const now = Date.now()
+        const existing = queries.connector.get(input.user, input.id)
+        if (input.create && existing) return "taken"
+        if (!input.create && !existing) return "unknown"
+        if (input.create && (queries.connectorCount.get(input.user)?.count ?? 0) >= input.limit) return "limit"
+        db.run(
+          `INSERT INTO connector (user_id, id, name, url, auth, header_names, headers, oauth, connected_at, created_at,
+             updated_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+           ON CONFLICT (user_id, id) DO UPDATE SET name = excluded.name, url = excluded.url, auth = excluded.auth,
+             header_names = excluded.header_names, headers = excluded.headers, oauth = excluded.oauth,
+             connected_at = excluded.connected_at, updated_at = excluded.updated_at`,
+          [
+            input.user,
+            input.id,
+            input.name,
+            input.url,
+            input.auth,
+            JSON.stringify(input.headerNames),
+            input.headers,
+            input.oauth,
+            input.connectedAt,
+            now,
+            now,
+          ],
+        )
+        return "ok"
+      })(),
+    /**
+     * Replaces the sealed OAuth state of an `oauth` connector, only while its URL is still `url` (a connector moved
+     * elsewhere meanwhile must not get tokens issued for the previous server).
+     */
+    updateConnectorOAuth: (input: { user: string; id: string; url: string; oauth: string; connected: boolean }) =>
+      db.run(
+        `UPDATE connector SET oauth = ?, connected_at = CASE WHEN ? THEN ? ELSE connected_at END, updated_at = ?
+         WHERE user_id = ? AND id = ? AND url = ? AND auth = 'oauth'`,
+        [input.oauth, input.connected ? 1 : 0, Date.now(), Date.now(), input.user, input.id, input.url],
+      ).changes > 0,
+    deleteConnector: (user: string, id: string) =>
+      db.run("DELETE FROM connector WHERE user_id = ? AND id = ?", [user, id]).changes > 0,
+    /** The users who have both an instance and a saved provider or connector. */
     usersWithKeysInUse: () => new Set(queries.keysInUse.all().map((row) => row.user_id)),
     /** Inserts or replaces a user's provider; exactly one of `apiKey` and `oauth` is set, both already sealed. */
     saveProvider: (input: {
@@ -642,6 +751,7 @@ export function open(dir: string) {
         )
         // Sealed under the key that was just forgotten: unreadable from now on, so they go too.
         db.run("DELETE FROM provider WHERE user_id = ?", [id])
+        db.run("DELETE FROM connector WHERE user_id = ?", [id])
         // An earlier reset link for this account must not outlive the new one.
         db.run("DELETE FROM invitation WHERE user_id = ? AND used_at IS NULL", [id])
         db.run("DELETE FROM invitation_org WHERE invitation_id NOT IN (SELECT id FROM invitation)")

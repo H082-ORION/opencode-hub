@@ -37,6 +37,9 @@ front of it.
   its own token, revocable at any time.
 - **LLM proxy**: provider keys stay on the hub. Machines only hold a hub-specific token, which replaces the real key on
   the way. Changing a key requires no action on the machines.
+- **MCP proxy**: each user's remote MCP connectors (secret headers, or an OAuth sign-in run by the hub) are stored
+  encrypted on the hub; machines reach them at `<hub>/mcp/<id>` with the same token, and the hub adds the secrets on
+  the way. They show up on the machines as the MCP servers `hub-<id>`.
 - **Provider catalog**: more than 200 providers from the OpenCode catalog, grouped by company, with the API URL already
   filled in. Only the key remains to paste.
 - **ChatGPT subscription**: "Sign in with ChatGPT" on the hub, token renewed automatically *(not yet tested against the
@@ -51,7 +54,7 @@ front of it.
 
 ```
 browser ──https──> Caddy ──> opencode hub (127.0.0.1:4800)
-                               ├─ hub.example.com            dashboard, login, enrollment, LLM proxy
+                               ├─ hub.example.com            dashboard, login, enrollment, LLM and MCP proxy
                                └─ <machine>.hub.example.com  proxy to the machine
                                          ▲
                        outgoing WebSocket tunnel (opened by the machine)
@@ -119,7 +122,7 @@ Details on Caddy, DNS and troubleshooting: [`script/hub/README.md`](script/hub/R
 
 | Command | Purpose |
 |---|---|
-| `opencode hub [--port 4800] [--url https://hub.example.com] [--data <folder>]` | Starts the hub |
+| `opencode hub [--port 4800] [--url https://hub.example.com] [--data <folder>] [--mcp-private-network]` | Starts the hub (`--mcp-private-network`: MCP connectors may reach private and loopback addresses) |
 | `opencode hub invite [--admin] [--data <folder>]` | Creates a one-time invitation and prints its link (`--admin` for an administrator) |
 | `opencode agent join <url> [--code <code>] [--name <name>] [--insecure]` | Enrolls this machine (without `--code`, the code is asked without echo or read from stdin) |
 | `opencode agent run` | Keeps the machine connected to the hub |
@@ -149,7 +152,7 @@ Without `--code`, the code shows up neither in the process list nor in the shell
 
 | Path | Content |
 |---|---|
-| `packages/relay` | Hub, tunnel protocol, agent, LLM proxy, catalog, ChatGPT login |
+| `packages/relay` | Hub, tunnel protocol, agent, LLM proxy, MCP proxy, catalog, ChatGPT login |
 | `packages/app/hub.html`, `packages/app/src/hub` | Hub interface (`@opencode/ui` components) |
 | `packages/cli/src/commands/handlers/{hub,agent}` | `opencode hub` and `opencode agent` commands |
 | `install.sh` | Install, status and uninstall (Caddy, hub, client, systemd services) |

@@ -4,7 +4,7 @@ Spécification de l'évolution du hub (`specs/remote-machines.md`) vers plusieur
 d'API chiffrées par utilisateur, et des skills et connecteurs MCP propres à chacun. Elle remplace la section « Out of
 scope » de la spec d'origine pour ce qui concerne les utilisateurs.
 
-Statut : **à implémenter**, par étapes (dernière section). Le hub n'est pas encore en production : aucune
+Statut : **implémentée**, par étapes (dernière section, toutes faites). Le hub n'est pas encore en production : aucune
 compatibilité n'est due avec le mot de passe unique, le protocole 1 du tunnel ni les bases existantes, sauf ce que la
 section « Passage depuis la version actuelle » prévoit.
 
@@ -170,14 +170,14 @@ d'instance `iid` (aléatoire, sans rapport avec le login).
 
 Le format des trames ne change pas. Changements par rapport au protocole 1 :
 
-| Trame         | Changement                                                                                                                                                                                     |
-| ------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| HELLO         | `protocol: 2`                                                                                                                                                                                  |
-| READY         | `{ machine, owner: "user" \| "org" }` ; plus de bloc `llm` (il passe dans INSTANCE)                                                                                                            |
-| OPEN          | gagne `instance: <iid>` : l'agent route le flux vers cette instance, et la démarre si besoin                                                                                                   |
-| 0x15 INSTANCE | hub → agent : `{ iid, token, llm: { baseURL, providers }, mcp: [{ id, name }], skills: { version } }`, envoyée avant le premier OPEN d'une instance et à chaque changement de sa configuration |
-| 0x16 SKILLS   | hub → agent : `{ iid, version, skills: [{ name, files: [{ path, content }] }] }`                                                                                                               |
-| 0x17 DROP     | hub → agent : `{ iid }`, arrêter et supprimer l'instance                                                                                                                                       |
+| Trame         | Changement                                                                                                                                                                                          |
+| ------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| HELLO         | `protocol: 2`                                                                                                                                                                                       |
+| READY         | `{ machine, owner: "user" \| "org" }` ; plus de bloc `llm` (il passe dans INSTANCE)                                                                                                                 |
+| OPEN          | gagne `instance: <iid>` : l'agent route le flux vers cette instance, et la démarre si besoin                                                                                                        |
+| 0x15 INSTANCE | hub → agent : `{ iid, token, llm: { baseURL, providers }, mcp: [{ id, name, url }], skills: { version } }`, envoyée avant le premier OPEN d'une instance et à chaque changement de sa configuration |
+| 0x16 SKILLS   | hub → agent : `{ iid, version, skills: [{ name, files: [{ path, content }] }] }`                                                                                                                    |
+| 0x17 DROP     | hub → agent : `{ iid }`, arrêter et supprimer l'instance                                                                                                                                            |
 
 L'agent ne garde le jeton d'une instance qu'en mémoire et dans la configuration de cette instance. Un agent en
 protocole 1 est refusé (4400), comme aujourd'hui pour un protocole inconnu.
@@ -199,7 +199,7 @@ Même système que les LLM : les secrets ne quittent pas le hub.
 - `ANY /mcp/<id>/<reste>` : jeton d'instance en `Authorization: Bearer` → connecteur **de cet utilisateur** → requête
   relayée vers l'URL du connecteur avec ses en-têtes déchiffrés, flux (HTTP « streamable » et SSE) sans mise en
   tampon. Jeton invalide : 401 ; connecteur inconnu : 404 ; clé verrouillée : 423.
-- Côté instance : `mcp: { "<id>": { type: "remote", url: "<hub>/mcp/<id>", headers: { Authorization: "Bearer <jeton>" }, oauth: false } }`.
+- Côté instance : `mcp: { servers: { "hub-<id>": { type: "remote", url: "<hub>/mcp/<id>", headers: { Authorization: "Bearer <jeton>" }, oauth: false } } }` (voir l'étape 7).
 - Seuls les serveurs MCP **distants** passent par le hub. Un serveur local (`type: "local"`, lancé sur la machine)
   reste configuré sur la machine elle-même.
 
@@ -505,3 +505,72 @@ Chacune est une PR qui fonctionne seule, avec ses tests.
      bouton d'enregistrement devenait inaccessible ; et `w-full` (Tailwind) sur les zones de texte.
 7. **Connecteurs MCP** : connecteurs par utilisateur à secrets chiffrés, relais `/mcp/`, configuration des instances,
    puis OAuth géré par le hub.
+   **Faite** (2026-11-07). Écarts et précisions :
+   - Table `connector` (`user_id`, `id`, `name`, `url`, `auth` `headers` ou `oauth`, `header_names` en clair pour le
+     tableau de bord, `headers` et `oauth` scellés, l'autre à `NULL`, `connected_at`, dates ; clé `(user_id, id)`).
+     `aad` : table `connector`, id de ligne l'id du connecteur. `headers` scelle le JSON `[nom, valeur][]` ; `oauth`
+     scelle le client saisi (`clientID`, `clientSecret`, `scope`) puis, après connexion, les jetons avec le point de
+     jeton, l'émetteur, la ressource et le client (saisi ou enregistré). Seul `hub/connectors.ts` les ouvre.
+     Identifiant : `[a-z0-9]+(-[a-z0-9]+)*`, 48 caractères au plus, tiré du nom s'il n'est pas donné ; 50 connecteurs
+     par utilisateur. En-têtes : 32 au plus, noms au format HTTP, valeurs sans retour à la ligne ni octet nul (8 Kio),
+     noms refusés : ceux de connexion (hop-by-hop, `Host`, `Content-Length`…), de contenu et de session MCP.
+   - Routes : `GET connectors`, `POST connectors` (création ; 409 pour un id pris ou au-delà de 50),
+     `POST connectors/<id>` (modification : en-têtes omis conservés ; nouvelle URL ou nouveau client = jetons OAuth
+     effacés), `DELETE connectors/<id>`, `POST connectors/<id>/oauth/begin`. 423 `{ error, locked: true }` sans `UK`
+     sauf pour la suppression. La réinitialisation supprime les connecteurs ; l'indicateur `waiting` compte aussi les
+     connecteurs.
+   - Configuration : le schéma d'opencode range les serveurs sous `mcp.servers` (pas `mcp.<id>` comme l'écrivait la
+     spec) ; chaque connecteur devient `mcp.servers["hub-<id>"]` (préfixe `hub-`, comme les skills, pour ne jamais
+     remplacer un serveur de la machine ; `OPENCODE_CONFIG_CONTENT` passe après la configuration du projet, un serveur
+     local nommé `hub-<id>` serait donc remplacé : préfixe réservé). Le jeton n'est pas recopié dans le JSON :
+     `Authorization: "Bearer {env:OPENCODE_HUB_LLM_TOKEN}"`, substitué par opencode. `oauth: false` coupe l'OAuth
+     d'opencode. INSTANCE porte `mcp: [{ id, name, url }]` : `url` (`<hub>/mcp/<id>`) est ajoutée pour que l'agent
+     n'ait pas à deviner l'adresse du relais ; un id hors format fait échouer le décodage de la trame.
+   - Relais : 401, 403 (accès perdu, contrôlé à chaque appel), puis 404 avant 423 (même ordre que le relais LLM depuis
+     l'étape 5), 500 secret illisible, **409** pour un connecteur OAuth pas encore connecté ou dont la connexion a
+     expiré sans jeton de renouvellement, 502 pour une destination refusée, une redirection hors du connecteur ou un
+     serveur injoignable. Le corps des requêtes est lu en entier (messages MCP petits, et nécessaire pour renvoyer la
+     requête après un renouvellement sur 401) ; les réponses et le SSE passent en flux. `Set-Cookie` du serveur est
+     retiré. La requête de l'instance porte sa chaîne de requête (opencode ajoute `?codemode=false`), ajoutée à celle
+     de l'URL du connecteur.
+   - Redirections : jamais suivies. Une redirection qui reste sous l'URL du connecteur est renvoyée avec un `Location`
+     réécrit vers `<hub>/mcp/<id>/…` (l'instance la suit à travers le relais) ; toute autre donne 502.
+   - Garde réseau (`hub/egress.ts`), règle retenue : **HTTPS vers une adresse publique** par défaut. Toujours refusés :
+     le nom du hub et tout hôte de machine dessous, le port du hub sur toute adresse locale (boucle, non spécifiée,
+     interfaces), le lien-local (`169.254.0.0/16`, `fe80::/10`) et les adresses de métadonnées hors de ces plages
+     (`100.100.100.200`, `fd00:ec2::254`), non spécifiées, multicast, réservées, de documentation, NAT64/6to4/Teredo,
+     et les URL avec identifiants. Adresses privées (boucle, RFC 1918, CGNAT, `fc00::/7`…) : seulement avec
+     `opencode hub --mcp-private-network` (hub sur un réseau d'entreprise), et alors seulement elles acceptent `http://`.
+     Vérifiée à l'enregistrement et avant **chaque** requête (relais et OAuth), sur toutes les adresses que le nom
+     résout ; la connexion se fait ensuite à l'adresse vérifiée (`Host` et, en HTTPS, SNI et vérification du certificat
+     sur le nom), ce qui ferme la fenêtre de « DNS rebinding ». Avec un mandataire HTTP(S) configuré par
+     l'environnement, c'est lui qui se connecte à l'adresse vérifiée.
+   - OAuth : complet pour le code d'autorisation avec PKCE S256 : défi `WWW-Authenticate` (`resource_metadata`) puis
+     `/.well-known/oauth-protected-resource` (avec puis sans chemin), métadonnées RFC 8414 puis OpenID Connect (règles
+     d'insertion du chemin), `issuer` vérifié, S256 exigé, `resource` (RFC 8707) et `iss` (RFC 9207) vérifiés,
+     enregistrement dynamique (client public, `token_endpoint_auth_method: "none"`) ou `client_id` (et secret, en
+     Basic ou en POST) saisi, rappel `GET /hub/oauth/callback` sur l'hôte du hub, tentative en mémoire 10 minutes,
+     à usage unique, liée à l'utilisateur **et** à l'URL du connecteur (une autre session reçoit la même réponse
+     qu'une tentative expirée), jetons scellés, renouvellement à moins d'une minute de l'expiration ou sur 401, une
+     fois pour les requêtes simultanées, rescellé avec la clé qui a ouvert le connecteur (même raisonnement que
+     ChatGPT). Sans métadonnées de ressource protégée, l'origine du serveur MCP sert de serveur d'autorisation
+     (première révision de la spécification MCP). Pas fait : `client_secret_jwt`/`private_key_jwt`, DPoP, montée en
+     droits sur `403 insufficient_scope`, révocation des jetons à la suppression, réutilisation d'un client
+     enregistré dynamiquement (chaque nouvelle connexion en enregistre un), contrôle exact du chemin de `resource`
+     (l'origine seulement). Une instance qui a reçu 409 avant la connexion garde le serveur en échec jusqu'à sa
+     reconnexion (redémarrage ou `POST /api/experimental/mcp/hub-<id>/connect`) : le hub ne la prévient pas.
+   - Tableau de bord : section « MCP connectors » (liste avec `hub-<id>`, URL, nombre d'en-têtes ou état de connexion,
+     suppression ; ligne « Your keys are locked » comme pour les fournisseurs), fenêtre d'ajout (nom, URL, choix
+     « Headers » / « OAuth sign-in » par le `RadioGroup` existant, paires nom/valeur en champ mot de passe, jamais
+     réaffichées ; client id et secret facultatifs pour OAuth), bouton « Sign in » / « Sign in again » qui envoie le
+     navigateur au serveur d'autorisation ; au retour (`/?connector=<id>`), un message confirme la connexion. Pas de
+     modification depuis le tableau de bord (la route existe). Aucune règle CSS nouvelle : la fenêtre reprend
+     `hub-skill-dialog` (hauteur bornée) et le champ du nom d'en-tête `min-w-0 flex-1` (Tailwind) pour tenir sur la
+     ligne de son bouton.
+   - `opencode hub --mcp-private-network`, `Hub.start({ mcp: { privateNetworks } })`.
+   - Vérifié en réel : hub, serveur MCP du SDK officiel (HTTP « streamable », sessions) exigeant un en-tête secret,
+     connecteur créé par le tableau de bord (Playwright), machine personnelle enrôlée et `agent run` : `GET /api/mcp`
+     de l'instance, à travers le hub, montre `hub-echo` `connected` ; le serveur a reçu `initialize`,
+     `notifications/initialized`, le flux GET et `tools/list` avec l'en-tête secret, le `Mcp-Session-Id` et sans
+     `Authorization` ; `tools/call echo` à travers le relais répond. L'API d'opencode n'expose pas la liste des outils
+     MCP d'une instance : elle est vérifiée côté serveur MCP.

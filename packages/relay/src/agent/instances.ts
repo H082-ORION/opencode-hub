@@ -24,29 +24,53 @@ const START_TIMEOUT = 120_000
 const STOP_TIMEOUT = 10_000
 const decodeReady = Schema.decodeUnknownOption(Schema.fromJsonString(Schema.Struct({ url: Schema.String })))
 
+/** Connectors become remote MCP servers named `hub-<id>`, so they never replace a server configured on the machine. */
+export const MCP_PREFIX = "hub-"
+
 /**
- * The environment that sends every hub provider's calls to `<hub>/llm/<id>` with the instance token as API key. Each
+ * The environment that sends every hub provider's calls to `<hub>/llm/<id>` with the instance token as API key, and
+ * reaches every hub connector as the remote MCP server `hub-<id>` at `<hub>/mcp/<id>` with the same token. Each
  * provider's `env` override replaces its catalog variables (ANTHROPIC_API_KEY, ...), so a key inherited from the
- * shell is never sent to the hub.
+ * shell is never sent to the hub. The MCP servers read the token from the environment too (`{env:...}`), and have
+ * opencode's own OAuth off: the hub holds their credentials.
  */
 export function hubEnv(instance: Instance): Record<string, string> {
   const base = instance.llm.baseURL.replace(/\/+$/, "")
   const providers = instance.llm.providers
-  return {
-    [INSTANCE]: instance.iid,
-    [TOKEN]: instance.token,
+  const connectors = instance.mcp
+  const config = {
     ...(providers.length === 0
       ? {}
       : {
-          [CONFIG]: JSON.stringify({
-            providers: Object.fromEntries(
-              providers.map((provider) => [
-                provider.id,
-                { env: [TOKEN], settings: { baseURL: `${base}/${encodeURIComponent(provider.id)}` } },
+          providers: Object.fromEntries(
+            providers.map((provider) => [
+              provider.id,
+              { env: [TOKEN], settings: { baseURL: `${base}/${encodeURIComponent(provider.id)}` } },
+            ]),
+          ),
+        }),
+    ...(connectors.length === 0
+      ? {}
+      : {
+          mcp: {
+            servers: Object.fromEntries(
+              connectors.map((connector) => [
+                `${MCP_PREFIX}${connector.id}`,
+                {
+                  type: "remote",
+                  url: connector.url,
+                  headers: { Authorization: `Bearer {env:${TOKEN}}` },
+                  oauth: false,
+                },
               ]),
             ),
-          }),
+          },
         }),
+  }
+  return {
+    [INSTANCE]: instance.iid,
+    [TOKEN]: instance.token,
+    ...(Object.keys(config).length === 0 ? {} : { [CONFIG]: JSON.stringify(config) }),
   }
 }
 

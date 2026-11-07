@@ -5,6 +5,7 @@ import { createSignal, Show } from "solid-js"
 import { AccountSection } from "./account"
 import { errorText, hubApi, HubError, type HubSession } from "./api"
 import { copy } from "./copy"
+import { Connectors } from "./connectors"
 import { AllMachines, Machines } from "./machines"
 import { Organizations } from "./orgs"
 import { Providers } from "./providers"
@@ -19,7 +20,8 @@ export function Dashboard(props: { session: HubSession; onSignedOut: () => void 
   }
 
   const [revision, setRevision] = createSignal(0)
-  // Whether the hub holds this user's key: shared by the providers, which need it, and the account, which locks it.
+  // Whether the hub holds this user's key: shared by the providers and connectors, which need it, and the account,
+  // which locks it.
   const [unlocked, setUnlocked] = createSignal(props.session.unlocked)
 
   const signOut = () => hubApi.logout().then(props.onSignedOut, (error: unknown) => fail(copy.error.unknown, error))
@@ -39,6 +41,7 @@ export function Dashboard(props: { session: HubSession; onSignedOut: () => void 
         <div class="hub-content">
           <Machines onSignedOut={props.onSignedOut} fail={fail} onChange={() => setRevision((value) => value + 1)} />
           <Providers fail={fail} unlocked={unlocked()} onLocked={() => setUnlocked(false)} onSignOut={signOut} />
+          <Connectors fail={fail} unlocked={unlocked()} onLocked={() => setUnlocked(false)} onSignOut={signOut} />
           <Skills fail={fail} />
           <AccountSection
             session={props.session}

@@ -35,6 +35,30 @@ test("routes every hub provider to the hub with the instance token", () => {
   })
 })
 
+test("reaches every hub connector as the remote MCP server hub-<id>, also without providers", () => {
+  const connectors = {
+    ...instance,
+    llm: { ...instance.llm, providers: [] },
+    mcp: [{ id: "github", name: "GitHub", url: "https://hub.example.com/mcp/github" }],
+  }
+  const result = RelayAgent.serviceEnv(undefined, connectors)
+  expect(JSON.parse(result.env[RelayAgent.CONFIG])).toEqual({
+    mcp: {
+      servers: {
+        "hub-github": {
+          type: "remote",
+          url: "https://hub.example.com/mcp/github",
+          headers: { Authorization: `Bearer {env:${RelayAgent.TOKEN}}` },
+          oauth: false,
+        },
+      },
+    },
+  })
+  // The token itself stays in its own variable.
+  expect(result.env[RelayAgent.CONFIG]).not.toContain("token")
+  expect(RelayAgent.serviceEnv(result.env, { ...connectors, mcp: [] }).changed).toBe(true)
+})
+
 test("reports no change when the environment already matches", () => {
   const first = RelayAgent.serviceEnv(undefined, instance)
   expect(RelayAgent.serviceEnv(first.env, instance)).toEqual({ env: first.env, changed: false })

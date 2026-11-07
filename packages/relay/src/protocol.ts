@@ -111,7 +111,15 @@ export const Ready = Schema.Struct({
 })
 export type Ready = typeof Ready.Type
 
-export const Connector = Schema.Struct({ id: Schema.String, name: Schema.String })
+/**
+ * A connector id: lowercase words joined by single dashes, 48 characters at most. It becomes the `hub-<id>` server name
+ * in the instance's configuration and a path segment of the relay, so anything else is refused at decoding.
+ */
+export const ConnectorID = Schema.String.check(Schema.isPattern(/^(?=.{1,48}$)[a-z0-9]+(?:-[a-z0-9]+)*$/))
+
+/** One of the user's remote MCP servers, reached through the hub's relay at `url` (`<hub>/mcp/<id>`). */
+export const Connector = Schema.Struct({ id: ConnectorID, name: Schema.String, url: Schema.String })
+export type Connector = typeof Connector.Type
 
 /**
  * One user's instance on this machine and its configuration. `token` (the instance's LLM token) is only present when

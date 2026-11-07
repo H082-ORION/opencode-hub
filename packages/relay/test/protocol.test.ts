@@ -106,7 +106,7 @@ describe("JSON payloads", () => {
       iid: IID,
       token: "secret",
       llm: { baseURL: "https://hub.example.com/llm", providers: [{ id: "openai", name: "OpenAI" }] },
-      mcp: [],
+      mcp: [{ id: "github", name: "GitHub", url: "https://hub.example.com/mcp/github" }],
       skills: { version: "v" },
     }
     const frame = (type: Protocol.Type, value: unknown) => Protocol.decode(Protocol.encodeJson(type, 0, value))!
@@ -117,6 +117,14 @@ describe("JSON payloads", () => {
     // Without a token, the agent keeps the one it holds.
     const { token: _token, ...refresh } = instance
     expect(Protocol.decodeInstance(frame(Protocol.Type.INSTANCE, refresh).payload)).toEqual(refresh)
+    // A connector id becomes a server name and a path segment: anything but lowercase words and dashes is refused.
+    ;["../x", "Upper", "a--b", "x".repeat(49)].forEach((id) =>
+      expect(
+        Protocol.decodeInstance(
+          frame(Protocol.Type.INSTANCE, { ...instance, mcp: [{ id, name: "x", url: "u" }] }).payload,
+        ),
+      ).toBeUndefined(),
+    )
 
     const skills = { iid: IID, version: "v", skills: [{ name: "x", files: [{ path: "SKILL.md", content: "# x" }] }] }
     const skillsFrame = frame(Protocol.Type.SKILLS, skills)
