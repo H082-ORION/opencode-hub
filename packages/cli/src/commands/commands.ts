@@ -566,6 +566,11 @@ const Root = Spec.make(typeof OPENCODE_CLI_NAME === "string" ? OPENCODE_CLI_NAME
               Flag.withDescription("Invite an administrator, e.g. the first account"),
               Flag.withDefault(false),
             ),
+            org: Flag.String("org").pipe(
+              Flag.withSchema(Schema.NonEmptyString),
+              Flag.withDescription("Organization the new account joins, by name (repeat for several)"),
+              Flag.atLeast(0),
+            ),
             data: Flag.String("data").pipe(
               Flag.withDescription("Data directory (default: <global data>/hub)"),
               Flag.optional,

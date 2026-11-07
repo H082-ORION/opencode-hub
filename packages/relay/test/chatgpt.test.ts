@@ -311,7 +311,7 @@ describe("access tokens", () => {
 describe("llm proxy", () => {
   test("injects the owner's ChatGPT access token and compresses the body with zstd", async () => {
     const deps = setup()
-    const machine = deps.store.createMachine({ name: "box", owner: ALICE })
+    const machine = deps.store.createMachine({ name: "box", enrolledBy: ALICE })
     await saveChatGPT(deps.providers, Date.now() + 3_600_000, `http://127.0.0.1:${upstream.port}/v1`)
     const payload = JSON.stringify({ input: "x".repeat(2 * 1024 * 1024) })
     const bearer = await proxyJSON(deps, "/llm/openai/responses?stream=1", {
@@ -334,14 +334,14 @@ describe("llm proxy", () => {
     expect(other.headers["content-encoding"]).toBeUndefined()
 
     // Bob's machine does not see Alice's sign-in.
-    const bobs = deps.store.createMachine({ name: "bob box", owner: BOB })
+    const bobs = deps.store.createMachine({ name: "bob box", enrolledBy: BOB })
     const missing = await proxy(deps, "/llm/openai/models", { headers: { authorization: `Bearer ${bobs.llmToken}` } })
     expect(missing.status).toBe(404)
   })
 
   test("answers 423 when the owner's key is locked, refresh due or not", async () => {
     const deps = setup()
-    const machine = deps.store.createMachine({ name: "box", owner: ALICE })
+    const machine = deps.store.createMachine({ name: "box", enrolledBy: ALICE })
     await saveChatGPT(deps.providers, Date.now() - 1000, `http://127.0.0.1:${upstream.port}/v1`)
     deps.keys.delete(ALICE)
     const response = await proxy(deps, "/llm/openai/models", {
@@ -354,12 +354,12 @@ describe("llm proxy", () => {
 
   test("rejects bad llm tokens, foreign machines and reports refresh failures", async () => {
     const deps = setup()
-    const machine = deps.store.createMachine({ name: "box", owner: ALICE })
+    const machine = deps.store.createMachine({ name: "box", enrolledBy: ALICE })
     await saveChatGPT(deps.providers, Date.now() - 1000, `http://127.0.0.1:${upstream.port}/v1`, "bad-refresh")
     const unauthorized = await proxy(deps, "/llm/openai/models", { headers: { authorization: "Bearer nope" } })
     expect(unauthorized.status).toBe(401)
     // Two machines' tokens in one request could pick either owner's keys.
-    const bobs = deps.store.createMachine({ name: "bob box", owner: BOB })
+    const bobs = deps.store.createMachine({ name: "bob box", enrolledBy: BOB })
     const mixed = await proxy(deps, "/llm/openai/models", {
       headers: { authorization: `Bearer ${machine.llmToken}`, "x-api-key": bobs.llmToken },
     })

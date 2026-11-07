@@ -18,6 +18,9 @@ const CODE_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"
 /** Server state of an OPAQUE sign-in between `start` and `finish`; `user` is absent for an unknown login. */
 export type Attempt = { kind: "login" | "password"; user?: string; login: string; state: string }
 
+/** Whom an enrollment code was issued by, and the organization its machine will belong to, if any. */
+export type Code = { user: string; org?: string }
+
 /** A registration between `register/start` and `register/finish`, keyed by the invitation's code hash. */
 export type Registration = { login: string; user: string }
 
@@ -30,7 +33,7 @@ export function create() {
   const keys = new Map<string, string>()
   const attempts = new Map<string, Attempt & { expires: number }>()
   const registrations = new Map<string, Registration & { expires: number }>()
-  const codes = new Map<string, { user: string; expires: number }>()
+  const codes = new Map<string, Code & { expires: number }>()
   const tickets = new Map<string, { session: string; machine: string; expires: number }>()
   const failures = new Map<string, { count: number; until: number }>()
   const accounts = new Map<string, { count: number; until: number; last: number }>()
@@ -93,19 +96,19 @@ export function create() {
     },
     finishRegistration: (key: string) => registrations.delete(key),
 
-    /** Issues an enrollment code for `user`, the account its machine will belong to. */
-    createCode(user: string) {
+    /** Issues an enrollment code by `user`, for a machine of their own or of the organization `org`. */
+    createCode(user: string, org?: string) {
       prune(codes, (entry) => entry.expires)
       const bytes = crypto.getRandomValues(new Uint8Array(8))
       const chars = Array.from(bytes, (byte) => CODE_ALPHABET[byte % CODE_ALPHABET.length]).join("")
       const code = `${chars.slice(0, 4)}-${chars.slice(4)}`
       const expiresAt = Date.now() + CODE_TTL
-      codes.set(code, { user, expires: expiresAt })
+      codes.set(code, { user, org, expires: expiresAt })
       return { code, expiresAt }
     },
     /**
-     * Consumes a code once and returns the user it was issued for; accepts it case-insensitively and with or without
-     * the dash. The caller still checks that the user is active.
+     * Consumes a code once and returns whom it was issued by and for; accepts it case-insensitively and with or
+     * without the dash. The caller still checks that the user is active and, for an organization, still a member.
      */
     consumeCode(input: string) {
       const compact = input.toUpperCase().replace(/[^A-Z0-9]/g, "")
@@ -113,7 +116,7 @@ export function create() {
       const entry = codes.get(code)
       codes.delete(code)
       if (!entry || entry.expires <= Date.now()) return undefined
-      return entry.user
+      return { user: entry.user, org: entry.org } satisfies Code
     },
 
     createTicket(session: string, machine: string) {

@@ -8,6 +8,7 @@ import { Catalog } from "./catalog.js"
 import { ChatGPT } from "./chatgpt.js"
 import { Html } from "./html.js"
 import { Llm } from "./llm.js"
+import { Orgs } from "./orgs.js"
 import { Providers } from "./providers.js"
 import { Store } from "./store.js"
 import { Tunnel } from "./tunnel.js"
@@ -53,6 +54,11 @@ const PROVIDER_ID = /^[a-zA-Z0-9][a-zA-Z0-9._-]{0,63}$/
 const PROVIDER_ROUTES = new Set(["providers", "providers/chatgpt/begin", "providers/chatgpt/complete"])
 const EnrollRequest = Schema.fromJsonString(Schema.Struct({ code: Schema.String, name: Schema.String }))
 const decodeEnrollRequest = Schema.decodeUnknownOption(EnrollRequest)
+const decodeCodeRequest = Schema.decodeUnknownOption(
+  Schema.fromJsonString(Schema.Struct({ org: Schema.optional(Schema.String) })),
+)
+/** The same answer whether a code is unknown, expired, or its author may no longer enroll what it was issued for. */
+const INVALID_CODE = "invalid or expired enrollment code"
 const decodeProvider = Schema.decodeUnknownOption(
   Schema.fromJsonString(
     Schema.Struct({
@@ -142,6 +148,17 @@ export async function start(options: Options) {
     },
     // A reset deletes the user's providers: their machines stop listing them.
     reset: (user) => pushConfig(user),
+    // A disabled enroller's organization machines lose its providers; enabled again, they get them back.
+    updated: (user) => pushConfig(user),
+  })
+  const orgs = Orgs.create({
+    store,
+    changed(users) {
+      // A removed member's open streams to the organization's machines close now, not at their next request.
+      recheckStreams()
+      users.forEach(pushConfig)
+      notifyMachines()
+    },
   })
 
   return {
@@ -151,8 +168,11 @@ export async function start(options: Options) {
     userCount: () => store.userCount(),
     /** Issues an invitation and returns its one-time link, as `opencode hub invite` does. */
     invite: (role: Store.Role) => accounts.invite(role),
-    /** Issues a one-time enrollment code for a user's new machine, as the dashboard's "Add machine" does. */
-    createEnrollmentCode: (user: string) => auth.createCode(user),
+    /**
+     * Issues a one-time enrollment code for a user's new machine, or for one of an organization they belong to, as
+     * the dashboard's "Add machine" does.
+     */
+    createEnrollmentCode: (user: string, org?: string) => auth.createCode(user, org),
     async stop() {
       pings.forEach((timer) => clearInterval(timer))
       listeners.forEach((listener) => listener.close())
@@ -209,6 +229,8 @@ export async function start(options: Options) {
     const current = accounts.current(request)
     if (!current) return json(401, { error: "Sign in to the hub first." })
     const user = current.user
+    const organizations = await orgs.handle(request, route, current)
+    if (organizations) return organizations
     if (route === "machines" && method === "GET") return json(200, machineList(user.id))
     if (route === "events" && method === "GET") return events(current)
     if (route === "admin/machines" && method === "GET") {
@@ -216,17 +238,24 @@ export async function start(options: Options) {
       return json(200, allMachines())
     }
     if (route === "machines/code" && method === "POST") {
-      const code = auth.createCode(user.id)
+      const body = Option.getOrUndefined(decodeCodeRequest(await request.text()))
+      if (!body) return json(400, { error: "Expected { org? }." })
+      // Only a member enrolls a machine for an organization, administrators included; checked again at enrollment.
+      if (body.org !== undefined && !(store.org(body.org) && store.isMember(body.org, user.id)))
+        return json(403, { error: "You are not a member of this organization." })
+      const code = auth.createCode(user.id, body.org)
       // Without --code, `agent join` asks for the code without echo, so it stays out of the shell history.
       return json(200, { ...code, command: `opencode agent join ${origin}` })
     }
     const machine = /^machines\/([^/]+)$/.exec(route)
     if (machine && method === "DELETE") {
       const id = decodeURIComponent(machine[1])
-      // Owners revoke their own machines and administrators any; for anyone else the machine does not exist.
+      // A machine the user may not open does not exist for them, unless they administer the hub.
       const target = store.machine(id)
-      const allowed = target && (user.role === "admin" || canOpen(user, target))
-      if (!allowed || !store.deleteMachine(id)) return json(404, { error: "Unknown machine." })
+      if (!target || (user.role !== "admin" && !canOpen(user, target))) return json(404, { error: "Unknown machine." })
+      if (!canRevoke(user, target))
+        return json(403, { error: "Only the member who enrolled this machine or an administrator can revoke it." })
+      if (!store.deleteMachine(id)) return json(404, { error: "Unknown machine." })
       tunnels.get(id)?.ws.close(4403, "machine revoked")
       tunnels.delete(id)
       notifyMachines()
@@ -330,26 +359,53 @@ export async function start(options: Options) {
     listeners.forEach((listener) => listener.send(machinesEvent(listener.user)))
   }
 
-  /** The machines a user may open, with their handoff links. */
-  function machineList(user: string) {
-    return store.machinesOf(user).map((machine) => ({
+  /**
+   * The machines a user may open, with their handoff links: personal ones first, then each organization's. `org` is
+   * null for a personal machine.
+   */
+  function machineList(id: string) {
+    const user = store.user(id)
+    if (!user) return []
+    return store.machinesFor(id).map((machine) => ({
       id: machine.id,
       name: machine.name,
+      org: machine.owner_org_id === null ? null : { id: machine.owner_org_id, name: machine.org_name ?? "" },
       online: tunnels.has(machine.id),
       lastSeenAt: machine.last_seen_at,
       url: `/hub/handoff?next=${encodeURIComponent(`${machineOrigin(machine.id)}/`)}`,
+      canRevoke: canRevoke(user, machine),
     }))
   }
 
-  /** Every machine with its owner, for administrators: no handoff link, since they cannot open other users' machines. */
+  /**
+   * Every machine with its owner (a login, or an organization's name in `org`), for administrators: no handoff link,
+   * since they cannot open other users' machines.
+   */
   function allMachines() {
     return store.machines().map((machine) => ({
       id: machine.id,
       name: machine.name,
-      owner: machine.owner_login,
+      owner: machine.owner_org_id === null ? machine.owner_login : null,
+      org: machine.owner_org_id === null ? null : machine.org_name,
       online: tunnels.has(machine.id),
       lastSeenAt: machine.last_seen_at,
     }))
+  }
+
+  /**
+   * Whether a user may open a machine: a personal machine only its owner, an organization machine every current
+   * member. Anything else, an ownerless machine or one with both owners, opens for nobody.
+   */
+  function canOpen(user: Store.User, machine: Store.Machine) {
+    if (machine.owner_org_id === null) return machine.owner_user_id === user.id
+    return machine.owner_user_id === null && store.isMember(machine.owner_org_id, user.id)
+  }
+
+  /** Administrators revoke any machine; owners their own, and members the organization machines they enrolled. */
+  function canRevoke(user: Store.User, machine: Store.Machine) {
+    if (user.role === "admin") return true
+    if (machine.owner_org_id === null) return canOpen(user, machine)
+    return canOpen(user, machine) && machine.enrolled_by === user.id
   }
 
   /**
@@ -469,15 +525,18 @@ export async function start(options: Options) {
     const body = Option.getOrUndefined(decodeEnrollRequest(await request.text()))
     const name = body?.name.trim().slice(0, 100)
     if (!body || !name) return Response.json({ error: "expected { code, name }" }, { status: 400 })
-    const author = auth.consumeCode(body.code)
-    if (!author) {
+    const code = auth.consumeCode(body.code)
+    if (!code) {
       auth.fail(client)
-      return Response.json({ error: "invalid or expired enrollment code" }, { status: 403 })
+      return Response.json({ error: INVALID_CODE }, { status: 403 })
     }
-    // The machine belongs to whoever created the code, only while that account is still active.
-    const owner = accounts.activeUser(author)
-    if (!owner) return Response.json({ error: "invalid or expired enrollment code" }, { status: 403 })
-    const enrolled = store.createMachine({ name, owner: owner.id })
+    // The machine belongs to whoever created the code, only while that account is still active, or to the
+    // organization the code names, only while its author is still a member of it.
+    const author = accounts.activeUser(code.user)
+    if (!author) return Response.json({ error: INVALID_CODE }, { status: 403 })
+    if (code.org !== undefined && !(store.org(code.org) && store.isMember(code.org, author.id)))
+      return Response.json({ error: INVALID_CODE }, { status: 403 })
+    const enrolled = store.createMachine({ name, enrolledBy: author.id, org: code.org })
     notifyMachines()
     return Response.json({ ...enrolled, url: origin })
   }
@@ -520,22 +579,33 @@ export async function start(options: Options) {
     )
   }
 
-  /** The providers a machine may call: its owner's. An organization or ownerless machine gets none (step 4). */
+  /**
+   * The providers a machine may call: its key holder's (see `Llm.keyHolder`). An organization machine whose enroller
+   * left or was disabled, and an ownerless machine, get none.
+   */
   function llmConfig(machine: Store.Machine): Protocol.LlmConfig {
-    const owner = machine.owner_org_id === null ? machine.owner_user_id : null
+    const holder = Llm.keyHolder(machine, { store, activeUser: accounts.activeUser })
     return {
       baseURL: `${origin}/llm`,
-      providers: owner ? providers.summaries(owner).map((provider) => ({ id: provider.id, name: provider.name })) : [],
+      providers:
+        holder.kind === "user"
+          ? providers.summaries(holder.user).map((provider) => ({ id: provider.id, name: provider.name }))
+          : [],
     }
   }
 
-  /** Sends the new provider list to the connected machines of one user, and to nobody else. */
+  /**
+   * Sends the current provider list to the connected machines whose keys are, or were, a user's: their personal
+   * machines and the organization machines they enrolled. Nobody else's machines hear about it.
+   */
   function pushConfig(user: string) {
     tunnels.forEach((tunnel) => {
       // The stored row, not the one captured at HELLO: its owner may have been set since (adoption).
       const machine = store.machine(tunnel.machine.id)
-      if (!machine || machine.owner_org_id !== null || machine.owner_user_id !== user) return
-      tunnel.send(Protocol.encodeJson(Protocol.Type.CONFIG, 0, llmConfig(machine)))
+      if (!machine) return
+      const personal = machine.owner_org_id === null && machine.owner_user_id === user
+      const enrolled = machine.owner_org_id !== null && machine.enrolled_by === user
+      if (personal || enrolled) tunnel.send(Protocol.encodeJson(Protocol.Type.CONFIG, 0, llmConfig(machine)))
     })
   }
 
@@ -556,25 +626,24 @@ export async function start(options: Options) {
 
 /**
  * Writes an invitation straight into the hub's database, for the first administrator or a locked-out hub, and
- * returns its one-time link on the URL the hub last started with.
+ * returns its one-time link on the URL the hub last started with. `orgs` names organizations, case-insensitively, for
+ * the new account to join; an unknown one throws and nothing is written.
  */
-export function invite(input: { data: string; role: Store.Role }) {
+export function invite(input: { data: string; role: Store.Role; orgs?: readonly string[] }) {
   const store = Store.open(input.data)
   const url = store.setting(URL_KEY) ?? DEFAULT_URL
-  const invitation = store.createInvitation({ role: input.role })
+  const orgs = (input.orgs ?? []).map((name) => ({ name, org: store.orgByName(Store.orgName(name) ?? "") }))
+  const unknown = orgs.find((entry) => !entry.org)
+  if (unknown) {
+    store.close()
+    throw new Error(`unknown organization: ${unknown.name}`)
+  }
+  const invitation = store.createInvitation({ role: input.role, orgs: orgs.flatMap((entry) => entry.org?.id ?? []) })
   store.close()
   return {
     url: `${url}/register?invite=${encodeURIComponent(invitation.code)}`,
     expiresAt: invitation.expiresAt,
   }
-}
-
-/**
- * Whether a user may open a machine: in this step, only a personal machine of their own. Organization machines
- * (step 4) and ownerless ones open for nobody.
- */
-function canOpen(user: Store.User, machine: Store.Machine) {
-  return machine.owner_org_id === null && machine.owner_user_id === user.id
 }
 
 /** Behind a local reverse proxy every peer is loopback, so the forwarded client address is used instead. */

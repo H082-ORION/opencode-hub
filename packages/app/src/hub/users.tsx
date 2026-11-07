@@ -12,7 +12,15 @@ import { showToast } from "@opencode/ui/toast"
 import { createSignal, For, Match, onMount, Show, Switch } from "solid-js"
 import { createStore, reconcile } from "solid-js/store"
 import { CommandLine } from "./add-machine"
-import { errorText, hubApi, HubError, type HubInvitation, type HubUser, type IssuedInvitation } from "./api"
+import {
+  errorText,
+  hubApi,
+  HubError,
+  type HubInvitation,
+  type HubMembership,
+  type HubUser,
+  type IssuedInvitation,
+} from "./api"
 import { copy } from "./copy"
 import type { Fail } from "./dashboard"
 
@@ -219,6 +227,12 @@ export function Users(props: { fail: Fail }) {
                         </span>
                         <span class="hub-row-meta">
                           <span>{copy.users.expires(date.format(invitation.expiresAt))}</span>
+                          <Show when={invitation.orgs.length > 0}>
+                            <span aria-hidden="true">·</span>
+                            <span>
+                              <bdi dir="auto">{copy.users.joins(invitation.orgs)}</bdi>
+                            </span>
+                          </Show>
                           <Show when={invitation.createdBy}>
                             {(login) => (
                               <>
@@ -253,13 +267,38 @@ export function Users(props: { fail: Fail }) {
 function InviteDialog(props: { onIssued: () => void; fail: Fail }) {
   const dialog = useDialog()
 
-  const [form, setForm] = createStore<{ admin: boolean; days: string; busy: boolean; error?: string }>({
+  const [form, setForm] = createStore<{
+    admin: boolean
+    days: string
+    busy: boolean
+    error?: string
+    /** Every organization, to tick the ones the new account joins; empty until loaded or when there are none. */
+    orgs: HubMembership[]
+    picked: string[]
+  }>({
     admin: false,
     days: String(DEFAULT_DAYS),
     busy: false,
+    orgs: [],
+    picked: [],
   })
 
   const [issued, setIssued] = createSignal<IssuedInvitation>()
+
+  // Without the list the invitation simply joins no organization.
+  onMount(() =>
+    hubApi.orgs().then(
+      (orgs) =>
+        setForm(
+          "orgs",
+          orgs.map((org) => ({ id: org.id, name: org.name })),
+        ),
+      (error: HubError) => setForm({ error: errorText(error) }),
+    ),
+  )
+
+  const pick = (id: string, picked: boolean) =>
+    setForm("picked", (list) => (picked ? [...list, id] : list.filter((entry) => entry !== id)))
 
   const days = () => Number(form.days)
   const valid = () => Number.isInteger(days()) && days() >= 1 && days() <= MAX_DAYS
@@ -269,7 +308,7 @@ function InviteDialog(props: { onIssued: () => void; fail: Fail }) {
 
     if (form.busy || !valid()) return
     setForm({ busy: true, error: undefined })
-    hubApi.invite({ role: form.admin ? "admin" : "user", days: days() }).then(
+    hubApi.invite({ role: form.admin ? "admin" : "user", days: days(), orgs: form.picked }).then(
       (invitation) => {
         setIssued(invitation)
         props.onIssued()
@@ -306,6 +345,26 @@ function InviteDialog(props: { onIssued: () => void; fail: Fail }) {
                 >
                   {copy.invite.admin}
                 </Checkbox>
+                <Show when={form.orgs.length > 0}>
+                  <div class="hub-field">
+                    <span class="hub-field-label">{copy.invite.orgs}</span>
+                    <div class="hub-stack-tight">
+                      <For each={form.orgs}>
+                        {(org) => (
+                          <Checkbox
+                            appearance="compact"
+                            checked={form.picked.includes(org.id)}
+                            disabled={form.busy}
+                            onChange={(picked: boolean) => pick(org.id, picked)}
+                          >
+                            {org.name}
+                          </Checkbox>
+                        )}
+                      </For>
+                    </div>
+                    <p class="hub-hint">{copy.invite.orgsHint}</p>
+                  </div>
+                </Show>
                 <div class="hub-field">
                   <label for="hub-invite-days">{copy.invite.days}</label>
                   <TextInput

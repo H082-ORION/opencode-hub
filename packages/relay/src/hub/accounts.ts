@@ -57,7 +57,13 @@ const decodePasswordFinish = Schema.decodeUnknownOption(
   ),
 )
 const decodeInvitation = Schema.decodeUnknownOption(
-  Schema.fromJsonString(Schema.Struct({ role: ROLE, days: Schema.optional(Schema.Number) })),
+  Schema.fromJsonString(
+    Schema.Struct({
+      role: ROLE,
+      days: Schema.optional(Schema.Number),
+      orgs: Schema.optional(Schema.Array(Schema.String)),
+    }),
+  ),
 )
 const decodeReset = Schema.decodeUnknownOption(
   Schema.fromJsonString(Schema.Struct({ days: Schema.optional(Schema.Number) })),
@@ -89,6 +95,8 @@ export function create(input: {
   closed: (sessions: string[]) => void
   /** Called after an administrator reset a user, whose providers are gone with their key. */
   reset: (user: string) => void
+  /** Called after an administrator disabled or enabled a user, whose machines' providers follow. */
+  updated: (user: string) => void
 }) {
   const store = input.store
   const auth = input.auth
@@ -351,7 +359,8 @@ export function create(input: {
         })),
       )
     }
-    if (route === "invitations" && method === "GET")
+    if (route === "invitations" && method === "GET") {
+      const orgs = store.invitationOrgs()
       return json(
         200,
         store.invitations().map((invitation) => ({
@@ -361,14 +370,18 @@ export function create(input: {
           expiresAt: invitation.expires_at,
           createdBy: invitation.created_by_login,
           reset: invitation.user_login,
+          orgs: orgs.get(invitation.id) ?? [],
         })),
       )
+    }
     if (route === "invitations" && method === "POST") {
       const body = Option.getOrUndefined(decodeInvitation(await request.text()))
-      if (!body) return json(400, { error: "Expected { role, days? }." })
+      if (!body) return json(400, { error: "Expected { role, days?, orgs? }." })
+      const orgs = body.orgs ?? []
+      if (orgs.some((org) => !store.org(org))) return json(400, { error: "Unknown organization." })
       return json(
         200,
-        withURL(store.createInvitation({ role: body.role, days: body.days, createdBy: current.user.id })),
+        withURL(store.createInvitation({ role: body.role, days: body.days, createdBy: current.user.id, orgs })),
       )
     }
     const invitation = /^invitations\/([^/]+)$/.exec(route)
@@ -394,6 +407,7 @@ export function create(input: {
     if (result === "unknown") return json(404, { error: "Unknown user." })
     if (result === "last-admin") return json(409, { error: "The hub needs at least one active administrator." })
     if (action[2] === "disable") signOut(id)
+    if (action[2] !== "role") input.updated(id)
     return json(200, {})
   }
 

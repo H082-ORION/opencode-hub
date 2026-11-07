@@ -1,14 +1,40 @@
 import { copy } from "./copy"
 
-export type HubMachine = { id: string; name: string; online: boolean; lastSeenAt: number | null; url: string }
+export type HubMachine = {
+  id: string
+  name: string
+  /** The organization that owns the machine; null for one of the user's own. */
+  org: { id: string; name: string } | null
+  online: boolean
+  lastSeenAt: number | null
+  url: string
+  /** Whether this user may revoke it: their own, an organization machine they enrolled, or any for administrators. */
+  canRevoke: boolean
+}
 
-/** A machine as administrators list it: with its owner's login (null before it has one), and no link to open it. */
+/**
+ * A machine as administrators list it: with its owner's login, or its organization's name in `org` (both null before
+ * it has an owner), and no link to open it.
+ */
 export type HubAdminMachine = {
   id: string
   name: string
   owner: string | null
+  org: string | null
   online: boolean
   lastSeenAt: number | null
+}
+
+/** An organization the user belongs to. */
+export type HubMembership = { id: string; name: string }
+
+/** An organization as administrators manage it. */
+export type HubOrg = {
+  id: string
+  name: string
+  createdAt: number
+  machines: number
+  members: { id: string; login: string }[]
 }
 
 export type HubProvider = { id: string; name: string; baseURL: string; auth: "key" | "chatgpt" }
@@ -49,6 +75,8 @@ export type HubInvitation = {
   createdBy: string | null
   /** The login a reset invitation re-registers. */
   reset: string | null
+  /** The names of the organizations the new account joins. */
+  orgs: string[]
 }
 
 /** A newly issued invitation; its link is shown once. */
@@ -103,7 +131,7 @@ export const hubApi = {
   invitationFor: (invite: string) => post<{ role: HubRole; login: string | null }>("register/invite", { invite }),
   users: () => request<HubUser[]>("users"),
   invitations: () => request<HubInvitation[]>("invitations"),
-  invite: (body: { role: HubRole; days: number }) => post<IssuedInvitation>("invitations", body),
+  invite: (body: { role: HubRole; days: number; orgs: string[] }) => post<IssuedInvitation>("invitations", body),
   revokeInvitation: (id: string) => request<void>(`invitations/${encodeURIComponent(id)}`, { method: "DELETE" }),
   disable: (id: string) => post<object>(`users/${encodeURIComponent(id)}/disable`, {}),
   enable: (id: string) => post<object>(`users/${encodeURIComponent(id)}/enable`, {}),
@@ -111,7 +139,16 @@ export const hubApi = {
   reset: (id: string) => post<IssuedInvitation>(`users/${encodeURIComponent(id)}/reset`, {}),
   machines: () => request<HubMachine[]>("machines"),
   allMachines: () => request<HubAdminMachine[]>("admin/machines"),
-  createCode: () => request<EnrollmentCode>("machines/code", { method: "POST" }),
+  /** A code for a machine of the user's own, or of the organization `org` they belong to. */
+  createCode: (org?: string) => post<EnrollmentCode>("machines/code", org ? { org } : {}),
+  memberships: () => request<HubMembership[]>("memberships"),
+  orgs: () => request<HubOrg[]>("orgs"),
+  createOrg: (name: string) => post<{ id: string; name: string }>("orgs", { name }),
+  renameOrg: (id: string, name: string) => post<object>(`orgs/${encodeURIComponent(id)}/rename`, { name }),
+  deleteOrg: (id: string) => request<void>(`orgs/${encodeURIComponent(id)}`, { method: "DELETE" }),
+  addMember: (org: string, user: string) => post<object>(`orgs/${encodeURIComponent(org)}/members`, { user }),
+  removeMember: (org: string, user: string) =>
+    request<void>(`orgs/${encodeURIComponent(org)}/members/${encodeURIComponent(user)}`, { method: "DELETE" }),
   revoke: (id: string) => request<void>(`machines/${encodeURIComponent(id)}`, { method: "DELETE" }),
   providers: () => request<HubProvider[]>("providers"),
   presets: () => request<HubPreset[]>("presets"),

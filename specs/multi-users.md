@@ -362,6 +362,40 @@ Chacune est une PR qui fonctionne seule, avec ses tests.
 4. **Organisations** : tables, administration, enrôlement pour une organisation, accès des membres. Tant que l'étape 5
    n'est pas faite, les membres partagent l'instance unique de la machine, qui utilise les clés d'API de celui qui
    l'a enrôlée.
+   **Faite** (2026-11-07). Écarts et précisions :
+   - Tables `org` (nom unique sans distinction de casse, normalisé NFKC, espaces réduits, 1 à 64 caractères) et
+     `membership`. Les organisations d'une invitation sont dans une table de liaison `invitation_org`, pas dans une
+     colonne : supprimer une organisation la retire des invitations en cours, et le compte créé ne rejoint que celles
+     qui existent encore, dans la transaction qui le crée.
+   - Routes (administrateurs, 403 pour tout autre utilisateur, même membre) : `GET|POST orgs`,
+     `POST orgs/<id>/rename`, `DELETE orgs/<id>` (409 tant qu'elle a des machines), `POST orgs/<id>/members { user }`,
+     `DELETE orgs/<id>/members/<user>`. Pour tous : `GET memberships` (ses organisations, pour « Add machine »).
+     `invitations` accepte `orgs` (ids ; une organisation inconnue vaut 400) et la liste les rend par leur nom.
+   - `opencode hub invite --org <nom>` (répétable) : noms sans distinction de casse ; un nom inconnu fait échouer la
+     commande sans rien écrire.
+   - Code d'enrôlement `machines/code { org? }` : un non-membre (administrateur compris) reçoit 403 à la création ;
+     à l'enrôlement, auteur désactivé ou plus membre (ou organisation supprimée) : 403 avec le même message qu'un code
+     invalide, comme à l'étape 2.
+   - Accès : `canOpen` vérifie l'appartenance à chaque requête (liste, SSE, hôte, WebSocket, tickets) ; une machine
+     d'organisation qui aurait aussi `owner_user_id` ne s'ouvre pour personne. Le retrait d'un membre réutilise la
+     coupure des flux de l'étape 2 (`recheckStreams`) et pousse aussitôt la liste à jour aux tableaux de bord. Les
+     instances ne sont pas encore arrêtées (étape 5) : la machine garde l'instance unique, partagée.
+   - Relais LLM d'une machine d'organisation : clés de `enrolled_by` tant qu'il est actif (ni désactivé, ni
+     réinitialisé) et membre ; sinon 403 « The member who enrolled this organization machine is no longer an active
+     member of it… ». Différence voulue avec une machine personnelle, dont le propriétaire désactivé donne 423 : ici
+     le droit aux clés est perdu, pas seulement verrouillé. Clé absente de la mémoire : 423 comme avant.
+   - READY/CONFIG : fournisseurs de `enrolled_by` (liste vide quand il n'y a plus droit), poussés quand ses
+     fournisseurs changent, quand il est retiré ou réajouté, désactivé ou réactivé.
+   - Révocation : l'auteur de l'enrôlement tant qu'il est membre (colonne « Membre » de la table des droits), ou un
+     administrateur. Un autre membre reçoit 403 (il voit la machine), un non-membre 404. La liste porte `canRevoke`
+     pour n'afficher l'action qu'à ceux qui l'ont.
+   - Indicateur `waiting` des administrateurs : compte aussi les machines d'organisation enrôlées par l'utilisateur
+     tant qu'il en est membre.
+   - Tableau de bord : « My machines » puis une section par organisation (par nom) ; « Add machine » propose « For
+     me » ou « For <organisation> » quand l'utilisateur est membre d'au moins une organisation, sinon crée le code
+     aussitôt comme avant ; section d'administration « Organizations » (créer, renommer, supprimer, fenêtre
+     « Members… » pour ajouter ou retirer) ; l'invitation coche des organisations, et les invitations en cours
+     affichent « Joins … ». « All machines » indique « Organization <nom> ».
 5. **Instances par utilisateur** : protocole 2 du tunnel, instances à la demande dans l'agent, jeton par instance,
    relais LLM par instance, suppression des instances au retrait d'un membre.
 6. **Skills** : skills personnels et d'organisation, héritage, distribution SKILLS, rechargement de l'instance.

@@ -6,7 +6,7 @@ import { IconButton } from "@opencode/ui/icon-button"
 import { Loader } from "@opencode/ui/loader"
 import { Menu } from "@opencode/ui/menu"
 import { showToast } from "@opencode/ui/toast"
-import { createEffect, createSignal, For, Match, on, onCleanup, Show, Switch, untrack } from "solid-js"
+import { createEffect, createMemo, createSignal, For, Match, on, onCleanup, Show, Switch, untrack } from "solid-js"
 import { createStore, reconcile } from "solid-js/store"
 import { AddMachineDialog } from "./add-machine"
 import { errorText, hubApi, HubError, type HubAdminMachine, type HubMachine } from "./api"
@@ -91,100 +91,141 @@ export function Machines(props: { onSignedOut: () => void; fail: Fail; onChange?
   const add = () => void dialog.show(() => <AddMachineDialog fail={props.fail} />)
   const revoke = (machine: HubMachine) => void dialog.show(() => <RevokeDialog machine={machine} fail={props.fail} />)
 
+  const personal = createMemo(() => machines.list.filter((machine) => machine.org === null))
+
+  /** The organizations' machines, one group per organization, in the hub's order (by organization name). */
+  const groups = createMemo(() =>
+    Array.from(
+      Map.groupBy(
+        machines.list.flatMap((machine) => (machine.org ? [{ org: machine.org, machine }] : [])),
+        (entry) => entry.org.id,
+      ).values(),
+      (entries) => ({ org: entries[0]!.org, machines: entries.map((entry) => entry.machine) }),
+    ),
+  )
+
   return (
-    <section class="hub-section" aria-labelledby="hub-machines-title">
-      <div class="hub-section-header">
-        <div class="hub-section-heading">
-          <h2 id="hub-machines-title" class="hub-section-title">
-            {copy.machines.title}
-            <Show when={machines.loaded && feedReconnecting(feed())}>
-              <span class="hub-section-status" role="status">
-                <Loader class="size-3" />
-                {copy.machines.reconnecting}
-              </span>
-            </Show>
-          </h2>
-          <p class="hub-section-description">{copy.machines.description}</p>
+    <>
+      <section class="hub-section" aria-labelledby="hub-machines-title">
+        <div class="hub-section-header">
+          <div class="hub-section-heading">
+            <h2 id="hub-machines-title" class="hub-section-title">
+              {copy.machines.title}
+              <Show when={machines.loaded && feedReconnecting(feed())}>
+                <span class="hub-section-status" role="status">
+                  <Loader class="size-3" />
+                  {copy.machines.reconnecting}
+                </span>
+              </Show>
+            </h2>
+            <p class="hub-section-description">{copy.machines.description}</p>
+          </div>
+          <Show when={personal().length > 0}>
+            <Button variant="neutral" size="small" icon="plus" onClick={add}>
+              {copy.machines.add}
+            </Button>
+          </Show>
         </div>
-        <Show when={machines.list.length > 0}>
-          <Button variant="neutral" size="small" icon="plus" onClick={add}>
-            {copy.machines.add}
-          </Button>
-        </Show>
-      </div>
-      <div class="hub-list">
-        <Show
-          when={machines.loaded}
-          fallback={
-            <div class="hub-list-placeholder">
-              <Loader class="size-4 text-v2-icon-icon-muted" />
-            </div>
-          }
-        >
+        <div class="hub-list">
           <Show
-            when={machines.list.length > 0}
+            when={machines.loaded}
             fallback={
-              <div class="hub-empty">
-                <Icon name="monitor" class="text-v2-icon-icon-muted" />
-                <div class="hub-empty-title">{copy.machines.empty}</div>
-                <p class="hub-empty-description">{copy.machines.emptyDescription}</p>
-                <Button variant="contrast" size="normal" icon="plus" onClick={add}>
-                  {copy.machines.add}
-                </Button>
+              <div class="hub-list-placeholder">
+                <Loader class="size-4 text-v2-icon-icon-muted" />
               </div>
             }
           >
-            <For each={machines.list}>
-              {(machine) => (
-                <div class="hub-row">
-                  <div class="hub-row-lead">
-                    <span
-                      class="hub-status"
-                      data-online={machine.online ? "" : undefined}
-                      role="img"
-                      aria-label={machine.online ? copy.machines.online : copy.machines.offline}
-                    />
-                    <div class="hub-row-copy">
-                      <span class="hub-row-name">
-                        <bdi dir="auto">{machine.name}</bdi>
-                      </span>
-                      <span class="hub-row-meta">
-                        <code dir="ltr">{machine.id}</code>
-                        <span aria-hidden="true">·</span>
-                        <span>{lastSeen(machine, now())}</span>
-                      </span>
-                    </div>
-                  </div>
-                  <div class="hub-row-actions">
-                    <Button
-                      variant={machine.online ? "contrast" : "neutral"}
-                      size="small"
-                      onClick={() => window.open(machine.url, "_blank", "noopener")}
-                    >
-                      {copy.machines.open}
-                    </Button>
-                    <Menu gutter={6} modal={false} placement="bottom-end">
-                      <Menu.Trigger
-                        as={IconButton}
-                        variant="ghost-muted"
-                        size="small"
-                        icon={<Icon name="outline-dots" />}
-                        aria-label={copy.more}
-                      />
-                      <Menu.Portal>
-                        <Menu.Content>
-                          <Menu.Item onSelect={() => revoke(machine)}>{copy.machines.revoke}</Menu.Item>
-                        </Menu.Content>
-                      </Menu.Portal>
-                    </Menu>
-                  </div>
+            <Show
+              when={personal().length > 0}
+              fallback={
+                <div class="hub-empty">
+                  <Icon name="monitor" class="text-v2-icon-icon-muted" />
+                  <div class="hub-empty-title">{copy.machines.empty}</div>
+                  <p class="hub-empty-description">{copy.machines.emptyDescription}</p>
+                  <Button variant="contrast" size="normal" icon="plus" onClick={add}>
+                    {copy.machines.add}
+                  </Button>
                 </div>
-              )}
-            </For>
+              }
+            >
+              <For each={personal()}>
+                {(machine) => <MachineRow machine={machine} now={now()} onRevoke={() => revoke(machine)} />}
+              </For>
+            </Show>
           </Show>
+        </div>
+      </section>
+      <For each={groups()}>
+        {(group) => (
+          <section class="hub-section" aria-label={group.org.name}>
+            <div class="hub-section-header">
+              <div class="hub-section-heading">
+                <h2 class="hub-section-title">
+                  <bdi dir="auto">{group.org.name}</bdi>
+                </h2>
+                <p class="hub-section-description">{copy.machines.orgDescription(group.org.name)}</p>
+              </div>
+            </div>
+            <div class="hub-list">
+              <For each={group.machines}>
+                {(machine) => <MachineRow machine={machine} now={now()} onRevoke={() => revoke(machine)} />}
+              </For>
+            </div>
+          </section>
+        )}
+      </For>
+    </>
+  )
+}
+
+/** One machine the user may open; the revoke action only shows when the hub allows it. */
+function MachineRow(props: { machine: HubMachine; now: number; onRevoke: () => void }) {
+  return (
+    <div class="hub-row">
+      <div class="hub-row-lead">
+        <span
+          class="hub-status"
+          data-online={props.machine.online ? "" : undefined}
+          role="img"
+          aria-label={props.machine.online ? copy.machines.online : copy.machines.offline}
+        />
+        <div class="hub-row-copy">
+          <span class="hub-row-name">
+            <bdi dir="auto">{props.machine.name}</bdi>
+          </span>
+          <span class="hub-row-meta">
+            <code dir="ltr">{props.machine.id}</code>
+            <span aria-hidden="true">·</span>
+            <span>{lastSeen(props.machine, props.now)}</span>
+          </span>
+        </div>
+      </div>
+      <div class="hub-row-actions">
+        <Button
+          variant={props.machine.online ? "contrast" : "neutral"}
+          size="small"
+          onClick={() => window.open(props.machine.url, "_blank", "noopener")}
+        >
+          {copy.machines.open}
+        </Button>
+        <Show when={props.machine.canRevoke}>
+          <Menu gutter={6} modal={false} placement="bottom-end">
+            <Menu.Trigger
+              as={IconButton}
+              variant="ghost-muted"
+              size="small"
+              icon={<Icon name="outline-dots" />}
+              aria-label={copy.more}
+            />
+            <Menu.Portal>
+              <Menu.Content>
+                <Menu.Item onSelect={props.onRevoke}>{copy.machines.revoke}</Menu.Item>
+              </Menu.Content>
+            </Menu.Portal>
+          </Menu>
         </Show>
       </div>
-    </section>
+    </div>
   )
 }
 
@@ -276,7 +317,11 @@ export function AllMachines(props: { fail: Fail; revision: () => number }) {
                         <span aria-hidden="true">·</span>
                         <span>
                           <bdi dir="auto">
-                            {machine.owner ? copy.allMachines.owner(machine.owner) : copy.allMachines.noOwner}
+                            {machine.org
+                              ? copy.allMachines.org(machine.org)
+                              : machine.owner
+                                ? copy.allMachines.owner(machine.owner)
+                                : copy.allMachines.noOwner}
                           </bdi>
                         </span>
                         <span aria-hidden="true">·</span>
