@@ -249,7 +249,7 @@ describe("access tokens", () => {
 describe("llm proxy", () => {
   test("injects the ChatGPT access token and compresses the body with zstd", async () => {
     const { store, chatgpt } = setup()
-    const machine = store.createMachine("box")
+    const machine = store.createMachine({ name: "box", owner: "someone" })
     saveChatGPT(store, Date.now() + 3_600_000, `http://127.0.0.1:${upstream.port}/v1`)
     const payload = JSON.stringify({ input: "x".repeat(2 * 1024 * 1024) })
     const bearer = await proxyJSON(store, chatgpt, "/llm/openai/responses?stream=1", {
@@ -274,7 +274,7 @@ describe("llm proxy", () => {
 
   test("rejects bad llm tokens and reports refresh failures", async () => {
     const { store, chatgpt } = setup()
-    const machine = store.createMachine("box")
+    const machine = store.createMachine({ name: "box", owner: "someone" })
     saveChatGPT(store, Date.now() - 1000, `http://127.0.0.1:${upstream.port}/v1`, "bad-refresh")
     const unauthorized = await Llm.proxy(
       new Request("http://hub/llm/openai/models", { headers: { authorization: "Bearer nope" } }),

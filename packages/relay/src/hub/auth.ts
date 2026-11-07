@@ -30,7 +30,7 @@ export function create() {
   const keys = new Map<string, string>()
   const attempts = new Map<string, Attempt & { expires: number }>()
   const registrations = new Map<string, Registration & { expires: number }>()
-  const codes = new Map<string, number>()
+  const codes = new Map<string, { user: string; expires: number }>()
   const tickets = new Map<string, { session: string; machine: string; expires: number }>()
   const failures = new Map<string, { count: number; until: number }>()
   const accounts = new Map<string, { count: number; until: number; last: number }>()
@@ -91,22 +91,27 @@ export function create() {
     },
     finishRegistration: (key: string) => registrations.delete(key),
 
-    createCode() {
-      prune(codes, (expires) => expires)
+    /** Issues an enrollment code for `user`, the account its machine will belong to. */
+    createCode(user: string) {
+      prune(codes, (entry) => entry.expires)
       const bytes = crypto.getRandomValues(new Uint8Array(8))
       const chars = Array.from(bytes, (byte) => CODE_ALPHABET[byte % CODE_ALPHABET.length]).join("")
       const code = `${chars.slice(0, 4)}-${chars.slice(4)}`
       const expiresAt = Date.now() + CODE_TTL
-      codes.set(code, expiresAt)
+      codes.set(code, { user, expires: expiresAt })
       return { code, expiresAt }
     },
-    /** Consumes a code once; accepts it case-insensitively and with or without the dash. */
+    /**
+     * Consumes a code once and returns the user it was issued for; accepts it case-insensitively and with or without
+     * the dash. The caller still checks that the user is active.
+     */
     consumeCode(input: string) {
       const compact = input.toUpperCase().replace(/[^A-Z0-9]/g, "")
       const code = `${compact.slice(0, 4)}-${compact.slice(4)}`
-      const expires = codes.get(code)
+      const entry = codes.get(code)
       codes.delete(code)
-      return expires !== undefined && expires > Date.now()
+      if (!entry || entry.expires <= Date.now()) return undefined
+      return entry.user
     },
 
     createTicket(session: string, machine: string) {

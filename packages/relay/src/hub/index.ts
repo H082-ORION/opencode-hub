@@ -34,8 +34,8 @@ export type Options = {
   version?: string
 }
 
-/** A browser following `/hub/api/events`. */
-type Listener = { session: string; send: (text: string) => void; close: () => void }
+/** A browser following `/hub/api/events`; it only ever hears about its user's machines. */
+type Listener = { session: string; user: string; send: (text: string) => void; close: () => void }
 
 /** The public URL the hub last started with, so `opencode hub invite` can print a full link. */
 const URL_KEY = "url"
@@ -131,7 +131,10 @@ export async function start(options: Options) {
     setup,
     origin,
     secure,
-    closed: (sessions) => listeners.forEach((listener) => sessions.includes(listener.session) && listener.close()),
+    closed(sessions) {
+      listeners.forEach((listener) => sessions.includes(listener.session) && listener.close())
+      recheckStreams()
+    },
   })
 
   return {
@@ -141,8 +144,8 @@ export async function start(options: Options) {
     userCount: () => store.userCount(),
     /** Issues an invitation and returns its one-time link, as `opencode hub invite` does. */
     invite: (role: Store.Role) => accounts.invite(role),
-    /** Issues a one-time enrollment code, as the dashboard's "Add machine" does. */
-    createEnrollmentCode: () => auth.createCode(),
+    /** Issues a one-time enrollment code for a user's new machine, as the dashboard's "Add machine" does. */
+    createEnrollmentCode: (user: string) => auth.createCode(user),
     async stop() {
       pings.forEach((timer) => clearInterval(timer))
       listeners.forEach((listener) => listener.close())
@@ -170,16 +173,16 @@ export async function start(options: Options) {
     if (pathname === "/hub/agent/connect") return connect(request, server)
     if (pathname.startsWith("/llm/")) return Llm.proxy(request, url, store, chatgpt)
     if (pathname.startsWith("/hub/api/")) return api(request, pathname.slice("/hub/api/".length), server)
-    const session = accounts.current(request)?.session
+    const current = accounts.current(request)
     if (pathname === "/hub/handoff") {
-      if (session) return handoff(url, session)
+      if (current) return handoff(url, current)
       const next = url.searchParams.get("next")
       return redirect(next ? `/login?next=${encodeURIComponent(next)}` : "/login")
     }
     if (request.method !== "GET" && request.method !== "HEAD")
       return new Response("Method not allowed", { status: 405 })
     // A machine host sends signed-out browsers here; one that is already signed in goes straight on.
-    if (pathname === "/login" && session) {
+    if (pathname === "/login" && current) {
       const next = url.searchParams.get("next") ?? ""
       return redirect(next ? `/hub/handoff?next=${encodeURIComponent(next)}` : "/")
     }
@@ -195,19 +198,27 @@ export async function start(options: Options) {
     }
     const handled = await accounts.handle(request, route, clientAddress(request, server))
     if (handled) return handled
-    const session = accounts.current(request)?.session
-    if (!session) return json(401, { error: "Sign in to the hub first." })
-    if (route === "machines" && method === "GET") return json(200, machineList())
-    if (route === "events" && method === "GET") return events(session)
+    const current = accounts.current(request)
+    if (!current) return json(401, { error: "Sign in to the hub first." })
+    const user = current.user
+    if (route === "machines" && method === "GET") return json(200, machineList(user.id))
+    if (route === "events" && method === "GET") return events(current)
+    if (route === "admin/machines" && method === "GET") {
+      if (user.role !== "admin") return json(403, { error: "Only hub administrators can do this." })
+      return json(200, allMachines())
+    }
     if (route === "machines/code" && method === "POST") {
-      const code = auth.createCode()
+      const code = auth.createCode(user.id)
       // Without --code, `agent join` asks for the code without echo, so it stays out of the shell history.
       return json(200, { ...code, command: `opencode agent join ${origin}` })
     }
     const machine = /^machines\/([^/]+)$/.exec(route)
     if (machine && method === "DELETE") {
       const id = decodeURIComponent(machine[1])
-      if (!store.deleteMachine(id)) return json(404, { error: "Unknown machine." })
+      // Owners revoke their own machines and administrators any; for anyone else the machine does not exist.
+      const target = store.machine(id)
+      const allowed = target && (user.role === "admin" || canOpen(user, target))
+      if (!allowed || !store.deleteMachine(id)) return json(404, { error: "Unknown machine." })
       tunnels.get(id)?.ws.close(4403, "machine revoked")
       tunnels.delete(id)
       notifyMachines()
@@ -256,7 +267,7 @@ export async function start(options: Options) {
     return json(200, { provider: { id, name, baseURL, auth: "key" } })
   }
 
-  function events(session: string) {
+  function events(current: Accounts.Current) {
     const encoder = new TextEncoder()
     const state = {} as { listener?: Listener; timer?: Timer }
     const cleanup = () => {
@@ -267,7 +278,8 @@ export async function start(options: Options) {
       start(controller) {
         const send = (text: string) => controller.enqueue(encoder.encode(text))
         state.listener = {
-          session,
+          session: current.session,
+          user: current.user.id,
           send,
           close() {
             cleanup()
@@ -276,7 +288,7 @@ export async function start(options: Options) {
         }
         listeners.add(state.listener)
         state.timer = setInterval(() => send(": keepalive\n\n"), KEEPALIVE_INTERVAL)
-        send(`retry: 2000\n${machinesEvent()}`)
+        send(`retry: 2000\n${machinesEvent(current.user.id)}`)
       },
       cancel: cleanup,
     })
@@ -289,24 +301,48 @@ export async function start(options: Options) {
     })
   }
 
-  function machinesEvent() {
-    return `event: machines\ndata: ${JSON.stringify(machineList())}\n\n`
+  function machinesEvent(user: string) {
+    return `event: machines\ndata: ${JSON.stringify(machineList(user))}\n\n`
   }
 
   function notifyMachines() {
-    if (listeners.size === 0) return
-    const event = machinesEvent()
-    listeners.forEach((listener) => listener.send(event))
+    listeners.forEach((listener) => listener.send(machinesEvent(listener.user)))
   }
 
-  function machineList() {
-    return store.machines().map((machine) => ({
+  /** The machines a user may open, with their handoff links. */
+  function machineList(user: string) {
+    return store.machinesOf(user).map((machine) => ({
       id: machine.id,
       name: machine.name,
       online: tunnels.has(machine.id),
       lastSeenAt: machine.last_seen_at,
       url: `/hub/handoff?next=${encodeURIComponent(`${machineOrigin(machine.id)}/`)}`,
     }))
+  }
+
+  /** Every machine with its owner, for administrators: no handoff link, since they cannot open other users' machines. */
+  function allMachines() {
+    return store.machines().map((machine) => ({
+      id: machine.id,
+      name: machine.name,
+      owner: machine.owner_login,
+      online: tunnels.has(machine.id),
+      lastSeenAt: machine.last_seen_at,
+    }))
+  }
+
+  /**
+   * Cuts proxied streams (SSE responses, WebSockets) whose session may no longer open their machine. Each new request
+   * is checked on its own; this covers the ones already open when a session ends or an account is disabled.
+   */
+  function recheckStreams() {
+    tunnels.forEach((tunnel) => {
+      const machine = store.machine(tunnel.machine.id)
+      tunnel.drop((session) => {
+        const current = accounts.active(auth.session(session))
+        return current !== undefined && machine !== undefined && canOpen(current.user, machine)
+      })
+    })
   }
 
   function providerList() {
@@ -343,21 +379,22 @@ export async function start(options: Options) {
   }
 
   async function machineRoute(request: Request, url: URL, server: Server<Tunnel.SocketData>, label: string) {
-    const machine = LABEL.test(label) ? store.machine(label) : undefined
-    if (!machine) {
-      const body = `<p class="muted">No machine is registered under this address.</p><p><a href="${Html.escape(origin)}/">Back to the hub</a></p>`
-      return Html.respond(Html.message("Unknown machine", body), { status: 404 })
-    }
-    if (url.pathname === SESSION_PATH) return session(url, machine)
+    if (!LABEL.test(label)) return unknownMachine()
+    if (url.pathname === SESSION_PATH) return session(url, label)
     const cookie = request.headers.get("cookie")
     const upgrade = request.headers.get("upgrade")?.toLowerCase() === "websocket"
-    if (!accounts.current(request)) {
+    // Checked on every request, so a machine stops opening as soon as its owner's account is disabled.
+    const current = accounts.current(request)
+    if (!current) {
       if (upgrade || (request.method !== "GET" && request.method !== "HEAD"))
         return new Response("Unauthorized", { status: 401 })
       return redirect(
-        `${origin}/login?next=${encodeURIComponent(`${machineOrigin(machine.id)}${url.pathname}${url.search}`)}`,
+        `${origin}/login?next=${encodeURIComponent(`${machineOrigin(label)}${url.pathname}${url.search}`)}`,
       )
     }
+    // Another user's machine answers exactly like one that does not exist.
+    const machine = store.machine(label)
+    if (!machine || !canOpen(current.user, machine)) return unknownMachine()
     // The agent drops Origin before reaching the local server, so the hub enforces same-origin itself: sibling
     // machine hosts are same-site and would otherwise ride the Lax session cookie.
     const requestOrigin = request.headers.get("origin")
@@ -375,26 +412,29 @@ export async function start(options: Options) {
     const cookies = Auth.stripCookie(cookie)
     if (cookies) headers.push(["cookie", cookies])
     const path = `${url.pathname}${url.search}`
-    if (upgrade) return tunnel.websocket(request, server, path, headers)
-    return tunnel.http(request, path, headers)
+    if (upgrade) return tunnel.websocket(request, server, path, headers, current.session)
+    return tunnel.http(request, path, headers, current.session)
   }
 
-  function session(url: URL, machine: Store.Machine) {
-    const id = accounts.active(auth.consumeTicket(url.searchParams.get("ticket") ?? "", machine.id))?.session
-    if (!id) return redirect(`${origin}/login?next=${encodeURIComponent(`${machineOrigin(machine.id)}/`)}`)
+  function session(url: URL, label: string) {
+    const current = accounts.active(auth.consumeTicket(url.searchParams.get("ticket") ?? "", label))
+    if (!current) return redirect(`${origin}/login?next=${encodeURIComponent(`${machineOrigin(label)}/`)}`)
+    // The ticket was issued for a machine the user owned; ownership is checked again when it is used.
+    const machine = store.machine(label)
+    if (!machine || !canOpen(current.user, machine)) return unknownMachine()
     const next = url.searchParams.get("next") ?? "/"
     const local = next.startsWith("/") && !next.startsWith("//") && !next.startsWith("/\\") ? next : "/"
-    return redirect(local, Auth.sessionCookie(id, secure))
+    return redirect(local, Auth.sessionCookie(current.session, secure))
   }
 
-  function handoff(url: URL, session: string) {
+  function handoff(url: URL, current: Accounts.Current) {
     const next = URL.parse(url.searchParams.get("next") ?? "")
     if (!next || next.protocol !== base.protocol) return redirect("/")
     const host = next.host.toLowerCase()
     if (host === domain) return redirect(`${next.pathname}${next.search}`)
     const machine = host.endsWith(`.${domain}`) ? store.machine(host.slice(0, -domain.length - 1)) : undefined
-    if (!machine) return redirect("/")
-    const ticket = auth.createTicket(session, machine.id)
+    if (!machine || !canOpen(current.user, machine)) return redirect("/")
+    const ticket = auth.createTicket(current.session, machine.id)
     const target = new URL(SESSION_PATH, machineOrigin(machine.id))
     target.searchParams.set("ticket", ticket)
     target.searchParams.set("next", `${next.pathname}${next.search}`)
@@ -408,11 +448,15 @@ export async function start(options: Options) {
     const body = Option.getOrUndefined(decodeEnrollRequest(await request.text()))
     const name = body?.name.trim().slice(0, 100)
     if (!body || !name) return Response.json({ error: "expected { code, name }" }, { status: 400 })
-    if (!auth.consumeCode(body.code)) {
+    const author = auth.consumeCode(body.code)
+    if (!author) {
       auth.fail(client)
       return Response.json({ error: "invalid or expired enrollment code" }, { status: 403 })
     }
-    const enrolled = store.createMachine(name)
+    // The machine belongs to whoever created the code, only while that account is still active.
+    const owner = accounts.activeUser(author)
+    if (!owner) return Response.json({ error: "invalid or expired enrollment code" }, { status: 403 })
+    const enrolled = store.createMachine({ name, owner: owner.id })
     notifyMachines()
     return Response.json({ ...enrolled, url: origin })
   }
@@ -467,6 +511,11 @@ export async function start(options: Options) {
     tunnels.forEach((tunnel) => tunnel.send(frame))
   }
 
+  function unknownMachine() {
+    const body = `<p class="muted">No machine is registered under this address.</p><p><a href="${Html.escape(origin)}/">Back to the hub</a></p>`
+    return Html.respond(Html.message("Unknown machine", body), { status: 404 })
+  }
+
   function tlsAllowed(url: URL) {
     const requested = (url.searchParams.get("domain") ?? "").toLowerCase()
     const hostname = base.hostname.toLowerCase()
@@ -490,6 +539,14 @@ export function invite(input: { data: string; role: Store.Role }) {
     url: `${url}/register?invite=${encodeURIComponent(invitation.code)}`,
     expiresAt: invitation.expiresAt,
   }
+}
+
+/**
+ * Whether a user may open a machine: in this step, only a personal machine of their own. Organization machines
+ * (step 4) and ownerless ones open for nobody.
+ */
+function canOpen(user: Store.User, machine: Store.Machine) {
+  return machine.owner_org_id === null && machine.owner_user_id === user.id
 }
 
 /** Behind a local reverse proxy every peer is loopback, so the forwarded client address is used instead. */

@@ -90,6 +90,7 @@ const state = {} as {
   statuses: Statuses
   cookie: string
   machineURL: string
+  userID: string
 }
 
 beforeAll(async () => {
@@ -101,9 +102,10 @@ beforeAll(async () => {
     login: LOGIN,
     password: PASSWORD,
   })
+  state.userID = ((await (await admin.request("session")).json()) as { user: { id: string } }).user.id
   state.enrollment = await Agent.enroll({
     url: state.hub.url,
-    code: state.hub.createEnrollmentCode().code,
+    code: state.hub.createEnrollmentCode(state.userID).code,
     name: "Test Machine",
   })
   state.configs = []
@@ -145,7 +147,7 @@ describe("enrollment", () => {
   })
 
   test("codes are single use", async () => {
-    const code = state.hub.createEnrollmentCode().code
+    const code = state.hub.createEnrollmentCode(state.userID).code
     await Agent.enroll({ url: state.hub.url, code, name: "other" })
     // A separate forwarded client address keeps the failure throttle away from the other tests.
     const reused = await fetch(`${state.hub.url}/hub/agent/enroll`, {
@@ -159,13 +161,13 @@ describe("enrollment", () => {
   test("suffixes taken and reserved ids", async () => {
     const taken = await Agent.enroll({
       url: state.hub.url,
-      code: state.hub.createEnrollmentCode().code,
+      code: state.hub.createEnrollmentCode(state.userID).code,
       name: "test machine",
     })
     expect(taken.machine.id).toBe("test-machine-2")
     const reserved = await Agent.enroll({
       url: state.hub.url,
-      code: state.hub.createEnrollmentCode().code,
+      code: state.hub.createEnrollmentCode(state.userID).code,
       name: "HUB",
     })
     expect(reserved.machine.id).toBe("hub-2")
@@ -275,7 +277,7 @@ describe("browser access", () => {
 
     const enrollment = await Agent.enroll({
       url: state.hub.url,
-      code: state.hub.createEnrollmentCode().code,
+      code: state.hub.createEnrollmentCode(state.userID).code,
       name: "Live",
     })
     expect((await events.next()).find((item) => item.id === "live")).toMatchObject({ online: false })
@@ -566,7 +568,7 @@ describe("tunnel lifecycle", () => {
   test("refuses a HELLO for another protocol version with 4400", async () => {
     const enrollment = await Agent.enroll({
       url: state.hub.url,
-      code: state.hub.createEnrollmentCode().code,
+      code: state.hub.createEnrollmentCode(state.userID).code,
       name: "future",
     })
     const socket = tunnelSocket(enrollment.tunnelToken)
@@ -583,7 +585,7 @@ describe("tunnel lifecycle", () => {
   test("a second connection for the same machine replaces the first with 4409", async () => {
     const enrollment = await Agent.enroll({
       url: state.hub.url,
-      code: state.hub.createEnrollmentCode().code,
+      code: state.hub.createEnrollmentCode(state.userID).code,
       name: "twin",
     })
     const first = { statuses: { list: [], waiters: [] } as Statuses, ready: Promise.withResolvers<void>() }
