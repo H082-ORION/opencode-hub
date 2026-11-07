@@ -173,3 +173,10 @@ conservé dans [`README.opencode.md`](README.opencode.md). Ce fork suit la branc
 développé sur la branche `remote-machines`.
 
 Licence : MIT, comme OpenCode ([`LICENSE`](LICENSE)).
+
+## Remerciements
+
+Un grand merci à l'équipe d'[OpenCode](https://github.com/anomalyco/opencode), et toutes nos félicitations pour son
+excellent travail. opencode-hub n'existerait pas sans elle : le serveur, l'interface web, le terminal, le catalogue des
+fournisseurs, tout ce que le hub rend accessible à distance, c'est OpenCode. Merci aussi de l'avoir publié en logiciel
+libre, ce qui permet à des projets comme celui-ci de construire par-dessus.
