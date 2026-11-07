@@ -201,7 +201,8 @@ export async function start(options: Options) {
     if (route === "events" && method === "GET") return events(session)
     if (route === "machines/code" && method === "POST") {
       const code = auth.createCode()
-      return json(200, { ...code, command: `opencode agent join ${origin} --code ${code.code}` })
+      // Without --code, `agent join` asks for the code without echo, so it stays out of the shell history.
+      return json(200, { ...code, command: `opencode agent join ${origin}` })
     }
     const machine = /^machines\/([^/]+)$/.exec(route)
     if (machine && method === "DELETE") {

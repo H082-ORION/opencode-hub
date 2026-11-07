@@ -258,7 +258,7 @@ describe("browser access", () => {
     const body = (await response.json()) as { code: string; expiresAt: number; command: string }
     expect(body.code).toMatch(/^[A-Z2-9]{4}-[A-Z2-9]{4}$/)
     expect(body.expiresAt).toBeGreaterThan(Date.now())
-    expect(body.command).toBe(`opencode agent join ${state.hub.url} --code ${body.code}`)
+    expect(body.command).toBe(`opencode agent join ${state.hub.url}`)
   })
 
   test("lists machines with their status and handoff link", async () => {

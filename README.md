@@ -72,7 +72,7 @@ BIN=packages/cli/dist/cli-linux-x64/bin/opencode
 
 $BIN hub                      # http://localhost:4800, le mot de passe s'affiche une fois
 # Dans le tableau de bord : « Add machine », puis sur la machine :
-$BIN agent join http://localhost:4800 --code XXXX-XXXX
+$BIN agent join http://localhost:4800      # demande le code sans l'afficher
 $BIN agent run
 # La machine est accessible sur http://<machine>.localhost:4800
 ```

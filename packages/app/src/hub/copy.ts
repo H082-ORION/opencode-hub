@@ -43,7 +43,7 @@ export const copy = {
   add: {
     title: "Add a machine",
     description: "Run these commands on the machine you want to add.",
-    step1: "Join the hub with this one-time code",
+    step1: "Join the hub, then enter this one-time code when asked",
     step2: "Then keep it connected",
     code: "Code",
     expiresIn: (time: string) => `Expires in ${time}`,
