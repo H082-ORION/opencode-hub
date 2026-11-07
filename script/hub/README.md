@@ -60,7 +60,7 @@ Caddy stays installed. The most recent `Caddyfile.bak.*` backup is restored if t
 In the dashboard, click "add machine" to get a one-time code, then on the machine:
 
 ```sh
-opencode agent join https://hub.example.com --code <code>
+opencode agent join https://hub.example.com       # asks for the code without echo
 opencode agent run
 ```
 

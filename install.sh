@@ -278,6 +278,32 @@ demander() {
   done
 }
 
+# demander_secret VARIABLE "question" — saisie sans écho ; hors interactif, la valeur déjà donnée en option.
+demander_secret() {
+  local var="$1" question="$2" r
+  if ! interactif; then
+    [[ -n "${!var:-}" ]] || { err "$question${DP}$(t "valeur obligatoire en mode non interactif." "a value is required in non-interactive mode.")"; return 1; }
+    return 0
+  fi
+  while :; do
+    read -rs -p "$gris$S_ASK$reset $question ${dim}$(t "(non affiché)" "(hidden)")${reset} " r || return 1
+    echo
+    if [[ -n "$r" ]]; then printf -v "$var" '%s' "$r"; return 0; fi
+    err "$(t "valeur obligatoire." "a value is required.")"
+  done
+}
+
+# url_sure URL — HTTPS, ou HTTP vers cette machine seulement (même règle que « opencode agent join »).
+url_sure() {
+  local hote
+  [[ "$1" == https://* ]] && return 0
+  [[ "$1" == http://* ]] || return 1
+  hote="${1#http://}"; hote="${hote%%/*}"
+  if [[ "$hote" == \[* ]]; then hote="${hote%%]*}]"; else hote="${hote%%:*}"; fi
+  hote="${hote,,}"
+  [[ "$hote" == localhost || "$hote" == *.localhost || "$hote" == "[::1]" || "$hote" =~ ^127(\.[0-9]{1,3}){3}$ ]]
+}
+
 # oui_non "question" [o|n] — renvoie 0 pour oui ; hors interactif, le défaut.
 oui_non() {
   local q="$1" def="${2:-o}" r sfx
@@ -318,6 +344,7 @@ HUB_URL=""
 HUB_UTILISATEUR="opencode"
 CLIENT_URL=""
 CODE=""
+INSECURE=0
 NOM_MACHINE=""
 CLIENT_UTILISATEUR=""
 BINARY=""
@@ -356,9 +383,10 @@ aide() {
   aide_opt "--hub-user $(t "<nom>" "<name>")" "$(t "utilisateur système du hub (défaut : opencode)" "system user running the hub (default: opencode)")"
   aide_titre "Client"
   aide_opt "--client-url <url>" "$(t "URL du hub à rejoindre" "URL of the hub to join")"
-  aide_opt "--code <code>" "$(t "code d'enrôlement à usage unique (tableau de bord, « add machine »)" "one-time enrollment code (dashboard, \"add machine\")")"
+  aide_opt "--code <code>" "$(t "code d'enrôlement à usage unique (sinon demandé sans affichage)" "one-time enrollment code (otherwise asked without echo)")"
   aide_opt "--name $(t "<nom>" "<name>")" "$(t "nom de la machine (défaut : nom d'hôte)" "machine name (default: hostname)")"
   aide_opt "--client-user $(t "<nom>" "<name>")" "$(t "utilisateur qui fait tourner l'agent (défaut : celui qui lance sudo)" "user running the agent (default: the one running sudo)")"
+  aide_opt "--insecure" "$(t "accepter un hub en http:// sur une autre machine (code et jetons en clair)" "accept a plain http:// hub on another machine (code and tokens in clear text)")"
   aide_titre "$(t "Binaire et services" "Binary and services")"
   aide_opt "--binary $(t "<chemin>" "<path>")" "$(t "binaire opencode à installer dans $BIN_CIBLE" "opencode binary to install to $BIN_CIBLE")"
   aide_opt "--build" "$(t "construire le binaire depuis ce dépôt (./build.sh)" "build the binary from this repository (./build.sh)")"
@@ -396,6 +424,7 @@ while [[ $# -gt 0 ]]; do
     --hub-user) valeur "$@"; HUB_UTILISATEUR="$2"; shift 2 ;;
     --client-url) valeur "$@"; CLIENT_URL="$2"; shift 2 ;;
     --code) valeur "$@"; CODE="$2"; shift 2 ;;
+    --insecure) INSECURE=1; shift ;;
     --name) valeur "$@"; NOM_MACHINE="$2"; shift 2 ;;
     --client-user) valeur "$@"; CLIENT_UTILISATEUR="$2"; shift 2 ;;
     --binary) valeur "$@"; BINARY="$2"; shift 2 ;;
@@ -749,6 +778,7 @@ if ((INSTALLER_HUB)); then
     if [[ -z "$HUB_URL" && -n "$DOMAIN" ]]; then HUB_URL="https://$DOMAIN"; fi
     demander HUB_URL "$(t "URL publique du hub" "Public hub URL")" "http://localhost:$PORT" "$RE_URL" "$(t "une URL du type https://hub.example.com" "a URL such as https://hub.example.com")"
     HUB_URL="${HUB_URL%/}"
+    url_sure "$HUB_URL" || warn "$(t "URL publique en http:// : les machines devront s'enrôler avec --insecure, code et jetons en clair. Préférer Caddy (HTTPS)." "plain http:// public URL: machines will have to enroll with --insecure, code and tokens in clear text. Prefer Caddy (HTTPS).")"
     demander HUB_HOTE "$(t "Adresse d'écoute du hub" "Hub listen address")" "127.0.0.1"
   fi
   demander HUB_UTILISATEUR "$(t "Utilisateur système du hub" "Hub system user")" "opencode" "$RE_UTILISATEUR" "$(t "nom d'utilisateur invalide" "invalid user name")"
@@ -762,8 +792,18 @@ fi
 if ((INSTALLER_CLIENT)); then
   etape "$(t "Réglages du client" "Client settings")"
   [[ -n "$CLIENT_URL" ]] || CLIENT_URL="$HUB_URL"
-  demander CLIENT_URL "$(t "URL du hub à rejoindre" "URL of the hub to join")" "" "$RE_URL" "$(t "une URL du type https://hub.example.com" "a URL such as https://hub.example.com")"
-  CLIENT_URL="${CLIENT_URL%/}"
+  while :; do
+    demander CLIENT_URL "$(t "URL du hub à rejoindre" "URL of the hub to join")" "" "$RE_URL" "$(t "une URL du type https://hub.example.com" "a URL such as https://hub.example.com")"
+    CLIENT_URL="${CLIENT_URL%/}"
+    url_sure "$CLIENT_URL" && break
+    if ((INSECURE)); then
+      warn "$(t "--insecure : le code d'enrôlement et les jetons de la machine passeront en clair vers $CLIENT_URL." "--insecure: the enrollment code and the machine's tokens will travel in clear text to $CLIENT_URL.")"
+      break
+    fi
+    err "$(t "$CLIENT_URL est en http:// sur une autre machine : le code et les jetons passeraient en clair. Utiliser https:// (ou --insecure)." "$CLIENT_URL is plain http:// on another machine: the code and the tokens would travel in clear text. Use https:// (or --insecure).")"
+    interactif || exit 1
+    CLIENT_URL=""
+  done
   demander CLIENT_UTILISATEUR "$(t "Utilisateur qui fait tourner l'agent" "User running the agent")" "$APPELANT" "$RE_UTILISATEUR" "$(t "nom d'utilisateur invalide" "invalid user name")"
   id "$CLIENT_UTILISATEUR" >/dev/null 2>&1 || die "$(t "l'utilisateur $CLIENT_UTILISATEUR n'existe pas." "user $CLIENT_UTILISATEUR does not exist.")"
   demander NOM_MACHINE "$(t "Nom de cette machine" "Name of this machine")" "$(hostname)"
@@ -1084,10 +1124,15 @@ if ((INSTALLER_CLIENT)); then
   if ((enroler)); then
     if [[ -z "$CODE" ]]; then
       info "$(t "Code d'enrôlement : tableau de bord" "Enrollment code: dashboard") $(lien "$CLIENT_URL"), $(t "bouton" "button") ${bold}add machine${reset}."
-      demander CODE "$(t "Code d'enrôlement" "Enrollment code")"
+      demander_secret CODE "$(t "Code d'enrôlement" "Enrollment code")"
     fi
-    suivre "$(t "Enrôlement auprès de" "Enrolling with") $CLIENT_URL" \
-      en_tant_que "$CLIENT_UTILISATEUR" "$OPENCODE_BIN" agent join "$CLIENT_URL" --code "$CODE" --name "$NOM_MACHINE" ||
+    # Le code passe par l'entrée standard : il n'apparaît ni dans la liste des processus ni dans un journal.
+    rejoindre() {
+      local -a opts=(--name "$NOM_MACHINE")
+      ((INSECURE)) && opts+=(--insecure)
+      printf '%s\n' "$CODE" | en_tant_que "$CLIENT_UTILISATEUR" "$OPENCODE_BIN" agent join "$CLIENT_URL" "${opts[@]}"
+    }
+    suivre "$(t "Enrôlement auprès de" "Enrolling with") $CLIENT_URL" rejoindre ||
       die "$(t "enrôlement refusé : vérifier l'URL et le code (un code ne sert qu'une fois)." "enrollment refused: check the URL and the code (a code works only once).")"
   fi
 

@@ -120,11 +120,19 @@ Details on Caddy, DNS and troubleshooting: [`script/hub/README.md`](script/hub/R
 |---|---|
 | `opencode hub [--port 4800] [--url https://hub.example.com] [--data <folder>]` | Starts the hub |
 | `opencode hub password` | Resets the hub password |
-| `opencode agent join <url> --code <code> [--name <name>]` | Enrolls this machine |
+| `opencode agent join <url> [--code <code>] [--name <name>] [--insecure]` | Enrolls this machine (without `--code`, the code is asked without echo or read from stdin) |
 | `opencode agent run` | Keeps the machine connected to the hub |
 | `opencode agent status` / `opencode agent leave` | Enrollment status / unenroll |
 
 <img src="docs/hub/provider-variants-phone.png" alt="Provider variants on a phone" width="260" align="right">
+
+## Enrollment security
+
+The enrollment code, and the tokens the hub sends back to the machine, only travel over HTTPS: `opencode agent join`
+and `install.sh` refuse a plain `http://` URL to another machine (only `localhost`, `*.localhost`, `127.x.x.x` and
+`::1` stay allowed over HTTP, for local tests). They also refuse a hub that announces a plain `http://` public URL,
+since the tunnel would send the machine's token in clear text there. `--insecure` lifts both refusals, knowingly.
+Without `--code`, the code shows up neither in the process list nor in the shell history.
 
 ## Known limits
 
