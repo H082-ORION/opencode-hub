@@ -11,6 +11,9 @@
 #   sudo ./install.sh --caddy --hub --domain hub.example.com --email vous@example.com --service
 #   sudo ./install.sh --client --hub-url https://hub.example.com --code <code> --service
 #
+#   ./install.sh --status                                # état des services
+#   sudo ./install.sh --uninstall                        # désinstallation (menu)
+#
 # Le script est autonome (un seul fichier, aucune dépendance à un autre dépôt) et peut être relancé sans risque.
 # Réglages : NO_COLOR=1, OPENCODE_HUB_ASCII=1 (sans Unicode), OPENCODE_HUB_VITESSE=0 (sans pauses),
 # OPENCODE_HUB_SANS_BANNIERE=1.
@@ -34,11 +37,11 @@ if [[ "${OPENCODE_HUB_ASCII:-0}" != 1 && "${LC_ALL:-${LC_CTYPE:-${LANG:-}}}" == 
 
 if ((UTF8)); then
   S_INFO='▸'; S_OK='✓'; S_WARN='!'; S_ERR='✗'; S_ASK='?'; H='─'; V='│'
-  C_HG='╭'; C_HD='╮'; C_BG='╰'; C_BD='╯'; S_PTR='❯'; S_COCHE='◉'; S_VIDE='○'; S_ELLIPSE='…'; S_SEP='·'
+  C_HG='╭'; C_HD='╮'; C_BG='╰'; C_BD='╯'; S_PTR='❯'; S_ON='●'; S_OFF='○'; S_COCHE='◉'; S_VIDE='○'; S_ELLIPSE='…'; S_SEP='·'
   SPIN=('⠋' '⠙' '⠹' '⠸' '⠼' '⠴' '⠦' '⠧' '⠇' '⠏')
 else
   S_INFO='>'; S_OK='OK'; S_WARN='!'; S_ERR='x'; S_ASK='?'; H='-'; V='|'
-  C_HG='+'; C_HD='+'; C_BG='+'; C_BD='+'; S_PTR='>'; S_COCHE='[x]'; S_VIDE='[ ]'; S_ELLIPSE='...'; S_SEP='-'
+  C_HG='+'; C_HD='+'; C_BG='+'; C_BD='+'; S_PTR='>'; S_ON='*'; S_OFF='o'; S_COCHE='[x]'; S_VIDE='[ ]'; S_ELLIPSE='...'; S_SEP='-'
   SPIN=('|' '/' '-' '\')
 fi
 LARGEUR="${COLUMNS:-$(tput cols 2>/dev/null || echo 80)}"
@@ -261,6 +264,16 @@ oui_non() {
   done
 }
 
+# confirmer_grave "ce qui sera perdu" MOT — encart rouge ; il faut retaper MOT. Avec --yes : accepté.
+confirmer_grave() {
+  local quoi="$1" mot="$2" r
+  cadre "$red" "Action irréversible" "$quoi" "" "Pour confirmer, tapez : ${bold}$mot${reset}"
+  [[ "$OUI" == 1 ]] && return 0
+  interactif || { err "confirmation impossible hors terminal (--yes pour passer outre)."; return 1; }
+  read -r -p "$red$S_ASK$reset " r || return 1
+  [[ "$r" == "$mot" ]] || { err "mot différent : rien n'a été effacé."; return 1; }
+}
+
 aide_titre() { printf '\n%s%s%s\n' "$gris$bold" "$1" "$reset"; }
 aide_opt() { printf '  %s%s%s %s%s%s\n' "$bold" "$(pad "$1" 24)" "$reset" "$dim" "$2" "$reset"; }
 
@@ -283,6 +296,8 @@ NOM_MACHINE=""
 CLIENT_UTILISATEUR=""
 BINARY=""
 CONSTRUIRE=0
+MODE=installer
+PURGER=0
 
 DATA_DIR="/var/lib/opencode-hub"
 ENV_FILE="/etc/opencode-hub.env"
@@ -322,10 +337,16 @@ aide() {
   aide_opt "--no-service" "ne pas installer de service systemd"
   aide_opt "-y, --yes" "aucune question : options et valeurs par défaut"
   aide_opt "-h, --help" "cette aide"
+  aide_titre "Maintenance"
+  aide_opt "--status" "état de Caddy, du hub, de l'agent et du binaire"
+  aide_opt "--uninstall" "désinstaller (les composants cochés, ou ceux passés en options)"
+  aide_opt "--purge" "avec --uninstall : données du hub, enrôlement, paquet Caddy, binaire"
   aide_titre "Exemples"
   echo "  sudo ./install.sh"
   echo "  sudo ./install.sh --caddy --hub --domain hub.example.com --email vous@example.com --service --yes"
   echo "  sudo ./install.sh --client --client-url https://hub.example.com --code <code> --service"
+  echo "  ./install.sh --status"
+  echo "  sudo ./install.sh --uninstall --hub --client"
   echo
 }
 
@@ -350,6 +371,9 @@ while [[ $# -gt 0 ]]; do
     --service) SERVICE_HUB=1; SERVICE_CLIENT=1; shift ;;
     --no-service) SERVICE_HUB=0; SERVICE_CLIENT=0; shift ;;
     -y | --yes) OUI=1; shift ;;
+    --status) MODE=etat; shift ;;
+    --uninstall) MODE=desinstaller; shift ;;
+    --purge) PURGER=1; shift ;;
     -h | --help) aide; exit 0 ;;
     *) aide >&2; die "option inconnue : $1" ;;
   esac
@@ -375,7 +399,7 @@ en_tant_que() {
   if [[ "$u" == root ]]; then "${env_u[@]}" "$@"; else runuser -u "$u" -- "${env_u[@]}" "$@"; fi
 }
 
-version_de() { "$1" --version 2>/dev/null | head -n1 || echo "version inconnue"; }
+version_de() { local v; v="$("$1" --version 2>/dev/null | head -n1)" || true; printf '%s\n' "${v:-version inconnue}"; }
 
 apt_installer() {
   export DEBIAN_FRONTEND=noninteractive
@@ -383,21 +407,250 @@ apt_installer() {
   apt-get install -y -q "$@"
 }
 
+# ================================================================== État et désinstallation
+
+# etat_unite NOM — absent, actif ou inactif.
+etat_unite() {
+  systemctl list-unit-files "$1.service" --no-legend 2>/dev/null | grep -q . || { echo absent; return; }
+  if systemctl is-active --quiet "$1"; then echo actif; else echo inactif; fi
+}
+auto_unite() { [[ "$(systemctl is-enabled "$1" 2>/dev/null || true)" == enabled ]]; }
+
+pastille() {
+  case "$1" in
+    actif) printf '%s%s%s en marche' "$green" "$S_ON" "$reset" ;;
+    inactif) printf '%s%s%s arrêté' "$yellow" "$S_ON" "$reset" ;;
+    installe) printf '%s%s%s installé' "$green" "$S_ON" "$reset" ;;
+    *) printf '%s%s absent%s' "$dim" "$S_OFF" "$reset" ;;
+  esac
+}
+
+# Valeur d'une clé (User=, …) ou d'une option de ExecStart (--port, --url) dans un fichier de service.
+cle_unite() { sed -n "s/^$2=//p" "$1" 2>/dev/null | head -n1 || true; }
+option_unite() { grep -m1 '^ExecStart=' "$1" 2>/dev/null | grep -oE -- "$2 [^ ]+" | cut -d' ' -f2 || true; }
+
+# Domaine configuré dans le Caddyfile géré par ce script.
+domaine_caddy() {
+  grep -qF "$MARQUE" "$CADDYFILE" 2>/dev/null || return 0
+  grep -m1 -oE '^[a-z0-9.-]+, \*\.' "$CADDYFILE" | cut -d, -f1 || true
+}
+
+ligne_etat() {
+  local nom="$1" etat="$2" auto="$3" detail="$4" a=''
+  case "$auto" in
+    1) a="${green}auto${reset}" ;;
+    0) a="${dim}manuel${reset}" ;;
+  esac
+  printf '%s %s %s %s' "$(pad "${bold}$nom${reset}" 8)" "$(pad "$(pastille "$etat")" 12)" "$(pad "$a" 7)" "$dim$detail$reset"
+}
+
+afficher_etat() {
+  local -a l=()
+  local e d port url u dom sante etat_agent
+
+  # Caddy
+  if command -v caddy >/dev/null; then
+    e="$(etat_unite caddy)"; [[ "$e" == absent ]] && e=installe
+    d="$(caddy version 2>/dev/null | awk '{print $1}')"
+    dom="$(domaine_caddy)"
+    [[ -n "$dom" ]] && d+=" $S_SEP $dom et *.$dom"
+    l+=("$(ligne_etat Caddy "$e" "$(auto_unite caddy && echo 1 || echo 0)" "$d")")
+  else
+    l+=("$(ligne_etat Caddy absent - "")")
+  fi
+
+  # Hub
+  e="$(etat_unite opencode-hub)"
+  if [[ "$e" == absent ]]; then
+    l+=("$(ligne_etat Hub absent - "")")
+  else
+    port="$(option_unite "$UNIT_HUB" --port)"; url="$(option_unite "$UNIT_HUB" --url)"
+    d="${url:-?} $S_SEP port ${port:-?}"
+    if [[ "$e" == actif && -n "$port" ]] && command -v curl >/dev/null; then
+      if curl -fsS --max-time 2 "http://127.0.0.1:$port/hub/health" >/dev/null 2>&1; then sante="${green}répond${reset}"
+      else sante="${red}ne répond pas${reset}"; fi
+      d+=" $S_SEP $sante$dim"
+    fi
+    l+=("$(ligne_etat Hub "$e" "$(auto_unite opencode-hub && echo 1 || echo 0)" "$d")")
+  fi
+
+  # Agent
+  e="$(etat_unite opencode-agent)"
+  if [[ "$e" == absent ]]; then
+    l+=("$(ligne_etat Client absent - "")")
+  else
+    u="$(cle_unite "$UNIT_CLIENT" User)"
+    d="utilisateur ${u:-?}"
+    if [[ $EUID -eq 0 && -n "$u" && -x "$BIN_CIBLE" ]]; then
+      etat_agent="$(en_tant_que "$u" "$BIN_CIBLE" agent status 2>/dev/null || true)"
+      if grep -q '^hub ' <<<"$etat_agent"; then
+        d+=" $S_SEP $(sed -n 's/^hub *//p' <<<"$etat_agent" | head -n1)"
+      else
+        d+=" $S_SEP ${red}non enrôlé${reset}$dim"
+      fi
+    fi
+    l+=("$(ligne_etat Client "$e" "$(auto_unite opencode-agent && echo 1 || echo 0)" "$d")")
+  fi
+
+  # Binaire
+  if [[ -x "$BIN_CIBLE" ]]; then
+    l+=("$(ligne_etat Binaire installe - "$BIN_CIBLE $S_SEP $(version_de "$BIN_CIBLE")")")
+  else
+    l+=("$(ligne_etat Binaire absent - "$BIN_CIBLE")")
+  fi
+
+  cadre "$gris" "État des services" "${l[@]}"
+  [[ $EUID -eq 0 ]] || info "${dim}Lancer avec sudo pour voir aussi l'enrôlement de l'agent.${reset}"
+  echo
+  info "Journaux : ${dim}journalctl -u opencode-hub -f · journalctl -u opencode-agent -f · journalctl -u caddy -f${reset}"
+  echo
+}
+
+desinstaller() {
+  local present_caddy=0 present_hub=0 present_client=0 i u h dom sauvegarde
+  [[ -f "$CADDYFILE" ]] && grep -qF "$MARQUE" "$CADDYFILE" && present_caddy=1
+  command -v caddy >/dev/null && present_caddy=1
+  [[ -f "$UNIT_HUB" || -f "$ENV_FILE" ]] && present_hub=1
+  [[ -f "$UNIT_CLIENT" ]] && present_client=1
+
+  if ((!INSTALLER_CADDY && !INSTALLER_HUB && !INSTALLER_CLIENT)); then
+    local -a opts=() codes=()
+    ((present_caddy)) && { opts+=("Caddy   ${dim}configuration du hub, paquet en option${reset}"); codes+=(caddy); }
+    ((present_hub)) && { opts+=("Hub     ${dim}service opencode-hub, données en option${reset}"); codes+=(hub); }
+    ((present_client)) && { opts+=("Client  ${dim}service opencode-agent, enrôlement en option${reset}"); codes+=(client); }
+    ((${#opts[@]})) || { ok "Rien à désinstaller : ni Caddy, ni hub, ni agent installés."; return 0; }
+    interactif || die "préciser les composants à retirer : --caddy, --hub ou --client (voir --help)."
+    cocher "Que faut-il désinstaller ?" "${opts[@]}" || die "abandon."
+    for i in "${COCHES[@]}"; do
+      case "${codes[$i]}" in caddy) INSTALLER_CADDY=1 ;; hub) INSTALLER_HUB=1 ;; client) INSTALLER_CLIENT=1 ;; esac
+    done
+    ((INSTALLER_CADDY || INSTALLER_HUB || INSTALLER_CLIENT)) || die "aucun composant coché : rien à faire."
+  fi
+
+  # Questions avant d'agir ; --purge répond oui à tout.
+  local oublier=0 effacer_donnees=0 retirer_caddy=0 retirer_binaire=0
+  local -a recap=()
+  if ((INSTALLER_CLIENT)); then
+    if ((PURGER)) || oui_non "Oublier aussi l'enrôlement de cette machine auprès du hub ?" n; then oublier=1; fi
+    recap+=("${bold}Client${reset}  service opencode-agent arrêté et retiré$( ((oublier)) && echo ", enrôlement oublié" || true)")
+  fi
+  if ((INSTALLER_HUB)); then
+    if ((PURGER)) || oui_non "Supprimer aussi les données du hub ($DATA_DIR) ?" n; then effacer_donnees=1; fi
+    recap+=("${bold}Hub${reset}     service opencode-hub et $ENV_FILE retirés$( ((effacer_donnees)) && echo ", ${red}données effacées${reset}" || true)")
+  fi
+  if ((INSTALLER_CADDY)); then
+    if command -v caddy >/dev/null && { ((PURGER)) || oui_non "Désinstaller aussi le paquet Caddy ?" n; }; then retirer_caddy=1; fi
+    if ((retirer_caddy)); then recap+=("${bold}Caddy${reset}   paquet désinstallé, configuration du hub retirée")
+    else recap+=("${bold}Caddy${reset}   configuration du hub retirée (ancien Caddyfile restauré s'il existe)"); fi
+  fi
+  # Le binaire ne part que si plus rien ne s'en sert.
+  local hub_reste=$((present_hub && !INSTALLER_HUB)) client_reste=$((present_client && !INSTALLER_CLIENT))
+  if [[ -x "$BIN_CIBLE" ]] && ((!hub_reste && !client_reste)) && ((INSTALLER_HUB || INSTALLER_CLIENT)); then
+    if ((PURGER)) || oui_non "Supprimer aussi le binaire $BIN_CIBLE ?" n; then retirer_binaire=1; fi
+  fi
+  ((retirer_binaire)) && recap+=("${bold}Binaire${reset} $BIN_CIBLE supprimé")
+
+  echo
+  cadre "$gris" "Désinstallation" "${recap[@]}"
+  if [[ "$OUI" != 1 ]]; then
+    interactif || die "confirmation impossible hors terminal : ajouter --yes."
+    oui_non "Lancer la désinstallation ?" n || die "abandon : rien n'a été modifié."
+  fi
+  if ((effacer_donnees)); then
+    confirmer_grave "Les données du hub ($DATA_DIR : machines, fournisseurs, réglages) seront effacées." SUPPRIMER ||
+      die "abandon : rien n'a été modifié."
+  fi
+
+  # Client
+  if ((INSTALLER_CLIENT)); then
+    etape "Client"
+    u="$(cle_unite "$UNIT_CLIENT" User)"
+    if ((oublier)) && [[ -n "$u" && -x "$BIN_CIBLE" ]]; then
+      if en_tant_que "$u" "$BIN_CIBLE" agent leave >/dev/null 2>&1; then ok "Enrôlement oublié ($u)"
+      else warn "impossible d'oublier l'enrôlement : $BIN_CIBLE agent leave (en tant que $u)"; fi
+    fi
+    systemctl disable --now opencode-agent >/dev/null 2>&1 || true
+    rm -f "$UNIT_CLIENT"
+    systemctl daemon-reload
+    systemctl reset-failed opencode-agent >/dev/null 2>&1 || true
+    ok "Service opencode-agent arrêté et retiré"
+  fi
+
+  # Hub
+  if ((INSTALLER_HUB)); then
+    etape "Hub"
+    u="$(cle_unite "$UNIT_HUB" User)"
+    systemctl disable --now opencode-hub >/dev/null 2>&1 || true
+    rm -f "$UNIT_HUB" "$ENV_FILE"
+    systemctl daemon-reload
+    systemctl reset-failed opencode-hub >/dev/null 2>&1 || true
+    ok "Service opencode-hub et $ENV_FILE retirés"
+    if ((effacer_donnees)); then
+      rm -rf "$DATA_DIR"
+      ok "Données effacées : $DATA_DIR"
+      # L'utilisateur système part avec ses données, s'il a été créé par ce script (dossier personnel = données).
+      if [[ -n "$u" && "$u" != root ]] && id "$u" >/dev/null 2>&1 && [[ "$(dossier_de "$u")" == "$DATA_DIR" ]]; then
+        userdel "$u" >/dev/null 2>&1 && ok "Utilisateur système supprimé : $u" || warn "impossible de supprimer l'utilisateur $u"
+      fi
+    else
+      info "Données conservées : $DATA_DIR ${dim}(--purge pour les effacer)${reset}"
+    fi
+  fi
+
+  # Caddy
+  if ((INSTALLER_CADDY)); then
+    etape "Caddy"
+    if [[ -f "$CADDYFILE" ]] && grep -qF "$MARQUE" "$CADDYFILE"; then
+      sauvegarde="$(find "$(dirname "$CADDYFILE")" -maxdepth 1 -name 'Caddyfile.bak.*' -type f 2>/dev/null | sort | tail -n1 || true)"
+      if [[ -n "$sauvegarde" ]]; then
+        cp -p "$sauvegarde" "$CADDYFILE"
+        ok "Caddyfile restauré depuis $sauvegarde"
+      elif ((retirer_caddy)); then
+        rm -f "$CADDYFILE"
+      else
+        warn "aucune sauvegarde : $CADDYFILE renvoie toujours vers le hub ; le modifier puis : systemctl reload caddy"
+      fi
+    fi
+    if ((retirer_caddy)); then
+      suivre "Désinstallation du paquet Caddy" env DEBIAN_FRONTEND=noninteractive apt-get purge -y -q caddy
+      rm -f /etc/apt/sources.list.d/caddy-stable.list /usr/share/keyrings/caddy-stable-archive-keyring.gpg
+      ok "Dépôt apt de Caddy retiré"
+    elif command -v caddy >/dev/null && systemctl is-active --quiet caddy; then
+      systemctl reload caddy >/dev/null 2>&1 && ok "Caddy rechargé" || warn "rechargement de Caddy impossible : journalctl -u caddy -e"
+    fi
+  fi
+
+  # Binaire
+  if ((retirer_binaire)); then
+    rm -f "$BIN_CIBLE"
+    ok "Binaire supprimé : $BIN_CIBLE"
+  fi
+
+  echo
+  cadre "$green" "Désinstallation terminée" "État actuel : ${dim}./install.sh --status${reset}"
+  echo
+}
+
 # ================================================================== Démarrage
 
-titre_onglet "opencode-hub · installation"
-banniere "opencode-hub" "installation"
+command -v systemctl >/dev/null || die "systemd est nécessaire (systemctl introuvable)."
+case "$MODE" in
+  etat) titre_onglet "opencode-hub · état"; banniere "opencode-hub" "état des services"; afficher_etat; exit 0 ;;
+  desinstaller) titre_onglet "opencode-hub · désinstallation"; banniere "opencode-hub" "désinstallation" ;;
+  *) titre_onglet "opencode-hub · installation"; banniere "opencode-hub" "installation" ;;
+esac
 
 # Droits administrateur : on propose de relancer avec sudo.
 if [[ $EUID -ne 0 ]]; then
-  if command -v sudo >/dev/null 2>&1 && interactif && oui_non "L'installation demande les droits administrateur. Relancer avec sudo ?"; then
+  if command -v sudo >/dev/null 2>&1 && interactif && oui_non "Cette opération demande les droits administrateur. Relancer avec sudo ?"; then
     exec sudo env OPENCODE_HUB_SANS_BANNIERE=1 bash "$0" "${ARGS_ORIGINAUX[@]}"
   fi
   die "lancer en administrateur : sudo $0 ${ARGS_ORIGINAUX[*]}"
 fi
-command -v systemctl >/dev/null || die "systemd est nécessaire (systemctl introuvable)."
 
 APPELANT="${SUDO_USER:-root}"
+
+if [[ "$MODE" == desinstaller ]]; then desinstaller; exit 0; fi
 
 # ------------------------------------------------------------------ Choix des composants
 
