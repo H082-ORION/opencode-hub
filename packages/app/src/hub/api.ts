@@ -87,6 +87,83 @@ export type SkillDraft = { name: string; files: HubSkillFile[] }
 
 export type EnrollmentCode = { code: string; expiresAt: number; command: string }
 
+export type HubCloudLimits = { cpu: number; memory_mib: number; disk_gib: number }
+
+export type HubCloudStatus =
+  | "creating"
+  | "starting"
+  | "stopping"
+  | "deleting"
+  | "running"
+  | "stopped"
+  | "failed"
+  | "missing"
+
+/** A cloud instance: a VM on a cloud server, which becomes one of the user's machines (`machine`) once paired. */
+export type HubCloudInstance = {
+  id: string
+  name: string
+  host: { id: string; name: string }
+  status: HubCloudStatus
+  error: string | null
+  limits: HubCloudLimits
+  machine: string | null
+  /** The handoff link that opens its machine; null until the VM paired. */
+  url: string | null
+  createdAt: number
+  metrics: {
+    cpuPercent: number | null
+    memoryUsedBytes: number
+    memoryTotalBytes: number
+    diskUsedBytes: number
+    networkRxBytes: number
+    networkTxBytes: number
+  } | null
+}
+
+/** A cloud server as users see it: the most one new instance may get there, null while it is offline. */
+export type HubCloudHost = {
+  id: string
+  name: string
+  online: boolean
+  max: (HubCloudLimits & { full: boolean }) | null
+}
+
+export type HubCloudResource = { total: number; reserved: number; allocated: number; available: number }
+
+/** A cloud server as administrators see it, with what its agent last reported. */
+export type HubCloudAdminHost = {
+  id: string
+  name: string
+  online: boolean
+  lastSeenAt: number | null
+  version: string | null
+  lxdVersion: string | null
+  capacity: {
+    cpu: HubCloudResource
+    memory_mib: HubCloudResource
+    disk_gib: HubCloudResource
+    instances: { count: number; max: number }
+    per_instance_max: HubCloudLimits
+  } | null
+  metrics: {
+    cpu_threads: number
+    load: number[]
+    memory_total_bytes: number
+    memory_used_bytes: number
+    disk_total_bytes: number
+    disk_used_bytes: number
+  } | null
+  instances: number
+}
+
+/** `GET cloud` and the `cloud` event: `admin` is null for users who do not administer the hub. */
+export type HubCloud = {
+  hosts: HubCloudHost[]
+  instances: HubCloudInstance[]
+  admin: { hosts: HubCloudAdminHost[]; instances: (HubCloudInstance & { owner: string | null })[] } | null
+}
+
 export type HubRole = "admin" | "user"
 
 export type HubSession = {
@@ -193,6 +270,14 @@ export const hubApi = {
   removeMember: (org: string, user: string) =>
     request<void>(`orgs/${encodeURIComponent(org)}/members/${encodeURIComponent(user)}`, { method: "DELETE" }),
   revoke: (id: string) => request<void>(`machines/${encodeURIComponent(id)}`, { method: "DELETE" }),
+  createCloudInstance: (body: HubCloudLimits & { host: string; name: string }) =>
+    post<{ instance: HubCloudInstance }>("cloud/instances", body),
+  startCloudInstance: (id: string) => post<object>(`cloud/instances/${encodeURIComponent(id)}/start`, {}),
+  stopCloudInstance: (id: string) => post<object>(`cloud/instances/${encodeURIComponent(id)}/stop`, {}),
+  deleteCloudInstance: (id: string) => request<void>(`cloud/instances/${encodeURIComponent(id)}`, { method: "DELETE" }),
+  /** A one-time code an administrator gives `agent-hub-lxd join` on a new cloud server. */
+  createHostCode: () => post<EnrollmentCode>("cloud/hosts/code", {}),
+  revokeCloudHost: (id: string) => request<void>(`cloud/hosts/${encodeURIComponent(id)}`, { method: "DELETE" }),
   skills: () => request<HubSkills>("skills"),
   saveSkill: (body: SkillDraft, id?: string) =>
     post<{ skill: HubSkill }>(id ? `skills/${encodeURIComponent(id)}` : "skills", body),

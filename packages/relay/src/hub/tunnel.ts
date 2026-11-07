@@ -1,6 +1,7 @@
 import type { Server, ServerWebSocket } from "bun"
 import { toHeaders, withoutHopByHop } from "../headers.js"
 import { Protocol } from "../protocol.js"
+import type { Cloud } from "./cloud.js"
 import type { Machine } from "./store.js"
 
 export * as Tunnel from "./tunnel.js"
@@ -8,6 +9,7 @@ export * as Tunnel from "./tunnel.js"
 export type SocketData =
   | { kind: "tunnel"; machine: Machine; tunnel?: Instance }
   | { kind: "client"; tunnel: Instance; stream: number }
+  | Cloud.SocketData
 
 type Head = { status: number; headers: Headers }
 

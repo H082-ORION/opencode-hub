@@ -7,6 +7,7 @@ import { Accounts, json } from "./accounts.js"
 import { Auth } from "./auth.js"
 import { Catalog } from "./catalog.js"
 import { ChatGPT } from "./chatgpt.js"
+import { Cloud } from "./cloud.js"
 import { Connectors } from "./connectors.js"
 import { Egress } from "./egress.js"
 import { Html } from "./html.js"
@@ -109,6 +110,7 @@ export async function start(options: Options) {
       open(ws) {
         const data = ws.data
         if (data.kind === "client") return data.tunnel.clientOpen(ws, data.stream)
+        if (data.kind === "host") return cloud.open(ws, data)
         setTimeout(() => {
           if (!data.tunnel) ws.close(4400, "expected HELLO")
         }, HELLO_TIMEOUT)
@@ -117,6 +119,7 @@ export async function start(options: Options) {
         const data = ws.data
         if (data.kind === "client")
           return data.tunnel.clientMessage(data.stream, typeof message === "string" ? message : new Uint8Array(message))
+        if (data.kind === "host") return cloud.message(ws, data, message)
         const frame = Protocol.decode(message)
         if (!data.tunnel) return hello(ws, data, frame)
         if (!frame) return
@@ -126,6 +129,7 @@ export async function start(options: Options) {
       close(ws, code, reason) {
         const data = ws.data
         if (data.kind === "client") return data.tunnel.clientClose(data.stream, code, reason)
+        if (data.kind === "host") return cloud.close(data)
         if (!data.tunnel) return
         clearInterval(pings.get(data.tunnel))
         pings.delete(data.tunnel)
@@ -187,6 +191,16 @@ export async function start(options: Options) {
     },
   })
 
+  const cloud = Cloud.create({
+    store,
+    auth,
+    origin,
+    pingInterval: options.pingInterval,
+    machineURL: (id) => `/hub/handoff?next=${encodeURIComponent(`${machineOrigin(id)}/`)}`,
+    changed: () => notifyCloud(),
+    revokeMachine: (id) => revokeMachine(id),
+  })
+
   return {
     url: origin,
     port: server.port ?? 0,
@@ -201,6 +215,7 @@ export async function start(options: Options) {
     createEnrollmentCode: (user: string, org?: string) => auth.createCode(user, org),
     async stop() {
       pings.forEach((timer) => clearInterval(timer))
+      cloud.stop()
       listeners.forEach((listener) => listener.close())
       tunnels.forEach((tunnel) => tunnel.ws.close(1001, "hub stopping"))
       await server.stop(true)
@@ -224,6 +239,8 @@ export async function start(options: Options) {
     if (pathname === "/hub/tls-allowed") return tlsAllowed(url)
     if (pathname === "/hub/agent/enroll") return enroll(request, server)
     if (pathname === "/hub/agent/connect") return connect(request, server)
+    if (pathname === "/hub/host/enroll") return cloud.enroll(request, clientAddress(request, server))
+    if (pathname === "/hub/host/connect") return connectHost(request, server)
     if (pathname.startsWith("/llm/")) return Llm.proxy(request, url, { store, providers, allowed: mayOpen, chatgpt })
     if (pathname.startsWith("/mcp/"))
       return Mcp.proxy(request, url, { store, connectors, oauth, egress, allowed: mayOpen, origin })
@@ -264,6 +281,8 @@ export async function start(options: Options) {
     if (organizations) return organizations
     const connector = await connectors.handle(request, route, current)
     if (connector) return connector
+    const clouds = await cloud.handle(request, route, current)
+    if (clouds) return clouds
     const signIn = /^connectors\/([^/]+)\/oauth\/begin$/.exec(route)
     if (signIn && method === "POST") return beginOAuth(user.id, decodeURIComponent(signIn[1]))
     if (route === "machines" && method === "GET") return json(200, machineList(user.id))
@@ -290,14 +309,10 @@ export async function start(options: Options) {
       if (!target || (user.role !== "admin" && !canOpen(user, target))) return json(404, { error: "Unknown machine." })
       if (!canRevoke(user, target))
         return json(403, { error: "Only the member who enrolled this machine or an administrator can revoke it." })
-      const instances = store.instancesOf(id)
-      if (!store.deleteMachine(id)) return json(404, { error: "Unknown machine." })
-      // The agent deletes its instances before it stops for good.
-      const tunnel = tunnels.get(id)
-      instances.forEach((instance) => tunnel?.send(Protocol.encodeJson(Protocol.Type.DROP, 0, { iid: instance.id })))
-      tunnel?.ws.close(4403, "machine revoked")
-      tunnels.delete(id)
-      notifyMachines()
+      // Its VM would stay paired with nothing: the cloud instance goes, and its machine with it.
+      if (cloud.instanceOf(id))
+        return json(409, { error: "This machine is a cloud instance. Delete the cloud instance instead." })
+      if (!revokeMachine(id)) return json(404, { error: "Unknown machine." })
       return new Response(null, { status: 204 })
     }
     if (route === "providers" && method === "GET") return json(200, providerList(user.id))
@@ -394,6 +409,25 @@ export async function start(options: Options) {
     return json(200, { provider: { id, name, baseURL, auth: "key" } })
   }
 
+  /** Deletes a machine with its instances and disconnects its agent, which deletes them before it stops for good. */
+  function revokeMachine(id: string) {
+    const instances = store.instancesOf(id)
+    if (!store.deleteMachine(id)) return false
+    const tunnel = tunnels.get(id)
+    instances.forEach((instance) => tunnel?.send(Protocol.encodeJson(Protocol.Type.DROP, 0, { iid: instance.id })))
+    tunnel?.ws.close(4403, "machine revoked")
+    tunnels.delete(id)
+    notifyMachines()
+    return true
+  }
+
+  function connectHost(request: Request, server: Server<Tunnel.SocketData>) {
+    const host = cloud.authenticate(request)
+    if (!host) return Response.json({ error: "unknown or revoked host" }, { status: 401 })
+    if (server.upgrade(request, { data: { kind: "host", host } })) return undefined
+    return Response.json({ error: "expected a WebSocket upgrade" }, { status: 426 })
+  }
+
   function events(current: Accounts.Current) {
     const encoder = new TextEncoder()
     const state = {} as { listener?: Listener; timer?: Timer }
@@ -415,7 +449,7 @@ export async function start(options: Options) {
         }
         listeners.add(state.listener)
         state.timer = setInterval(() => send(": keepalive\n\n"), KEEPALIVE_INTERVAL)
-        send(`retry: 2000\n${machinesEvent(current.user.id)}`)
+        send(`retry: 2000\n${machinesEvent(current.user.id)}${cloudEvent(current.user.id)}`)
       },
       cancel: cleanup,
     })
@@ -436,6 +470,16 @@ export async function start(options: Options) {
     listeners.forEach((listener) => listener.send(machinesEvent(listener.user)))
   }
 
+  /** The user's cloud view (`GET cloud`); empty for a user who no longer exists. */
+  function cloudEvent(id: string) {
+    const user = store.user(id)
+    return user ? `event: cloud\ndata: ${JSON.stringify(cloud.view(user))}\n\n` : ""
+  }
+
+  function notifyCloud() {
+    listeners.forEach((listener) => listener.send(cloudEvent(listener.user)))
+  }
+
   /**
    * The machines a user may open, with their handoff links: personal ones first, then each organization's. `org` is
    * null for a personal machine.
@@ -450,7 +494,8 @@ export async function start(options: Options) {
       online: tunnels.has(machine.id),
       lastSeenAt: machine.last_seen_at,
       url: `/hub/handoff?next=${encodeURIComponent(`${machineOrigin(machine.id)}/`)}`,
-      canRevoke: canRevoke(user, machine),
+      // A cloud instance's machine goes away with the instance, from the cloud section.
+      canRevoke: canRevoke(user, machine) && !cloud.instanceOf(machine.id),
     }))
   }
 
@@ -611,7 +656,7 @@ export async function start(options: Options) {
     const name = body?.name.trim().slice(0, 100)
     if (!body || !name) return Response.json({ error: "expected { code, name }" }, { status: 400 })
     const code = auth.consumeCode(body.code)
-    if (!code) {
+    if (!code || code.kind !== "machine") {
       auth.fail(client)
       return Response.json({ error: INVALID_CODE }, { status: 403 })
     }
@@ -621,7 +666,12 @@ export async function start(options: Options) {
     if (!author) return Response.json({ error: INVALID_CODE }, { status: 403 })
     if (code.org !== undefined && !(store.org(code.org) && store.isMember(code.org, author.id)))
       return Response.json({ error: INVALID_CODE }, { status: 403 })
-    const enrolled = store.createMachine({ name, enrolledBy: author.id, org: code.org })
+    // A cloud instance's VM becomes a personal machine of the instance's user, named after the instance.
+    if (code.cloud !== undefined && !cloud.linkable(code.cloud, author.id))
+      return Response.json({ error: INVALID_CODE }, { status: 403 })
+    const instance = code.cloud === undefined ? undefined : store.cloudInstance(code.cloud)
+    const enrolled = store.createMachine({ name: instance?.name ?? name, enrolledBy: author.id, org: code.org })
+    if (instance) cloud.link(instance.id, enrolled.machine.id)
     notifyMachines()
     return Response.json({ ...enrolled, url: origin })
   }
