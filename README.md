@@ -120,11 +120,19 @@ Détails sur Caddy, le DNS et le dépannage : [`script/hub/README.md`](script/hu
 |---|---|
 | `opencode hub [--port 4800] [--url https://hub.exemple.fr] [--data <dossier>]` | Lance le hub |
 | `opencode hub password` | Réinitialise le mot de passe du hub |
-| `opencode agent join <url> --code <code> [--name <nom>]` | Enrôle cette machine |
+| `opencode agent join <url> [--code <code>] [--name <nom>] [--insecure]` | Enrôle cette machine (sans `--code`, le code est demandé sans affichage ou lu sur l'entrée standard) |
 | `opencode agent run` | Maintient la machine connectée au hub |
 | `opencode agent status` / `opencode agent leave` | État de l'enrôlement / désenrôlement |
 
 <img src="docs/hub/provider-variants-phone.png" alt="Variantes d'un fournisseur sur téléphone" width="260" align="right">
+
+## Sécurité de l'enrôlement
+
+Le code d'enrôlement, puis les jetons que le hub renvoie à la machine, ne passent qu'en HTTPS : `opencode agent join`
+et `install.sh` refusent une URL en `http://` vers une autre machine (seuls `localhost`, `*.localhost`, `127.x.x.x` et
+`::1` restent permis en HTTP, pour les essais locaux). Ils refusent aussi un hub qui annonce une URL publique en
+`http://`, car le tunnel y enverrait le jeton de la machine en clair. `--insecure` lève ces deux refus, en connaissance
+de cause. Sans `--code`, le code n'apparaît ni dans la liste des processus ni dans l'historique du shell.
 
 ## Limites connues
 

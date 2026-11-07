@@ -577,10 +577,19 @@ const Root = Spec.make(typeof OPENCODE_CLI_NAME === "string" ? OPENCODE_CLI_NAME
           description: "Enroll this machine with a hub",
           params: {
             url: Argument.String("url").pipe(Argument.withDescription("Hub URL")),
-            code: Flag.String("code").pipe(Flag.withDescription("One-time enrollment code from the hub dashboard")),
+            code: Flag.String("code").pipe(
+              Flag.withDescription(
+                "One-time enrollment code from the hub dashboard (default: asked without echo, or read from stdin)",
+              ),
+              Flag.optional,
+            ),
             name: Flag.String("name").pipe(
               Flag.withDescription("Machine name (default: this computer's hostname)"),
               Flag.optional,
+            ),
+            insecure: Flag.Boolean("insecure").pipe(
+              Flag.withDescription("Allow a plain HTTP hub URL on another machine (code and tokens in clear text)"),
+              Flag.withDefault(false),
             ),
           },
         }),

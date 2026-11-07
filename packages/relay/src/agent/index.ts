@@ -58,8 +58,33 @@ const DROPPED = new Set([...HOP_BY_HOP, "host", "origin", "cookie", "authorizati
 
 const decodeEnrollment = Schema.decodeUnknownOption(Enrollment)
 
-/** Enrolls this machine with a one-time code from the hub dashboard. */
-export async function enroll(input: { url: string; code: string; name: string }): Promise<Enrollment> {
+/**
+ * Whether a hub URL keeps the enrollment code and the machine's tokens off the network in clear text: HTTPS, or
+ * plain HTTP to this machine only (localhost, *.localhost, 127.0.0.0/8, ::1).
+ */
+export function isSecureURL(input: string) {
+  const url = new URL(input)
+  if (url.protocol === "https:") return true
+  if (url.protocol !== "http:") return false
+  const host = url.hostname
+  return host === "localhost" || host.endsWith(".localhost") || host === "[::1]" || /^127(\.\d{1,3}){3}$/.test(host)
+}
+
+/**
+ * Enrolls this machine with a one-time code from the hub dashboard. The code, and the tokens the hub answers with,
+ * only travel over HTTPS unless `insecure` allows plain HTTP to another machine.
+ */
+export async function enroll(input: {
+  url: string
+  code: string
+  name: string
+  insecure?: boolean
+}): Promise<Enrollment> {
+  if (!input.insecure && !isSecureURL(input.url)) {
+    throw new Error(
+      `refusing to send the enrollment code in clear text to ${new URL(input.url).host}: use an https:// hub URL, or pass --insecure`,
+    )
+  }
   const response = await fetch(new URL("/hub/agent/enroll", input.url), {
     method: "POST",
     headers: { "content-type": "application/json" },
@@ -72,6 +97,13 @@ export async function enroll(input: { url: string; code: string; name: string })
   }
   const enrollment = Option.getOrUndefined(decodeEnrollment(body))
   if (!enrollment) throw new Error("enrollment failed: unexpected response from the hub")
+  // The tunnel connects to the URL the hub announces (its --url), and sends the tunnel token on every connection.
+  if (!input.insecure && !isSecureURL(enrollment.url)) {
+    throw new Error(
+      `the hub announces the plain HTTP URL ${enrollment.url}, so the tunnel would carry this machine's token in clear text: ` +
+        `start the hub with an https:// --url, delete "${enrollment.machine.name}" in the dashboard, then enroll again (or pass --insecure)`,
+    )
+  }
   return enrollment
 }
 
