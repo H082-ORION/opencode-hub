@@ -44,6 +44,10 @@ un dossier, et on travaille comme si on était devant.
 - **Relais MCP** : les connecteurs MCP distants de chaque utilisateur (en-têtes secrets ou connexion OAuth gérée par le
   hub) sont chiffrés sur le hub ; les machines les joignent par `<hub>/mcp/<id>` avec le même jeton, et le hub ajoute
   les secrets au passage. Ils apparaissent sur les machines comme les serveurs MCP `hub-<id>`.
+- **Instances Cloud** : un administrateur lie des serveurs LXD (agent Rust
+  [`agent-hub-lxd`](https://github.com/h082-orion/agent-hub-lxd), connexion sortante comme les machines). Chaque
+  utilisateur y crée des VM avec opencode déjà installé, qui deviennent ses machines. Le hub affiche la capacité des
+  serveurs et l'usage de chaque instance *(expérimental, voir [`specs/cloud.md`](specs/cloud.md))*.
 - **Catalogue de fournisseurs** : plus de 200 fournisseurs issus du catalogue d'OpenCode, groupés par entreprise, avec
   l'URL de l'API déjà renseignée. Il ne reste qu'à coller la clé.
 - **Abonnement ChatGPT** : connexion « Sign in with ChatGPT » sur le hub, jeton renouvelé automatiquement *(non testé

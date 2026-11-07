@@ -9,7 +9,7 @@ import { showToast } from "@opencode/ui/toast"
 import { createEffect, createMemo, createSignal, For, Match, on, onCleanup, Show, Switch, untrack } from "solid-js"
 import { createStore, reconcile } from "solid-js/store"
 import { AddMachineDialog } from "./add-machine"
-import { errorText, hubApi, HubError, type HubAdminMachine, type HubMachine } from "./api"
+import { errorText, hubApi, HubError, type HubAdminMachine, type HubCloud, type HubMachine } from "./api"
 import { copy } from "./copy"
 import type { Fail } from "./dashboard"
 import { createFeed, feedReconnecting, transitionFeed, type FeedEffect, type FeedEvent } from "./machine"
@@ -22,7 +22,13 @@ const UNITS = [
   { unit: "minute", ms: 60_000 },
 ] as const
 
-export function Machines(props: { onSignedOut: () => void; fail: Fail; onChange?: () => void }) {
+export function Machines(props: {
+  onSignedOut: () => void
+  fail: Fail
+  onChange?: () => void
+  /** The `cloud` events of the same stream: the user's cloud view, after every change on the hub's cloud. */
+  onCloud?: (cloud: HubCloud) => void
+}) {
   const dialog = useDialog()
   const [machines, setMachines] = createStore<{ loaded: boolean; list: HubMachine[] }>({ loaded: false, list: [] })
   const initial = createFeed()
@@ -79,6 +85,8 @@ export function Machines(props: { onSignedOut: () => void; fail: Fail; onChange?
       // The hub sends this event whenever any machine enrolls, connects, disconnects or is revoked.
       props.onChange?.()
     })
+    // SAFETY: the hub that serves this page writes `cloud` events from the same view as `GET cloud`.
+    source.addEventListener("cloud", (event) => props.onCloud?.(JSON.parse(event.data) as HubCloud))
   }
 
   initial.effects.forEach(run)

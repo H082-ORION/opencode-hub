@@ -3,7 +3,8 @@ import { Mark } from "@opencode/ui/logo"
 import { showToast } from "@opencode/ui/toast"
 import { createSignal, Show } from "solid-js"
 import { AccountSection } from "./account"
-import { errorText, hubApi, HubError, type HubSession } from "./api"
+import { errorText, hubApi, HubError, type HubCloud, type HubSession } from "./api"
+import { CloudHosts, CloudInstances } from "./cloud"
 import { copy } from "./copy"
 import { Connectors } from "./connectors"
 import { AllMachines, Machines } from "./machines"
@@ -24,6 +25,9 @@ export function Dashboard(props: { session: HubSession; onSignedOut: () => void 
   // which locks it.
   const [unlocked, setUnlocked] = createSignal(props.session.unlocked)
 
+  // The cloud view, live from the same event stream as the machines.
+  const [cloud, setCloud] = createSignal<HubCloud>({ hosts: [], instances: [], admin: null })
+
   const signOut = () => hubApi.logout().then(props.onSignedOut, (error: unknown) => fail(copy.error.unknown, error))
 
   return (
@@ -39,7 +43,13 @@ export function Dashboard(props: { session: HubSession; onSignedOut: () => void 
       </header>
       <main class="hub-scroll" data-scrollable>
         <div class="hub-content">
-          <Machines onSignedOut={props.onSignedOut} fail={fail} onChange={() => setRevision((value) => value + 1)} />
+          <Machines
+            onSignedOut={props.onSignedOut}
+            fail={fail}
+            onChange={() => setRevision((value) => value + 1)}
+            onCloud={setCloud}
+          />
+          <CloudInstances cloud={cloud()} fail={fail} />
           <Providers fail={fail} unlocked={unlocked()} onLocked={() => setUnlocked(false)} onSignOut={signOut} />
           <Connectors fail={fail} unlocked={unlocked()} onLocked={() => setUnlocked(false)} onSignOut={signOut} />
           <Skills fail={fail} />
@@ -52,6 +62,7 @@ export function Dashboard(props: { session: HubSession; onSignedOut: () => void 
           <Show when={props.session.user.role === "admin"}>
             <Users fail={fail} />
             <Organizations fail={fail} />
+            <CloudHosts cloud={cloud()} fail={fail} />
             <AllMachines fail={fail} revision={revision} />
           </Show>
         </div>

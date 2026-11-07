@@ -117,6 +117,52 @@ export type ConnectorRow = {
 /** Connector fields that are safe to show in the UI and to send to machines. */
 export type ConnectorSummary = Pick<ConnectorRow, "id" | "name" | "url" | "auth" | "header_names" | "connected_at">
 
+/**
+ * An LXD server enrolled by an administrator (specs/cloud.md). Its agent (`agent-hub-lxd`) keeps a WebSocket open to
+ * the hub and creates cloud instances there; `token_hash` is the SHA-256 of its host token.
+ */
+export type CloudHost = {
+  id: string
+  name: string
+  created_by: string | null
+  created_at: number
+  last_seen_at: number | null
+}
+
+/**
+ * Where a cloud instance stands, as the hub last learned it: from its own request (`creating`, `starting`, `stopping`,
+ * `deleting`), from the host's answer (`running`, `stopped`, `failed`), or from a host that no longer lists it
+ * (`missing`).
+ */
+export type CloudStatus =
+  | "creating"
+  | "starting"
+  | "stopping"
+  | "deleting"
+  | "running"
+  | "stopped"
+  | "failed"
+  | "missing"
+
+/**
+ * A user's cloud instance: the VM `hub-<id>` on a cloud host. `machine_id` names the machine the VM became once it
+ * paired with the hub; null until then.
+ */
+export type CloudInstanceRow = {
+  id: string
+  host_id: string
+  user_id: string
+  name: string
+  cpu: number
+  memory_mib: number
+  disk_gib: number
+  status: CloudStatus
+  error: string | null
+  machine_id: string | null
+  created_at: number
+  updated_at: number
+}
+
 export type Role = "admin" | "user"
 
 export type User = {
@@ -308,6 +354,30 @@ export function open(dir: string) {
     PRIMARY KEY (invitation_id, org_id)
   )`)
 
+  // Cloud hosts and their instances (specs/cloud.md).
+  db.run(`CREATE TABLE IF NOT EXISTS cloud_host (
+    id TEXT PRIMARY KEY,
+    name TEXT NOT NULL,
+    token_hash TEXT NOT NULL UNIQUE,
+    created_by TEXT,
+    created_at INTEGER NOT NULL,
+    last_seen_at INTEGER
+  )`)
+  db.run(`CREATE TABLE IF NOT EXISTS cloud_instance (
+    id TEXT PRIMARY KEY,
+    host_id TEXT NOT NULL,
+    user_id TEXT NOT NULL,
+    name TEXT NOT NULL,
+    cpu INTEGER NOT NULL,
+    memory_mib INTEGER NOT NULL,
+    disk_gib INTEGER NOT NULL,
+    status TEXT NOT NULL,
+    error TEXT,
+    machine_id TEXT UNIQUE,
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL
+  )`)
+
   const machineColumns = "id, name, owner_user_id, owner_org_id, enrolled_by, created_at, last_seen_at"
   const queries = {
     machines: db.query<MachineSummary, []>(
@@ -388,6 +458,24 @@ export function open(dir: string) {
     skillCount: db.query<{ count: number }, [string, string]>(
       "SELECT count(*) AS count FROM skill WHERE owner_kind = ? AND owner_id = ?",
     ),
+    cloudHosts: db.query<CloudHost, []>(
+      "SELECT id, name, created_by, created_at, last_seen_at FROM cloud_host ORDER BY created_at",
+    ),
+    cloudHost: db.query<CloudHost, [string]>(
+      "SELECT id, name, created_by, created_at, last_seen_at FROM cloud_host WHERE id = ?",
+    ),
+    cloudHostByToken: db.query<CloudHost, [string]>(
+      "SELECT id, name, created_by, created_at, last_seen_at FROM cloud_host WHERE token_hash = ?",
+    ),
+    cloudInstances: db.query<CloudInstanceRow, []>("SELECT * FROM cloud_instance ORDER BY created_at"),
+    cloudInstance: db.query<CloudInstanceRow, [string]>("SELECT * FROM cloud_instance WHERE id = ?"),
+    cloudInstancesOf: db.query<CloudInstanceRow, [string]>(
+      "SELECT * FROM cloud_instance WHERE user_id = ? ORDER BY created_at",
+    ),
+    cloudInstancesOn: db.query<CloudInstanceRow, [string]>(
+      "SELECT * FROM cloud_instance WHERE host_id = ? ORDER BY created_at",
+    ),
+    cloudInstanceByMachine: db.query<CloudInstanceRow, [string]>("SELECT * FROM cloud_instance WHERE machine_id = ?"),
     invitations: db.query<InvitationSummary, [number]>(
       `SELECT invitation.id, invitation.role, invitation.created_by, invitation.user_id, invitation.created_at,
          invitation.expires_at, invitation.used_at, creator.login AS created_by_login, target.login AS user_login
@@ -479,6 +567,97 @@ export function open(dir: string) {
         db.run("DELETE FROM instance WHERE machine_id = ?", [id])
         return db.run("DELETE FROM machine WHERE id = ?", [id]).changes > 0
       })(),
+    cloudHosts: () => queries.cloudHosts.all(),
+    cloudHost: (id: string) => queries.cloudHost.get(id) ?? undefined,
+    cloudHostByToken: (token: string) => queries.cloudHostByToken.get(hashToken(token)) ?? undefined,
+    /** Creates a cloud host with an id derived from `name` and returns it with its fresh plaintext host token. */
+    createCloudHost(input: { name: string; createdBy: string }) {
+      const token = randomToken()
+      const id = db.transaction(() => {
+        const hostID = availableID(slug(input.name), (candidate) => queries.cloudHost.get(candidate) !== null)
+        db.run("INSERT INTO cloud_host (id, name, token_hash, created_by, created_at) VALUES (?, ?, ?, ?, ?)", [
+          hostID,
+          input.name,
+          hashToken(token),
+          input.createdBy,
+          Date.now(),
+        ])
+        return hostID
+      })()
+      return { host: { id, name: input.name }, token }
+    },
+    /** Deletes a cloud host, whose token stops working, unless it still has instances. */
+    deleteCloudHost: (id: string) =>
+      db.transaction((): "unknown" | "has-instances" | "deleted" => {
+        if (!queries.cloudHost.get(id)) return "unknown"
+        if (queries.cloudInstancesOn.all(id).length > 0) return "has-instances"
+        db.run("DELETE FROM cloud_host WHERE id = ?", [id])
+        return "deleted"
+      })(),
+    touchCloudHost: (id: string) => db.run("UPDATE cloud_host SET last_seen_at = ? WHERE id = ?", [Date.now(), id]),
+    cloudInstances: () => queries.cloudInstances.all(),
+    cloudInstance: (id: string) => queries.cloudInstance.get(id) ?? undefined,
+    cloudInstancesOf: (user: string) => queries.cloudInstancesOf.all(user),
+    cloudInstancesOn: (host: string) => queries.cloudInstancesOn.all(host),
+    cloudInstanceByMachine: (machine: string) => queries.cloudInstanceByMachine.get(machine) ?? undefined,
+    /** Records a cloud instance the hub is about to ask its host for, with a random DNS-safe id. */
+    createCloudInstance(input: {
+      host: string
+      user: string
+      name: string
+      limits: { cpu: number; memory_mib: number; disk_gib: number }
+    }) {
+      const id = cloudID()
+      const now = Date.now()
+      db.run(
+        `INSERT INTO cloud_instance (id, host_id, user_id, name, cpu, memory_mib, disk_gib, status, created_at,
+           updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, 'creating', ?, ?)`,
+        [
+          id,
+          input.host,
+          input.user,
+          input.name,
+          input.limits.cpu,
+          input.limits.memory_mib,
+          input.limits.disk_gib,
+          now,
+          now,
+        ],
+      )
+      return queries.cloudInstance.get(id)!
+    },
+    /** Changes what the hub knows of a cloud instance; fields left out keep their value. */
+    updateCloudInstance(
+      id: string,
+      change: {
+        status?: CloudStatus
+        error?: string | null
+        machine?: string
+        limits?: { cpu: number; memory_mib: number; disk_gib: number }
+      },
+    ) {
+      const current = queries.cloudInstance.get(id)
+      if (!current) return undefined
+      db.run(
+        `UPDATE cloud_instance SET status = ?, error = ?, machine_id = ?, cpu = ?, memory_mib = ?, disk_gib = ?,
+           updated_at = ? WHERE id = ?`,
+        [
+          change.status ?? current.status,
+          change.error === undefined ? current.error : change.error,
+          change.machine ?? current.machine_id,
+          change.limits?.cpu ?? current.cpu,
+          change.limits?.memory_mib ?? current.memory_mib,
+          change.limits?.disk_gib ?? current.disk_gib,
+          Date.now(),
+          id,
+        ],
+      )
+      return queries.cloudInstance.get(id) ?? undefined
+    },
+    /** Forgets a cloud instance and returns it, so the machine it became can be revoked too. */
+    deleteCloudInstance: (id: string) =>
+      db.query<CloudInstanceRow, [string]>("DELETE FROM cloud_instance WHERE id = ? RETURNING *").get(id) ?? undefined,
     /** A user's instance on a machine, if it has one. */
     instance: (machine: string, user: string) => queries.instance.get(machine, user) ?? undefined,
     /** Creates the user's instance on a machine unless it exists, and returns it. */
@@ -904,6 +1083,15 @@ export function randomToken() {
 
 export function hashToken(token: string) {
   return new Bun.CryptoHasher("sha256").update(token).digest("hex")
+}
+
+/**
+ * A cloud instance id: 12 characters from a-z and 0-9 (about 62 bits), so `hub-<id>` is a valid VM and host name and
+ * matches what the LXD agent accepts.
+ */
+export function cloudID() {
+  const alphabet = "abcdefghijklmnopqrstuvwxyz0123456789"
+  return Array.from(crypto.getRandomValues(new Uint8Array(12)), (byte) => alphabet[byte % alphabet.length]).join("")
 }
 
 /** A 128-bit random identifier, unpadded base64url. */

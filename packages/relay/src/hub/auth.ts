@@ -6,6 +6,8 @@ export const COOKIE = "opencode_hub"
 
 const SESSION_TTL = 30 * 24 * 60 * 60 * 1000
 const CODE_TTL = 10 * 60 * 1000
+// A cloud VM uses its code once it has booted and its pairing command runs, which takes minutes on a busy host.
+const CLOUD_CODE_TTL = 30 * 60 * 1000
 const TICKET_TTL = 60 * 1000
 const ATTEMPT_TTL = 60 * 1000
 const REGISTRATION_TTL = 10 * 60 * 1000
@@ -18,8 +20,11 @@ const CODE_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"
 /** Server state of an OPAQUE sign-in between `start` and `finish`; `user` is absent for an unknown login. */
 export type Attempt = { kind: "login" | "password"; user?: string; login: string; state: string }
 
-/** Whom an enrollment code was issued by, and the organization its machine will belong to, if any. */
-export type Code = { user: string; org?: string }
+/**
+ * Whom an enrollment code was issued by and what it enrolls: a machine (of the organization `org`, if any, or the
+ * VM of the cloud instance `cloud`), or a cloud host. A code of one kind never enrolls the other.
+ */
+export type Code = { user: string; kind: "machine" | "host"; org?: string; cloud?: string }
 
 /** A registration between `register/start` and `register/finish`, keyed by the invitation's code hash. */
 export type Registration = { login: string; user: string }
@@ -37,6 +42,16 @@ export function create() {
   const tickets = new Map<string, { session: string; machine: string; expires: number }>()
   const failures = new Map<string, { count: number; until: number }>()
   const accounts = new Map<string, { count: number; until: number; last: number }>()
+
+  const issueCode = (entry: Code, ttl: number) => {
+    prune(codes, (code) => code.expires)
+    const bytes = crypto.getRandomValues(new Uint8Array(8))
+    const chars = Array.from(bytes, (byte) => CODE_ALPHABET[byte % CODE_ALPHABET.length]).join("")
+    const code = `${chars.slice(0, 4)}-${chars.slice(4)}`
+    const expiresAt = Date.now() + ttl
+    codes.set(code, { ...entry, expires: expiresAt })
+    return { code, expiresAt }
+  }
 
   const session = (id: string | undefined) => {
     if (!id) return undefined
@@ -97,15 +112,11 @@ export function create() {
     finishRegistration: (key: string) => registrations.delete(key),
 
     /** Issues an enrollment code by `user`, for a machine of their own or of the organization `org`. */
-    createCode(user: string, org?: string) {
-      prune(codes, (entry) => entry.expires)
-      const bytes = crypto.getRandomValues(new Uint8Array(8))
-      const chars = Array.from(bytes, (byte) => CODE_ALPHABET[byte % CODE_ALPHABET.length]).join("")
-      const code = `${chars.slice(0, 4)}-${chars.slice(4)}`
-      const expiresAt = Date.now() + CODE_TTL
-      codes.set(code, { user, org, expires: expiresAt })
-      return { code, expiresAt }
-    },
+    createCode: (user: string, org?: string) => issueCode({ user, kind: "machine", org }, CODE_TTL),
+    /** Issues an enrollment code by an administrator, for a cloud host. */
+    createHostCode: (user: string) => issueCode({ user, kind: "host" }, CODE_TTL),
+    /** Issues the code the VM of a cloud instance pairs with, as a machine of the instance's user. */
+    createCloudCode: (user: string, cloud: string) => issueCode({ user, kind: "machine", cloud }, CLOUD_CODE_TTL),
     /**
      * Consumes a code once and returns whom it was issued by and for; accepts it case-insensitively and with or
      * without the dash. The caller still checks that the user is active and, for an organization, still a member.
@@ -116,7 +127,7 @@ export function create() {
       const entry = codes.get(code)
       codes.delete(code)
       if (!entry || entry.expires <= Date.now()) return undefined
-      return { user: entry.user, org: entry.org } satisfies Code
+      return { user: entry.user, kind: entry.kind, org: entry.org, cloud: entry.cloud } satisfies Code
     },
 
     createTicket(session: string, machine: string) {
