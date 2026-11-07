@@ -1,6 +1,11 @@
 <h1 align="center">opencode-hub</h1>
 
 <p align="center">
+  <a href="README.md">Français</a> |
+  <a href="README.en.md">English</a>
+</p>
+
+<p align="center">
   Un fork d'<a href="https://github.com/anomalyco/opencode">OpenCode</a> qui ajoute un <strong>hub</strong> :
   une instance publique, sur un VPS, depuis laquelle on pilote des sessions de code sur plusieurs machines distantes.
 </p>
@@ -74,19 +79,40 @@ $BIN agent run
 
 Depuis les sources sans binaire : `./build.sh --ui-only`, puis `bun run dev hub` et `bun run dev agent run`.
 
-## Déployer sur un VPS
+## Installer
+
+`install.sh`, à la racine du dépôt, installe et met en place les trois composants. Au lancement, un menu propose la
+langue (français ou anglais), puis les composants à cocher :
+
+- **Caddy** : proxy HTTPS devant le hub, certificats à la demande pour le hub et pour chaque machine ;
+- **Hub** : le tableau de bord ;
+- **Client** : l'agent qui relie la machine à un hub.
+
+Le hub et le client peuvent être installés en service systemd avec démarrage automatique.
 
 1. Faire pointer `hub.exemple.fr` **et** `*.hub.exemple.fr` vers le VPS (enregistrements A/AAAA).
-2. Construire le binaire pour le serveur : `./build.sh --target linux-x64` (ou `linux-arm64`).
-3. Sur le VPS :
+2. Sur le VPS, depuis ce dépôt :
 
    ```bash
-   sudo script/hub/install.sh --domain hub.exemple.fr --email vous@exemple.fr --binary ./opencode
+   sudo ./install.sh                  # menu : langue, composants, réglages
    ```
 
-   Le script installe Caddy (certificats à la demande, pour chaque machine), un service systemd `opencode-hub`, et
-   affiche le mot de passe généré. Détails, mise à jour et démarrage automatique des agents :
-   [`script/hub/README.md`](script/hub/README.md).
+   Le binaire est pris sur la machine, construit depuis le dépôt (`./build.sh`) ou indiqué par un chemin. Pour un
+   serveur d'une autre architecture : `./build.sh --target linux-x64` (ou `linux-arm64`), puis `--binary <chemin>`.
+3. Sur chaque machine à relier, après avoir créé un code dans le tableau de bord (« Add machine ») :
+
+   ```bash
+   sudo ./install.sh --client --client-url https://hub.exemple.fr --code XXXX-XXXX --service
+   ```
+
+| Commande | Rôle |
+|---|---|
+| `./install.sh --status` | État de Caddy, du hub, de l'agent et du binaire |
+| `sudo ./install.sh --uninstall [--purge]` | Désinstallation ; `--purge` efface aussi les données, l'enrôlement, Caddy et le binaire |
+| `./install.sh --help` | Toutes les options, pour une installation sans questions (`--yes`) |
+| `--lang fr\|en` | Fixe la langue sans passer par le menu (`build.sh` l'accepte aussi) |
+
+Détails sur Caddy, le DNS et le dépannage : [`script/hub/README.md`](script/hub/README.md).
 
 ## Commandes
 
@@ -118,7 +144,8 @@ Depuis les sources sans binaire : `./build.sh --ui-only`, puis `bun run dev hub`
 | `packages/relay` | Hub, protocole du tunnel, agent, proxy LLM, catalogue, connexion ChatGPT |
 | `packages/app/hub.html`, `packages/app/src/hub` | Interface du hub (composants `@opencode/ui`) |
 | `packages/cli/src/commands/handlers/{hub,agent}` | Commandes `opencode hub` et `opencode agent` |
-| `script/hub` | Installation Caddy + systemd sur le VPS |
+| `install.sh` | Installation, état et désinstallation (Caddy, hub, client, services systemd) |
+| `script/hub` | Ancien installateur du VPS (Caddy + hub), documentation du déploiement |
 | `specs/remote-machines.md` | Spécification |
 | `build.sh` | Build complet |
 

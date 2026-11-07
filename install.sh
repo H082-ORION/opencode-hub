@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 # install.sh — installation et mise en place d'opencode-hub sur une machine Linux (systemd).
+# install.sh — install and set up opencode-hub on a Linux machine (systemd).
 #
 # Propose trois composants, à cocher dans un menu ou à passer en options :
 #   - Caddy  : proxy HTTPS devant le hub (certificats à la demande pour le hub et chaque machine) ;
@@ -7,13 +8,13 @@
 #   - Client : l'agent qui relie cette machine à un hub (opencode agent join / run).
 # Le hub et le client peuvent être installés en service systemd avec démarrage automatique.
 #
-#   sudo ./install.sh                                    # menu interactif
+#   sudo ./install.sh                                    # menu interactif / interactive menu
 #   sudo ./install.sh --caddy --hub --domain hub.example.com --email vous@example.com --service
-#   sudo ./install.sh --client --hub-url https://hub.example.com --code <code> --service
+#   sudo ./install.sh --client --client-url https://hub.example.com --code <code> --service
+#   ./install.sh --status                                # état des services / service status
+#   sudo ./install.sh --uninstall                        # désinstallation / uninstall
 #
-#   ./install.sh --status                                # état des services
-#   sudo ./install.sh --uninstall                        # désinstallation (menu)
-#
+# Langue / language : un menu la demande au lancement (français par défaut) ; --lang fr|en ou OPENCODE_HUB_LANG la fixent.
 # Le script est autonome (un seul fichier, aucune dépendance à un autre dépôt) et peut être relancé sans risque.
 # Réglages : NO_COLOR=1, OPENCODE_HUB_ASCII=1 (sans Unicode), OPENCODE_HUB_VITESSE=0 (sans pauses),
 # OPENCODE_HUB_SANS_BANNIERE=1.
@@ -22,6 +23,30 @@ set -euo pipefail
 
 ARGS_ORIGINAUX=("$@")
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+# ================================================================== Langue
+
+# Lue avant tout le reste : les messages d'erreur des options en dépendent.
+LANGUE="${OPENCODE_HUB_LANG:-}"
+_args=("$@")
+for ((_i = 0; _i < ${#_args[@]}; _i++)); do
+  case "${_args[_i]}" in
+    --lang=*) LANGUE="${_args[_i]#--lang=}" ;;
+    --lang) LANGUE="${_args[_i + 1]:-}" ;;
+  esac
+done
+LANGUE_CHOISIE=0
+[[ -n "$LANGUE" ]] && LANGUE_CHOISIE=1
+case "${LANGUE,,}" in
+  en*) LANGUE=en ;;
+  fr* | '') LANGUE=fr ;;
+  *) echo "✗ --lang : fr ou en / fr or en (reçu / got : $LANGUE)" >&2; exit 1 ;;
+esac
+
+# t "texte français" "english text" — le texte dans la langue choisie.
+# DP : les deux-points, précédés d'une espace en français seulement (à recalculer si la langue change).
+t() { if [[ "$LANGUE" == en ]]; then printf '%s' "$2"; else printf '%s' "$1"; fi; }
+DP="$(t ' : ' ': ')"
 
 # ================================================================== Affichage
 
@@ -49,6 +74,7 @@ LARGEUR="${COLUMNS:-$(tput cols 2>/dev/null || echo 80)}"
 ((LARGEUR < 50)) && LARGEUR=50
 VITESSE="${OPENCODE_HUB_VITESSE:-1}"
 OUI=0
+MENU_AIDE=""
 
 pause() { [[ "$VITESSE" == 0 ]] || sleep "$1"; }
 cacher() { if ((TTY)); then printf '\e[?25l'; fi; }
@@ -68,9 +94,9 @@ etape() { printf '\n%s%s== %s%s\n' "$gris" "$bold" "$*" "$reset"; }
 
 # Longueur visible : sans séquences de couleur ni liens.
 vlen() {
-  local t
-  t="$(sed -E 's/\x1b\[[0-9;?]*[A-Za-z]//g; s/\x1b\]8;;[^\x1b]*\x1b\\//g' <<<"$1")"
-  printf '%d' "${#t}"
+  local s
+  s="$(sed -E 's/\x1b\[[0-9;?]*[A-Za-z]//g; s/\x1b\]8;;[^\x1b]*\x1b\\//g' <<<"$1")"
+  printf '%d' "${#s}"
 }
 pad() { local n; n="$(vlen "$1")"; printf '%s%*s' "$1" $((n < $2 ? $2 - n : 0)) ''; }
 rep() { local i out=''; for ((i = 0; i < $2; i++)); do out+="$1"; done; printf '%s' "$out"; }
@@ -156,13 +182,13 @@ suivre() {
     ok "$titre ${dim}($((SECONDS - debut)) s)${reset}"
     rm -f "$jr"
   else
-    err "$titre : échec (code $rc)."
+    err "$titre${DP}$(t "échec (code $rc)." "failed (code $rc).")"
     local -a ex=()
     while IFS= read -r l; do ex+=("$dim$(tronque "$l" $((LARGEUR - 6)))$reset"); done \
       < <(tr '\r' '\n' <"$jr" | sed -E 's/\x1b\[[0-9;?]*[A-Za-z]//g' | grep -v '^[[:space:]]*$' | tail -n 20)
-    ((${#ex[@]})) || ex=("${dim}(aucune sortie)${reset}")
-    cadre "$red" "Dernières lignes" "${ex[@]}" >&2
-    echo "Journal complet : $jr" >&2
+    ((${#ex[@]})) || ex=("${dim}$(t "(aucune sortie)" "(no output)")${reset}")
+    cadre "$red" "$(t "Dernières lignes" "Last lines")" "${ex[@]}" >&2
+    echo "$(t "Journal complet" "Full log")${DP}$jr" >&2
   fi
   return "$rc"
 }
@@ -175,12 +201,12 @@ menu() {
   printf '\n%s%s%s\n' "$bold" "$titre" "$reset"
   if ((!TTY)) || ! interactif; then
     for i in "${!opts[@]}"; do printf '  %d. %s\n' "$((i + 1))" "${opts[$i]}"; done
-    if ! interactif; then info "Non interactif : choix par défaut (1)."; MENU_CHOIX=0; return 0; fi
-    printf 'Votre choix (1-%d) : ' "$n"; read -r r || return 1
+    if ! interactif; then info "$(t "Non interactif : choix par défaut (1)." "Non-interactive: default choice (1).")"; MENU_CHOIX=0; return 0; fi
+    printf '%s (1-%d)%s' "$(t "Votre choix" "Your choice")" "$n" "$DP"; read -r r || return 1
     [[ "$r" =~ ^[0-9]+$ ]] && ((r >= 1 && r <= n)) || return 1
     MENU_CHOIX=$((r - 1)); return 0
   fi
-  printf '%s↑↓ ou chiffre · Entrée valide · q quitte%s\n' "$dim" "$reset"
+  printf '%s%s%s\n' "$dim" "${MENU_AIDE:-$(t "↑↓ ou chiffre · Entrée valide · q quitte" "↑↓ or number · Enter selects · q quits")}" "$reset"
   cacher
   while :; do
     for i in "${!opts[@]}"; do
@@ -207,11 +233,11 @@ cocher() {
   printf '\n%s%s%s\n' "$bold" "$titre" "$reset"
   if ((!TTY)); then
     for i in "${!opts[@]}"; do printf '  %d. %s\n' "$((i + 1))" "${opts[$i]}"; done
-    printf 'Numéros séparés par des espaces : '; read -r r || return 1
+    printf '%s : ' "$(t "Numéros séparés par des espaces" "Numbers separated by spaces")"; read -r r || return 1
     for k in $r; do [[ "$k" =~ ^[0-9]+$ ]] && ((k >= 1 && k <= n)) && COCHES+=("$((k - 1))"); done
     return 0
   fi
-  printf '%s↑↓ déplace · espace coche · Entrée valide · q quitte%s\n' "$dim" "$reset"
+  printf '%s%s%s\n' "$dim" "$(t "↑↓ déplace · espace coche · Entrée valide · q quitte" "↑↓ moves · space toggles · Enter confirms · q quits")" "$reset"
   cacher
   while :; do
     for i in "${!opts[@]}"; do
@@ -235,18 +261,18 @@ cocher() {
 # demander VARIABLE "question" [défaut] [regex] [message d'erreur]
 # La valeur déjà donnée en option sert de défaut ; hors interactif, elle est prise telle quelle.
 demander() {
-  local var="$1" question="$2" defaut="${!1:-${3:-}}" regex="${4:-}" msg="${5:-valeur invalide}" r
+  local var="$1" question="$2" defaut="${!1:-${3:-}}" regex="${4:-}" msg="${5:-$(t "valeur invalide" "invalid value")}" r
   local invite="$gris$S_ASK$reset $question"
   [[ -z "$defaut" ]] || invite+=" ${dim}[$defaut]${reset}"
   if ! interactif; then
-    [[ -n "$defaut" ]] || { err "$question : valeur obligatoire en mode non interactif."; return 1; }
-    [[ -z "$regex" || "$defaut" =~ $regex ]] || { err "$question : $msg"; return 1; }
-    printf -v "$var" '%s' "$defaut"; info "$question : ${bold}$defaut${reset}"; return 0
+    [[ -n "$defaut" ]] || { err "$question${DP}$(t "valeur obligatoire en mode non interactif." "a value is required in non-interactive mode.")"; return 1; }
+    [[ -z "$regex" || "$defaut" =~ $regex ]] || { err "$question${DP}$msg"; return 1; }
+    printf -v "$var" '%s' "$defaut"; info "$question${DP}${bold}$defaut${reset}"; return 0
   fi
   while :; do
     read -r -p "$invite " r || return 1
     r="${r:-$defaut}"
-    if [[ -z "$r" ]]; then err "valeur obligatoire."; continue; fi
+    if [[ -z "$r" ]]; then err "$(t "valeur obligatoire." "a value is required.")"; continue; fi
     if [[ -n "$regex" && ! "$r" =~ $regex ]]; then err "$msg"; continue; fi
     printf -v "$var" '%s' "$r"; return 0
   done
@@ -254,24 +280,24 @@ demander() {
 
 # oui_non "question" [o|n] — renvoie 0 pour oui ; hors interactif, le défaut.
 oui_non() {
-  local q="$1" def="${2:-o}" r sfx='[O/n]'
-  [[ "$def" == n ]] && sfx='[o/N]'
+  local q="$1" def="${2:-o}" r sfx
+  if [[ "$def" == n ]]; then sfx="$(t '[o/N]' '[y/N]')"; else sfx="$(t '[O/n]' '[Y/n]')"; fi
   if ! interactif; then [[ "$def" == o ]]; return; fi
   while :; do
     read -r -p "$gris$S_ASK$reset $q ${dim}$sfx${reset} " r || return 1
     r="${r:-$def}"
-    case "${r,,}" in o|oui|y|yes) return 0 ;; n|non|no) return 1 ;; *) err "répondre par o ou n." ;; esac
+    case "${r,,}" in o|oui|y|yes) return 0 ;; n|non|no) return 1 ;; *) err "$(t "répondre par o ou n." "answer y or n.")" ;; esac
   done
 }
 
 # confirmer_grave "ce qui sera perdu" MOT — encart rouge ; il faut retaper MOT. Avec --yes : accepté.
 confirmer_grave() {
   local quoi="$1" mot="$2" r
-  cadre "$red" "Action irréversible" "$quoi" "" "Pour confirmer, tapez : ${bold}$mot${reset}"
+  cadre "$red" "$(t "Action irréversible" "Irreversible action")" "$quoi" "" "$(t "Pour confirmer, tapez" "To confirm, type")${DP}${bold}$mot${reset}"
   [[ "$OUI" == 1 ]] && return 0
-  interactif || { err "confirmation impossible hors terminal (--yes pour passer outre)."; return 1; }
+  interactif || { err "$(t "confirmation impossible hors terminal (--yes pour passer outre)." "cannot confirm without a terminal (--yes to override).")"; return 1; }
   read -r -p "$red$S_ASK$reset " r || return 1
-  [[ "$r" == "$mot" ]] || { err "mot différent : rien n'a été effacé."; return 1; }
+  [[ "$r" == "$mot" ]] || { err "$(t "mot différent : rien n'a été effacé." "different word: nothing was deleted.")"; return 1; }
 }
 
 aide_titre() { printf '\n%s%s%s\n' "$gris$bold" "$1" "$reset"; }
@@ -310,47 +336,53 @@ MARQUE="# Managed by opencode script/hub/install.sh"
 MOT_DE_PASSE_GENERE=""
 
 aide() {
-  banniere "opencode-hub" "aide de l'installateur"
-  echo "Installe Caddy, le hub et/ou le client opencode-hub, avec un service systemd à démarrage automatique."
-  echo "Sans option, un menu propose les composants et chaque réglage."
-  aide_titre "Utilisation"
-  echo "  sudo ./install.sh [composants] [options]"
-  aide_titre "Composants"
-  aide_opt "--caddy" "proxy HTTPS devant le hub (certificats à la demande)"
-  aide_opt "--hub" "tableau de bord qui donne accès aux machines"
-  aide_opt "--client" "relie cette machine à un hub (agent)"
-  aide_titre "Caddy et hub"
-  aide_opt "--domain <hôte>" "nom public du hub ; les machines sont sur <id>.<hôte>"
-  aide_opt "--email <adresse>" "compte ACME de Caddy pour les certificats"
-  aide_opt "--port <port>" "port local du hub (défaut : 4800)"
-  aide_opt "--hub-url <url>" "URL publique du hub (sans Caddy ; défaut : http://localhost:<port>)"
-  aide_opt "--hub-user <nom>" "utilisateur système du hub (défaut : opencode)"
+  t "Installe Caddy, le hub et/ou le client opencode-hub, avec un service systemd à démarrage automatique." \
+    "Installs Caddy, the opencode-hub hub and/or client, with a systemd service started at boot."
+  echo
+  t "Sans option, un menu propose les composants et chaque réglage." \
+    "Without options, a menu offers the components and each setting."
+  echo
+  aide_titre "$(t "Utilisation" "Usage")"
+  echo "  sudo ./install.sh $(t "[composants] [options]" "[components] [options]")"
+  aide_titre "$(t "Composants" "Components")"
+  aide_opt "--caddy" "$(t "proxy HTTPS devant le hub (certificats à la demande)" "HTTPS proxy in front of the hub (on-demand certificates)")"
+  aide_opt "--hub" "$(t "tableau de bord qui donne accès aux machines" "dashboard that gives access to the machines")"
+  aide_opt "--client" "$(t "relie cette machine à un hub (agent)" "connects this machine to a hub (agent)")"
+  aide_titre "$(t "Caddy et hub" "Caddy and hub")"
+  aide_opt "--domain $(t "<hôte>" "<host>")" "$(t "nom public du hub ; les machines sont sur <id>.<hôte>" "public hub hostname; machines are served at <id>.<host>")"
+  aide_opt "--email $(t "<adresse>" "<address>")" "$(t "compte ACME de Caddy pour les certificats" "Caddy ACME account for certificates")"
+  aide_opt "--port <port>" "$(t "port local du hub (défaut : 4800)" "local hub port (default: 4800)")"
+  aide_opt "--hub-url <url>" "$(t "URL publique du hub (sans Caddy ; défaut : http://localhost:<port>)" "public hub URL (without Caddy; default: http://localhost:<port>)")"
+  aide_opt "--hub-user $(t "<nom>" "<name>")" "$(t "utilisateur système du hub (défaut : opencode)" "system user running the hub (default: opencode)")"
   aide_titre "Client"
-  aide_opt "--client-url <url>" "URL du hub à rejoindre"
-  aide_opt "--code <code>" "code d'enrôlement à usage unique (tableau de bord, « add machine »)"
-  aide_opt "--name <nom>" "nom de la machine (défaut : nom d'hôte)"
-  aide_opt "--client-user <nom>" "utilisateur qui fait tourner l'agent (défaut : celui qui lance sudo)"
-  aide_titre "Binaire et services"
-  aide_opt "--binary <chemin>" "binaire opencode à installer dans $BIN_CIBLE"
-  aide_opt "--build" "construire le binaire depuis ce dépôt (./build.sh)"
-  aide_opt "--service" "installer les services systemd (démarrage automatique)"
-  aide_opt "--no-service" "ne pas installer de service systemd"
-  aide_opt "-y, --yes" "aucune question : options et valeurs par défaut"
-  aide_opt "-h, --help" "cette aide"
+  aide_opt "--client-url <url>" "$(t "URL du hub à rejoindre" "URL of the hub to join")"
+  aide_opt "--code <code>" "$(t "code d'enrôlement à usage unique (tableau de bord, « add machine »)" "one-time enrollment code (dashboard, \"add machine\")")"
+  aide_opt "--name $(t "<nom>" "<name>")" "$(t "nom de la machine (défaut : nom d'hôte)" "machine name (default: hostname)")"
+  aide_opt "--client-user $(t "<nom>" "<name>")" "$(t "utilisateur qui fait tourner l'agent (défaut : celui qui lance sudo)" "user running the agent (default: the one running sudo)")"
+  aide_titre "$(t "Binaire et services" "Binary and services")"
+  aide_opt "--binary $(t "<chemin>" "<path>")" "$(t "binaire opencode à installer dans $BIN_CIBLE" "opencode binary to install to $BIN_CIBLE")"
+  aide_opt "--build" "$(t "construire le binaire depuis ce dépôt (./build.sh)" "build the binary from this repository (./build.sh)")"
+  aide_opt "--service" "$(t "installer les services systemd (démarrage automatique)" "install the systemd services (start at boot)")"
+  aide_opt "--no-service" "$(t "ne pas installer de service systemd" "do not install systemd services")"
   aide_titre "Maintenance"
-  aide_opt "--status" "état de Caddy, du hub, de l'agent et du binaire"
-  aide_opt "--uninstall" "désinstaller (les composants cochés, ou ceux passés en options)"
-  aide_opt "--purge" "avec --uninstall : données du hub, enrôlement, paquet Caddy, binaire"
-  aide_titre "Exemples"
+  aide_opt "--status" "$(t "état de Caddy, du hub, de l'agent et du binaire" "status of Caddy, the hub, the agent and the binary")"
+  aide_opt "--uninstall" "$(t "désinstaller (les composants cochés, ou ceux passés en options)" "uninstall (the checked components, or those given as options)")"
+  aide_opt "--purge" "$(t "avec --uninstall : données du hub, enrôlement, paquet Caddy, binaire" "with --uninstall: hub data, enrollment, Caddy package, binary")"
+  aide_titre "$(t "Général" "General")"
+  aide_opt "--lang fr|en" "$(t "langue sans passer par le menu du lancement (ou OPENCODE_HUB_LANG)" "language without the startup menu (or OPENCODE_HUB_LANG)")"
+  aide_opt "-y, --yes" "$(t "aucune question : options et valeurs par défaut" "no questions: options and default values")"
+  aide_opt "-h, --help" "$(t "cette aide" "this help")"
+  aide_titre "$(t "Exemples" "Examples")"
   echo "  sudo ./install.sh"
-  echo "  sudo ./install.sh --caddy --hub --domain hub.example.com --email vous@example.com --service --yes"
+  echo "  sudo ./install.sh --caddy --hub --domain hub.example.com --email $(t "vous" "you")@example.com --service --yes"
   echo "  sudo ./install.sh --client --client-url https://hub.example.com --code <code> --service"
   echo "  ./install.sh --status"
   echo "  sudo ./install.sh --uninstall --hub --client"
+  echo "  sudo ./install.sh --lang en"
   echo
 }
 
-valeur() { [[ $# -ge 2 && -n "$2" && "$2" != --* ]] || die "$1 attend une valeur"; }
+valeur() { [[ $# -ge 2 && -n "$2" && "$2" != --* ]] || die "$1 $(t "attend une valeur" "requires a value")"; }
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -370,14 +402,35 @@ while [[ $# -gt 0 ]]; do
     --build) CONSTRUIRE=1; shift ;;
     --service) SERVICE_HUB=1; SERVICE_CLIENT=1; shift ;;
     --no-service) SERVICE_HUB=0; SERVICE_CLIENT=0; shift ;;
+    --lang) valeur "$@"; shift 2 ;;
+    --lang=*) shift ;;
     -y | --yes) OUI=1; shift ;;
     --status) MODE=etat; shift ;;
     --uninstall) MODE=desinstaller; shift ;;
     --purge) PURGER=1; shift ;;
-    -h | --help) aide; exit 0 ;;
-    *) aide >&2; die "option inconnue : $1" ;;
+    -h | --help) MODE=aide; shift ;;
+    *) aide >&2; die "$(t "option inconnue" "unknown option")${DP}$1" ;;
   esac
 done
+
+# Bannière, puis choix de la langue par un menu dès le lancement (sauf si --lang ou OPENCODE_HUB_LANG l'ont fixée).
+case "$MODE" in
+  aide) sous_fr="aide de l'installateur"; sous_en="installer help" ;;
+  etat) sous_fr="état des services"; sous_en="service status" ;;
+  desinstaller) sous_fr="désinstallation"; sous_en="uninstall" ;;
+  *) sous_fr="installation"; sous_en="installation" ;;
+esac
+titre_onglet "opencode-hub · $(t "$sous_fr" "$sous_en")"
+if ((!LANGUE_CHOISIE)) && interactif && ((TTY)); then
+  if [[ "$sous_fr" == "$sous_en" ]]; then banniere "opencode-hub" "$sous_fr"; else banniere "opencode-hub" "$sous_fr / $sous_en"; fi
+  MENU_AIDE="↑↓ · Entrée / Enter · q"
+  menu "Langue / Language" "Français" "English" || die "abandon / aborted."
+  MENU_AIDE=""
+  if ((MENU_CHOIX == 1)); then LANGUE=en; DP=': '; fi
+  titre_onglet "opencode-hub · $(t "$sous_fr" "$sous_en")"
+else
+  banniere "opencode-hub" "$(t "$sous_fr" "$sous_en")"
+fi
 
 RE_DOMAINE='^([a-z0-9]([a-z0-9-]*[a-z0-9])?\.)+[a-z]{2,}$'
 RE_EMAIL='^[^[:space:]@]+@[^[:space:]@]+\.[^[:space:]@]+$'
@@ -394,12 +447,12 @@ dossier_de() { getent passwd "$1" | cut -d: -f6; }
 en_tant_que() {
   local u="$1" h; shift
   h="$(dossier_de "$u")"
-  local -a env_u=(env HOME="$h" USER="$u" LOGNAME="$u"
+  local -a env_u=(env HOME="$h" USER="$u" LOGNAME="$u" OPENCODE_HUB_LANG="$LANGUE"
     PATH="$h/.opencode/bin:$h/.bun/bin:$h/.local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin")
   if [[ "$u" == root ]]; then "${env_u[@]}" "$@"; else runuser -u "$u" -- "${env_u[@]}" "$@"; fi
 }
 
-version_de() { local v; v="$("$1" --version 2>/dev/null | head -n1)" || true; printf '%s\n' "${v:-version inconnue}"; }
+version_de() { local v; v="$("$1" --version 2>/dev/null | head -n1)" || true; printf '%s\n' "${v:-$(t "version inconnue" "unknown version")}"; }
 
 apt_installer() {
   export DEBIAN_FRONTEND=noninteractive
@@ -418,10 +471,10 @@ auto_unite() { [[ "$(systemctl is-enabled "$1" 2>/dev/null || true)" == enabled 
 
 pastille() {
   case "$1" in
-    actif) printf '%s%s%s en marche' "$green" "$S_ON" "$reset" ;;
-    inactif) printf '%s%s%s arrêté' "$yellow" "$S_ON" "$reset" ;;
-    installe) printf '%s%s%s installé' "$green" "$S_ON" "$reset" ;;
-    *) printf '%s%s absent%s' "$dim" "$S_OFF" "$reset" ;;
+    actif) printf '%s%s%s %s' "$green" "$S_ON" "$reset" "$(t "en marche" "running")" ;;
+    inactif) printf '%s%s%s %s' "$yellow" "$S_ON" "$reset" "$(t "arrêté" "stopped")" ;;
+    installe) printf '%s%s%s %s' "$green" "$S_ON" "$reset" "$(t "installé" "installed")" ;;
+    *) printf '%s%s %s%s' "$dim" "$S_OFF" "$(t "absent" "missing")" "$reset" ;;
   esac
 }
 
@@ -439,7 +492,7 @@ ligne_etat() {
   local nom="$1" etat="$2" auto="$3" detail="$4" a=''
   case "$auto" in
     1) a="${green}auto${reset}" ;;
-    0) a="${dim}manuel${reset}" ;;
+    0) a="${dim}$(t "manuel" "manual")${reset}" ;;
   esac
   printf '%s %s %s %s' "$(pad "${bold}$nom${reset}" 8)" "$(pad "$(pastille "$etat")" 12)" "$(pad "$a" 7)" "$dim$detail$reset"
 }
@@ -453,7 +506,7 @@ afficher_etat() {
     e="$(etat_unite caddy)"; [[ "$e" == absent ]] && e=installe
     d="$(caddy version 2>/dev/null | awk '{print $1}')"
     dom="$(domaine_caddy)"
-    [[ -n "$dom" ]] && d+=" $S_SEP $dom et *.$dom"
+    [[ -n "$dom" ]] && d+=" $S_SEP $dom $(t "et" "and") *.$dom"
     l+=("$(ligne_etat Caddy "$e" "$(auto_unite caddy && echo 1 || echo 0)" "$d")")
   else
     l+=("$(ligne_etat Caddy absent - "")")
@@ -467,8 +520,8 @@ afficher_etat() {
     port="$(option_unite "$UNIT_HUB" --port)"; url="$(option_unite "$UNIT_HUB" --url)"
     d="${url:-?} $S_SEP port ${port:-?}"
     if [[ "$e" == actif && -n "$port" ]] && command -v curl >/dev/null; then
-      if curl -fsS --max-time 2 "http://127.0.0.1:$port/hub/health" >/dev/null 2>&1; then sante="${green}répond${reset}"
-      else sante="${red}ne répond pas${reset}"; fi
+      if curl -fsS --max-time 2 "http://127.0.0.1:$port/hub/health" >/dev/null 2>&1; then sante="${green}$(t "répond" "responds")${reset}"
+      else sante="${red}$(t "ne répond pas" "not responding")${reset}"; fi
       d+=" $S_SEP $sante$dim"
     fi
     l+=("$(ligne_etat Hub "$e" "$(auto_unite opencode-hub && echo 1 || echo 0)" "$d")")
@@ -480,13 +533,13 @@ afficher_etat() {
     l+=("$(ligne_etat Client absent - "")")
   else
     u="$(cle_unite "$UNIT_CLIENT" User)"
-    d="utilisateur ${u:-?}"
+    d="$(t "utilisateur" "user") ${u:-?}"
     if [[ $EUID -eq 0 && -n "$u" && -x "$BIN_CIBLE" ]]; then
       etat_agent="$(en_tant_que "$u" "$BIN_CIBLE" agent status 2>/dev/null || true)"
       if grep -q '^hub ' <<<"$etat_agent"; then
         d+=" $S_SEP $(sed -n 's/^hub *//p' <<<"$etat_agent" | head -n1)"
       else
-        d+=" $S_SEP ${red}non enrôlé${reset}$dim"
+        d+=" $S_SEP ${red}$(t "non enrôlé" "not enrolled")${reset}$dim"
       fi
     fi
     l+=("$(ligne_etat Client "$e" "$(auto_unite opencode-agent && echo 1 || echo 0)" "$d")")
@@ -494,20 +547,20 @@ afficher_etat() {
 
   # Binaire
   if [[ -x "$BIN_CIBLE" ]]; then
-    l+=("$(ligne_etat Binaire installe - "$BIN_CIBLE $S_SEP $(version_de "$BIN_CIBLE")")")
+    l+=("$(ligne_etat "$(t "Binaire" "Binary")" installe - "$BIN_CIBLE $S_SEP $(version_de "$BIN_CIBLE")")")
   else
-    l+=("$(ligne_etat Binaire absent - "$BIN_CIBLE")")
+    l+=("$(ligne_etat "$(t "Binaire" "Binary")" absent - "$BIN_CIBLE")")
   fi
 
-  cadre "$gris" "État des services" "${l[@]}"
-  [[ $EUID -eq 0 ]] || info "${dim}Lancer avec sudo pour voir aussi l'enrôlement de l'agent.${reset}"
+  cadre "$gris" "$(t "État des services" "Service status")" "${l[@]}"
+  [[ $EUID -eq 0 ]] || info "${dim}$(t "Lancer avec sudo pour voir aussi l'enrôlement de l'agent." "Run with sudo to also see the agent's enrollment.")${reset}"
   echo
-  info "Journaux : ${dim}journalctl -u opencode-hub -f · journalctl -u opencode-agent -f · journalctl -u caddy -f${reset}"
+  info "$(t "Journaux" "Logs")${DP}${dim}journalctl -u opencode-hub -f · journalctl -u opencode-agent -f · journalctl -u caddy -f${reset}"
   echo
 }
 
 desinstaller() {
-  local present_caddy=0 present_hub=0 present_client=0 i u h dom sauvegarde
+  local present_caddy=0 present_hub=0 present_client=0 i u sauvegarde
   [[ -f "$CADDYFILE" ]] && grep -qF "$MARQUE" "$CADDYFILE" && present_caddy=1
   command -v caddy >/dev/null && present_caddy=1
   [[ -f "$UNIT_HUB" || -f "$ENV_FILE" ]] && present_hub=1
@@ -515,50 +568,50 @@ desinstaller() {
 
   if ((!INSTALLER_CADDY && !INSTALLER_HUB && !INSTALLER_CLIENT)); then
     local -a opts=() codes=()
-    ((present_caddy)) && { opts+=("Caddy   ${dim}configuration du hub, paquet en option${reset}"); codes+=(caddy); }
-    ((present_hub)) && { opts+=("Hub     ${dim}service opencode-hub, données en option${reset}"); codes+=(hub); }
-    ((present_client)) && { opts+=("Client  ${dim}service opencode-agent, enrôlement en option${reset}"); codes+=(client); }
-    ((${#opts[@]})) || { ok "Rien à désinstaller : ni Caddy, ni hub, ni agent installés."; return 0; }
-    interactif || die "préciser les composants à retirer : --caddy, --hub ou --client (voir --help)."
-    cocher "Que faut-il désinstaller ?" "${opts[@]}" || die "abandon."
+    ((present_caddy)) && { opts+=("Caddy   ${dim}$(t "configuration du hub, paquet en option" "hub configuration, package optional")${reset}"); codes+=(caddy); }
+    ((present_hub)) && { opts+=("Hub     ${dim}$(t "service opencode-hub, données en option" "opencode-hub service, data optional")${reset}"); codes+=(hub); }
+    ((present_client)) && { opts+=("Client  ${dim}$(t "service opencode-agent, enrôlement en option" "opencode-agent service, enrollment optional")${reset}"); codes+=(client); }
+    ((${#opts[@]})) || { ok "$(t "Rien à désinstaller : ni Caddy, ni hub, ni agent installés." "Nothing to uninstall: no Caddy, hub or agent installed.")"; return 0; }
+    interactif || die "$(t "préciser les composants à retirer : --caddy, --hub ou --client (voir --help)." "specify the components to remove: --caddy, --hub or --client (see --help).")"
+    cocher "$(t "Que faut-il désinstaller ?" "What should be uninstalled?")" "${opts[@]}" || die "$(t "abandon." "aborted.")"
     for i in "${COCHES[@]}"; do
       case "${codes[$i]}" in caddy) INSTALLER_CADDY=1 ;; hub) INSTALLER_HUB=1 ;; client) INSTALLER_CLIENT=1 ;; esac
     done
-    ((INSTALLER_CADDY || INSTALLER_HUB || INSTALLER_CLIENT)) || die "aucun composant coché : rien à faire."
+    ((INSTALLER_CADDY || INSTALLER_HUB || INSTALLER_CLIENT)) || die "$(t "aucun composant coché : rien à faire." "no component checked: nothing to do.")"
   fi
 
   # Questions avant d'agir ; --purge répond oui à tout.
   local oublier=0 effacer_donnees=0 retirer_caddy=0 retirer_binaire=0
   local -a recap=()
   if ((INSTALLER_CLIENT)); then
-    if ((PURGER)) || oui_non "Oublier aussi l'enrôlement de cette machine auprès du hub ?" n; then oublier=1; fi
-    recap+=("${bold}Client${reset}  service opencode-agent arrêté et retiré$( ((oublier)) && echo ", enrôlement oublié" || true)")
+    if ((PURGER)) || oui_non "$(t "Oublier aussi l'enrôlement de cette machine auprès du hub ?" "Also forget this machine's enrollment with the hub?")" n; then oublier=1; fi
+    recap+=("${bold}Client${reset}  $(t "service opencode-agent arrêté et retiré" "opencode-agent service stopped and removed")$( ((oublier)) && t ", enrôlement oublié" ", enrollment forgotten" || true)")
   fi
   if ((INSTALLER_HUB)); then
-    if ((PURGER)) || oui_non "Supprimer aussi les données du hub ($DATA_DIR) ?" n; then effacer_donnees=1; fi
-    recap+=("${bold}Hub${reset}     service opencode-hub et $ENV_FILE retirés$( ((effacer_donnees)) && echo ", ${red}données effacées${reset}" || true)")
+    if ((PURGER)) || oui_non "$(t "Supprimer aussi les données du hub ($DATA_DIR) ?" "Also delete the hub data ($DATA_DIR)?")" n; then effacer_donnees=1; fi
+    recap+=("${bold}Hub${reset}     $(t "service opencode-hub et $ENV_FILE retirés" "opencode-hub service and $ENV_FILE removed")$( ((effacer_donnees)) && echo ", ${red}$(t "données effacées" "data deleted")${reset}" || true)")
   fi
   if ((INSTALLER_CADDY)); then
-    if command -v caddy >/dev/null && { ((PURGER)) || oui_non "Désinstaller aussi le paquet Caddy ?" n; }; then retirer_caddy=1; fi
-    if ((retirer_caddy)); then recap+=("${bold}Caddy${reset}   paquet désinstallé, configuration du hub retirée")
-    else recap+=("${bold}Caddy${reset}   configuration du hub retirée (ancien Caddyfile restauré s'il existe)"); fi
+    if command -v caddy >/dev/null && { ((PURGER)) || oui_non "$(t "Désinstaller aussi le paquet Caddy ?" "Also uninstall the Caddy package?")" n; }; then retirer_caddy=1; fi
+    if ((retirer_caddy)); then recap+=("${bold}Caddy${reset}   $(t "paquet désinstallé, configuration du hub retirée" "package uninstalled, hub configuration removed")")
+    else recap+=("${bold}Caddy${reset}   $(t "configuration du hub retirée (ancien Caddyfile restauré s'il existe)" "hub configuration removed (previous Caddyfile restored if any)")"); fi
   fi
   # Le binaire ne part que si plus rien ne s'en sert.
   local hub_reste=$((present_hub && !INSTALLER_HUB)) client_reste=$((present_client && !INSTALLER_CLIENT))
   if [[ -x "$BIN_CIBLE" ]] && ((!hub_reste && !client_reste)) && ((INSTALLER_HUB || INSTALLER_CLIENT)); then
-    if ((PURGER)) || oui_non "Supprimer aussi le binaire $BIN_CIBLE ?" n; then retirer_binaire=1; fi
+    if ((PURGER)) || oui_non "$(t "Supprimer aussi le binaire $BIN_CIBLE ?" "Also delete the binary $BIN_CIBLE?")" n; then retirer_binaire=1; fi
   fi
-  ((retirer_binaire)) && recap+=("${bold}Binaire${reset} $BIN_CIBLE supprimé")
+  ((retirer_binaire)) && recap+=("${bold}$(t "Binaire" "Binary")${reset} $BIN_CIBLE $(t "supprimé" "deleted")")
 
   echo
-  cadre "$gris" "Désinstallation" "${recap[@]}"
+  cadre "$gris" "$(t "Désinstallation" "Uninstall")" "${recap[@]}"
   if [[ "$OUI" != 1 ]]; then
-    interactif || die "confirmation impossible hors terminal : ajouter --yes."
-    oui_non "Lancer la désinstallation ?" n || die "abandon : rien n'a été modifié."
+    interactif || die "$(t "confirmation impossible hors terminal : ajouter --yes." "cannot confirm without a terminal: add --yes.")"
+    oui_non "$(t "Lancer la désinstallation ?" "Start the uninstall?")" n || die "$(t "abandon : rien n'a été modifié." "aborted: nothing was changed.")"
   fi
   if ((effacer_donnees)); then
-    confirmer_grave "Les données du hub ($DATA_DIR : machines, fournisseurs, réglages) seront effacées." SUPPRIMER ||
-      die "abandon : rien n'a été modifié."
+    confirmer_grave "$(t "Les données du hub ($DATA_DIR : machines, fournisseurs, réglages) seront effacées." "The hub data ($DATA_DIR: machines, providers, settings) will be deleted.")" \
+      "$(t "SUPPRIMER" "DELETE")" || die "$(t "abandon : rien n'a été modifié." "aborted: nothing was changed.")"
   fi
 
   # Client
@@ -566,14 +619,14 @@ desinstaller() {
     etape "Client"
     u="$(cle_unite "$UNIT_CLIENT" User)"
     if ((oublier)) && [[ -n "$u" && -x "$BIN_CIBLE" ]]; then
-      if en_tant_que "$u" "$BIN_CIBLE" agent leave >/dev/null 2>&1; then ok "Enrôlement oublié ($u)"
-      else warn "impossible d'oublier l'enrôlement : $BIN_CIBLE agent leave (en tant que $u)"; fi
+      if en_tant_que "$u" "$BIN_CIBLE" agent leave >/dev/null 2>&1; then ok "$(t "Enrôlement oublié" "Enrollment forgotten") ($u)"
+      else warn "$(t "impossible d'oublier l'enrôlement : $BIN_CIBLE agent leave (en tant que $u)" "could not forget the enrollment: $BIN_CIBLE agent leave (as $u)")"; fi
     fi
     systemctl disable --now opencode-agent >/dev/null 2>&1 || true
     rm -f "$UNIT_CLIENT"
     systemctl daemon-reload
     systemctl reset-failed opencode-agent >/dev/null 2>&1 || true
-    ok "Service opencode-agent arrêté et retiré"
+    ok "$(t "Service opencode-agent arrêté et retiré" "opencode-agent service stopped and removed")"
   fi
 
   # Hub
@@ -584,16 +637,17 @@ desinstaller() {
     rm -f "$UNIT_HUB" "$ENV_FILE"
     systemctl daemon-reload
     systemctl reset-failed opencode-hub >/dev/null 2>&1 || true
-    ok "Service opencode-hub et $ENV_FILE retirés"
+    ok "$(t "Service opencode-hub et $ENV_FILE retirés" "opencode-hub service and $ENV_FILE removed")"
     if ((effacer_donnees)); then
       rm -rf "$DATA_DIR"
-      ok "Données effacées : $DATA_DIR"
+      ok "$(t "Données effacées" "Data deleted")${DP}$DATA_DIR"
       # L'utilisateur système part avec ses données, s'il a été créé par ce script (dossier personnel = données).
       if [[ -n "$u" && "$u" != root ]] && id "$u" >/dev/null 2>&1 && [[ "$(dossier_de "$u")" == "$DATA_DIR" ]]; then
-        userdel "$u" >/dev/null 2>&1 && ok "Utilisateur système supprimé : $u" || warn "impossible de supprimer l'utilisateur $u"
+        if userdel "$u" >/dev/null 2>&1; then ok "$(t "Utilisateur système supprimé" "System user deleted")${DP}$u"
+        else warn "$(t "impossible de supprimer l'utilisateur" "could not delete the user") $u"; fi
       fi
     else
-      info "Données conservées : $DATA_DIR ${dim}(--purge pour les effacer)${reset}"
+      info "$(t "Données conservées" "Data kept")${DP}$DATA_DIR ${dim}$(t "(--purge pour les effacer)" "(--purge to delete it)")${reset}"
     fi
   fi
 
@@ -604,48 +658,47 @@ desinstaller() {
       sauvegarde="$(find "$(dirname "$CADDYFILE")" -maxdepth 1 -name 'Caddyfile.bak.*' -type f 2>/dev/null | sort | tail -n1 || true)"
       if [[ -n "$sauvegarde" ]]; then
         cp -p "$sauvegarde" "$CADDYFILE"
-        ok "Caddyfile restauré depuis $sauvegarde"
+        ok "$(t "Caddyfile restauré depuis" "Caddyfile restored from") $sauvegarde"
       elif ((retirer_caddy)); then
         rm -f "$CADDYFILE"
       else
-        warn "aucune sauvegarde : $CADDYFILE renvoie toujours vers le hub ; le modifier puis : systemctl reload caddy"
+        warn "$(t "aucune sauvegarde : $CADDYFILE renvoie toujours vers le hub ; le modifier puis : systemctl reload caddy" "no backup: $CADDYFILE still proxies to the hub; edit it, then: systemctl reload caddy")"
       fi
     fi
     if ((retirer_caddy)); then
-      suivre "Désinstallation du paquet Caddy" env DEBIAN_FRONTEND=noninteractive apt-get purge -y -q caddy
+      suivre "$(t "Désinstallation du paquet Caddy" "Uninstalling the Caddy package")" env DEBIAN_FRONTEND=noninteractive apt-get purge -y -q caddy
       rm -f /etc/apt/sources.list.d/caddy-stable.list /usr/share/keyrings/caddy-stable-archive-keyring.gpg
-      ok "Dépôt apt de Caddy retiré"
+      ok "$(t "Dépôt apt de Caddy retiré" "Caddy apt repository removed")"
     elif command -v caddy >/dev/null && systemctl is-active --quiet caddy; then
-      systemctl reload caddy >/dev/null 2>&1 && ok "Caddy rechargé" || warn "rechargement de Caddy impossible : journalctl -u caddy -e"
+      if systemctl reload caddy >/dev/null 2>&1; then ok "$(t "Caddy rechargé" "Caddy reloaded")"
+      else warn "$(t "rechargement de Caddy impossible" "could not reload Caddy")${DP}journalctl -u caddy -e"; fi
     fi
   fi
 
   # Binaire
   if ((retirer_binaire)); then
     rm -f "$BIN_CIBLE"
-    ok "Binaire supprimé : $BIN_CIBLE"
+    ok "$(t "Binaire supprimé" "Binary deleted")${DP}$BIN_CIBLE"
   fi
 
   echo
-  cadre "$green" "Désinstallation terminée" "État actuel : ${dim}./install.sh --status${reset}"
+  cadre "$green" "$(t "Désinstallation terminée" "Uninstall complete")" "$(t "État actuel" "Current status")${DP}${dim}./install.sh --status${reset}"
   echo
 }
 
 # ================================================================== Démarrage
 
-command -v systemctl >/dev/null || die "systemd est nécessaire (systemctl introuvable)."
-case "$MODE" in
-  etat) titre_onglet "opencode-hub · état"; banniere "opencode-hub" "état des services"; afficher_etat; exit 0 ;;
-  desinstaller) titre_onglet "opencode-hub · désinstallation"; banniere "opencode-hub" "désinstallation" ;;
-  *) titre_onglet "opencode-hub · installation"; banniere "opencode-hub" "installation" ;;
-esac
+if [[ "$MODE" == aide ]]; then aide; exit 0; fi
+command -v systemctl >/dev/null || die "$(t "systemd est nécessaire (systemctl introuvable)." "systemd is required (systemctl not found).")"
+if [[ "$MODE" == etat ]]; then afficher_etat; exit 0; fi
 
-# Droits administrateur : on propose de relancer avec sudo.
+# Droits administrateur : on propose de relancer avec sudo (la langue choisie suit).
 if [[ $EUID -ne 0 ]]; then
-  if command -v sudo >/dev/null 2>&1 && interactif && oui_non "Cette opération demande les droits administrateur. Relancer avec sudo ?"; then
-    exec sudo env OPENCODE_HUB_SANS_BANNIERE=1 bash "$0" "${ARGS_ORIGINAUX[@]}"
+  if command -v sudo >/dev/null 2>&1 && interactif &&
+    oui_non "$(t "Cette opération demande les droits administrateur. Relancer avec sudo ?" "This requires administrator rights. Run again with sudo?")"; then
+    exec sudo env OPENCODE_HUB_SANS_BANNIERE=1 OPENCODE_HUB_LANG="$LANGUE" bash "$0" "${ARGS_ORIGINAUX[@]}"
   fi
-  die "lancer en administrateur : sudo $0 ${ARGS_ORIGINAUX[*]}"
+  die "$(t "lancer en administrateur" "run as administrator")${DP}sudo $0 ${ARGS_ORIGINAUX[*]}"
 fi
 
 APPELANT="${SUDO_USER:-root}"
@@ -655,67 +708,67 @@ if [[ "$MODE" == desinstaller ]]; then desinstaller; exit 0; fi
 # ------------------------------------------------------------------ Choix des composants
 
 if ((!INSTALLER_CADDY && !INSTALLER_HUB && !INSTALLER_CLIENT)); then
-  interactif || die "préciser au moins un composant : --caddy, --hub ou --client (voir --help)."
-  cocher "Que faut-il installer ?" \
-    "Caddy   ${dim}proxy HTTPS et certificats automatiques${reset}" \
-    "Hub     ${dim}tableau de bord des machines${reset}" \
-    "Client  ${dim}relie cette machine à un hub${reset}" || die "abandon."
+  interactif || die "$(t "préciser au moins un composant : --caddy, --hub ou --client (voir --help)." "specify at least one component: --caddy, --hub or --client (see --help).")"
+  cocher "$(t "Que faut-il installer ?" "What should be installed?")" \
+    "Caddy   ${dim}$(t "proxy HTTPS et certificats automatiques" "HTTPS proxy and automatic certificates")${reset}" \
+    "Hub     ${dim}$(t "tableau de bord des machines" "machines dashboard")${reset}" \
+    "Client  ${dim}$(t "relie cette machine à un hub" "connects this machine to a hub")${reset}" || die "$(t "abandon." "aborted.")"
   for i in "${COCHES[@]}"; do
     case "$i" in 0) INSTALLER_CADDY=1 ;; 1) INSTALLER_HUB=1 ;; 2) INSTALLER_CLIENT=1 ;; esac
   done
-  ((INSTALLER_CADDY || INSTALLER_HUB || INSTALLER_CLIENT)) || die "aucun composant coché : rien à faire."
+  ((INSTALLER_CADDY || INSTALLER_HUB || INSTALLER_CLIENT)) || die "$(t "aucun composant coché : rien à faire." "no component checked: nothing to do.")"
 fi
 choix=()
 ((INSTALLER_CADDY)) && choix+=("Caddy")
 ((INSTALLER_HUB)) && choix+=("Hub")
 ((INSTALLER_CLIENT)) && choix+=("Client")
-ok "Composants : ${bold}${choix[*]}${reset}"
+ok "$(t "Composants" "Components")${DP}${bold}${choix[*]}${reset}"
 
 if ((INSTALLER_CADDY)); then
-  command -v apt-get >/dev/null || die "l'installation de Caddy demande Debian ou Ubuntu (apt-get)."
+  command -v apt-get >/dev/null || die "$(t "l'installation de Caddy demande Debian ou Ubuntu (apt-get)." "installing Caddy requires Debian or Ubuntu (apt-get).")"
 fi
 
 # ------------------------------------------------------------------ Réglages de Caddy et du hub
 
 if ((INSTALLER_CADDY || INSTALLER_HUB)); then
-  etape "Réglages du hub"
-  demander PORT "Port local du hub" "4800" "$RE_PORT" "un nombre entre 1 et 65535"
-  ((PORT >= 1 && PORT <= 65535)) || die "port hors limites : $PORT"
+  etape "$(t "Réglages du hub" "Hub settings")"
+  demander PORT "$(t "Port local du hub" "Local hub port")" "4800" "$RE_PORT" "$(t "un nombre entre 1 et 65535" "a number between 1 and 65535")"
+  ((PORT >= 1 && PORT <= 65535)) || die "$(t "port hors limites" "port out of range")${DP}$PORT"
 fi
 
 if ((INSTALLER_CADDY)); then
-  demander DOMAIN "Nom de domaine public du hub (ex. hub.example.com)" "" "$RE_DOMAINE" \
-    "un nom d'hôte nu, sans http:// ni chemin, par exemple hub.example.com"
+  demander DOMAIN "$(t "Nom de domaine public du hub (ex. hub.example.com)" "Public hub domain name (e.g. hub.example.com)")" "" "$RE_DOMAINE" \
+    "$(t "un nom d'hôte nu, sans http:// ni chemin, par exemple hub.example.com" "a bare hostname, without http:// or a path, for example hub.example.com")"
   DOMAIN="${DOMAIN,,}"; DOMAIN="${DOMAIN%.}"
-  demander EMAIL "Adresse e-mail pour les certificats (ACME)" "" "$RE_EMAIL" "adresse e-mail invalide"
+  demander EMAIL "$(t "Adresse e-mail pour les certificats (ACME)" "E-mail address for certificates (ACME)")" "" "$RE_EMAIL" "$(t "adresse e-mail invalide" "invalid e-mail address")"
   HUB_URL="https://$DOMAIN"
 fi
 
 if ((INSTALLER_HUB)); then
   if ((!INSTALLER_CADDY)); then
     if [[ -z "$HUB_URL" && -n "$DOMAIN" ]]; then HUB_URL="https://$DOMAIN"; fi
-    demander HUB_URL "URL publique du hub" "http://localhost:$PORT" "$RE_URL" "une URL du type https://hub.example.com"
+    demander HUB_URL "$(t "URL publique du hub" "Public hub URL")" "http://localhost:$PORT" "$RE_URL" "$(t "une URL du type https://hub.example.com" "a URL such as https://hub.example.com")"
     HUB_URL="${HUB_URL%/}"
-    demander HUB_HOTE "Adresse d'écoute du hub" "127.0.0.1"
+    demander HUB_HOTE "$(t "Adresse d'écoute du hub" "Hub listen address")" "127.0.0.1"
   fi
-  demander HUB_UTILISATEUR "Utilisateur système du hub" "opencode" "$RE_UTILISATEUR" "nom d'utilisateur invalide"
+  demander HUB_UTILISATEUR "$(t "Utilisateur système du hub" "Hub system user")" "opencode" "$RE_UTILISATEUR" "$(t "nom d'utilisateur invalide" "invalid user name")"
   if [[ -z "$SERVICE_HUB" ]]; then
-    if oui_non "Installer le service systemd ${bold}opencode-hub${reset} avec démarrage automatique ?"; then SERVICE_HUB=1; else SERVICE_HUB=0; fi
+    if oui_non "$(t "Installer le service systemd ${bold}opencode-hub${reset} avec démarrage automatique ?" "Install the ${bold}opencode-hub${reset} systemd service, started at boot?")"; then SERVICE_HUB=1; else SERVICE_HUB=0; fi
   fi
 fi
 
 # ------------------------------------------------------------------ Réglages du client
 
 if ((INSTALLER_CLIENT)); then
-  etape "Réglages du client"
+  etape "$(t "Réglages du client" "Client settings")"
   [[ -n "$CLIENT_URL" ]] || CLIENT_URL="$HUB_URL"
-  demander CLIENT_URL "URL du hub à rejoindre" "" "$RE_URL" "une URL du type https://hub.example.com"
+  demander CLIENT_URL "$(t "URL du hub à rejoindre" "URL of the hub to join")" "" "$RE_URL" "$(t "une URL du type https://hub.example.com" "a URL such as https://hub.example.com")"
   CLIENT_URL="${CLIENT_URL%/}"
-  demander CLIENT_UTILISATEUR "Utilisateur qui fait tourner l'agent" "$APPELANT" "$RE_UTILISATEUR" "nom d'utilisateur invalide"
-  id "$CLIENT_UTILISATEUR" >/dev/null 2>&1 || die "l'utilisateur $CLIENT_UTILISATEUR n'existe pas."
-  demander NOM_MACHINE "Nom de cette machine" "$(hostname)"
+  demander CLIENT_UTILISATEUR "$(t "Utilisateur qui fait tourner l'agent" "User running the agent")" "$APPELANT" "$RE_UTILISATEUR" "$(t "nom d'utilisateur invalide" "invalid user name")"
+  id "$CLIENT_UTILISATEUR" >/dev/null 2>&1 || die "$(t "l'utilisateur $CLIENT_UTILISATEUR n'existe pas." "user $CLIENT_UTILISATEUR does not exist.")"
+  demander NOM_MACHINE "$(t "Nom de cette machine" "Name of this machine")" "$(hostname)"
   if [[ -z "$SERVICE_CLIENT" ]]; then
-    if oui_non "Installer le service systemd ${bold}opencode-agent${reset} avec démarrage automatique ?"; then SERVICE_CLIENT=1; else SERVICE_CLIENT=0; fi
+    if oui_non "$(t "Installer le service systemd ${bold}opencode-agent${reset} avec démarrage automatique ?" "Install the ${bold}opencode-agent${reset} systemd service, started at boot?")"; then SERVICE_CLIENT=1; else SERVICE_CLIENT=0; fi
   fi
 fi
 
@@ -723,9 +776,9 @@ fi
 
 OPENCODE_BIN=""
 if ((INSTALLER_HUB || INSTALLER_CLIENT)); then
-  etape "Binaire opencode"
+  etape "$(t "Binaire opencode" "opencode binary")"
   if [[ -n "$BINARY" ]]; then
-    [[ -f "$BINARY" ]] || die "--binary introuvable : $BINARY"
+    [[ -f "$BINARY" ]] || die "$(t "--binary introuvable" "--binary not found")${DP}$BINARY"
     BINARY="$(readlink -f "$BINARY")"
   elif ((!CONSTRUIRE)); then
     candidats=()
@@ -735,27 +788,27 @@ if ((INSTALLER_HUB || INSTALLER_CLIENT)); then
       [[ " ${candidats[*]} " == *" $c "* ]] || candidats+=("$c")
     done
     options=()
-    for c in "${candidats[@]}"; do options+=("Utiliser $c ${dim}($(version_de "$c"))${reset}"); done
-    [[ -x "$REPO/build.sh" ]] && options+=("Construire depuis ce dépôt ${dim}(./build.sh, bun requis)${reset}")
-    options+=("Indiquer le chemin d'un binaire")
+    for c in "${candidats[@]}"; do options+=("$(t "Utiliser" "Use") $c ${dim}($(version_de "$c"))${reset}"); done
+    [[ -x "$REPO/build.sh" ]] && options+=("$(t "Construire depuis ce dépôt" "Build from this repository") ${dim}$(t "(./build.sh, bun requis)" "(./build.sh, bun required)")${reset}")
+    options+=("$(t "Indiquer le chemin d'un binaire" "Enter the path of a binary")")
     if ! interactif && ((${#candidats[@]} == 0)); then
-      [[ -x "$REPO/build.sh" ]] || die "aucun binaire opencode : passer --binary <chemin> ou --build."
+      [[ -x "$REPO/build.sh" ]] || die "$(t "aucun binaire opencode : passer --binary <chemin> ou --build." "no opencode binary: pass --binary <path> or --build.")"
       CONSTRUIRE=1
     else
-      menu "Quel binaire opencode installer ?" "${options[@]}" || die "abandon."
+      menu "$(t "Quel binaire opencode installer ?" "Which opencode binary should be installed?")" "${options[@]}" || die "$(t "abandon." "aborted.")"
       if ((MENU_CHOIX < ${#candidats[@]})); then
         BINARY="${candidats[$MENU_CHOIX]}"
       elif [[ -x "$REPO/build.sh" ]] && ((MENU_CHOIX == ${#candidats[@]})); then
         CONSTRUIRE=1
       else
-        demander BINARY "Chemin du binaire opencode"
-        [[ -f "$BINARY" ]] || die "binaire introuvable : $BINARY"
+        demander BINARY "$(t "Chemin du binaire opencode" "Path of the opencode binary")"
+        [[ -f "$BINARY" ]] || die "$(t "binaire introuvable" "binary not found")${DP}$BINARY"
         BINARY="$(readlink -f "$BINARY")"
       fi
     fi
   fi
   if ((CONSTRUIRE)); then
-    [[ -x "$REPO/build.sh" ]] || die "build.sh introuvable dans $REPO."
+    [[ -x "$REPO/build.sh" ]] || die "$(t "build.sh introuvable dans" "build.sh not found in") $REPO."
   fi
 fi
 
@@ -764,26 +817,26 @@ fi
 SERVICE_HUB="${SERVICE_HUB:-0}"
 SERVICE_CLIENT="${SERVICE_CLIENT:-0}"
 
-oui_txt() { if [[ "$1" == 1 ]]; then printf '%soui%s' "$green" "$reset"; else printf '%snon%s' "$dim" "$reset"; fi; }
+oui_txt() { if [[ "$1" == 1 ]]; then printf '%s%s%s' "$green" "$(t "oui" "yes")" "$reset"; else printf '%s%s%s' "$dim" "$(t "non" "no")" "$reset"; fi; }
 recap=()
 if ((INSTALLER_CADDY)); then
-  recap+=("${bold}Caddy${reset}   $DOMAIN et *.$DOMAIN ${dim}$S_SEP $EMAIL${reset}")
+  recap+=("${bold}Caddy${reset}   $DOMAIN $(t "et" "and") *.$DOMAIN ${dim}$S_SEP $EMAIL${reset}")
 fi
 if ((INSTALLER_HUB)); then
-  recap+=("${bold}Hub${reset}     $HUB_URL ${dim}$S_SEP écoute $HUB_HOTE:$PORT $S_SEP utilisateur $HUB_UTILISATEUR${reset}")
-  recap+=("        service systemd : $(oui_txt "$SERVICE_HUB")")
+  recap+=("${bold}Hub${reset}     $HUB_URL ${dim}$S_SEP $(t "écoute" "listens on") $HUB_HOTE:$PORT $S_SEP $(t "utilisateur" "user") $HUB_UTILISATEUR${reset}")
+  recap+=("        $(t "service systemd" "systemd service")${DP}$(oui_txt "$SERVICE_HUB")")
 fi
 if ((INSTALLER_CLIENT)); then
-  recap+=("${bold}Client${reset}  $CLIENT_URL ${dim}$S_SEP machine $NOM_MACHINE $S_SEP utilisateur $CLIENT_UTILISATEUR${reset}")
-  recap+=("        service systemd : $(oui_txt "$SERVICE_CLIENT")")
+  recap+=("${bold}Client${reset}  $CLIENT_URL ${dim}$S_SEP machine $NOM_MACHINE $S_SEP $(t "utilisateur" "user") $CLIENT_UTILISATEUR${reset}")
+  recap+=("        $(t "service systemd" "systemd service")${DP}$(oui_txt "$SERVICE_CLIENT")")
 fi
 if ((INSTALLER_HUB || INSTALLER_CLIENT)); then
-  if ((CONSTRUIRE)); then recap+=("${bold}Binaire${reset} construit depuis $REPO, installé dans $BIN_CIBLE")
-  else recap+=("${bold}Binaire${reset} $BINARY"); fi
+  if ((CONSTRUIRE)); then recap+=("${bold}$(t "Binaire" "Binary")${reset} $(t "construit depuis $REPO, installé dans $BIN_CIBLE" "built from $REPO, installed to $BIN_CIBLE")")
+  else recap+=("${bold}$(t "Binaire" "Binary")${reset} $BINARY"); fi
 fi
 echo
-cadre "$gris" "Récapitulatif" "${recap[@]}"
-oui_non "Lancer l'installation ?" || die "abandon : rien n'a été modifié."
+cadre "$gris" "$(t "Récapitulatif" "Summary")" "${recap[@]}"
+oui_non "$(t "Lancer l'installation ?" "Start the installation?")" || die "$(t "abandon : rien n'a été modifié." "aborted: nothing was changed.")"
 
 # ================================================================== Installation
 
@@ -793,30 +846,30 @@ if ((INSTALLER_CADDY || INSTALLER_HUB)) && command -v apt-get >/dev/null; then
   manque=0
   for outil in curl gpg openssl; do command -v "$outil" >/dev/null || manque=1; done
   if ((manque)); then
-    etape "Outils de base"
-    suivre "Installation de curl, gnupg et openssl" apt_installer curl gnupg openssl ca-certificates
+    etape "$(t "Outils de base" "Base tools")"
+    suivre "$(t "Installation de curl, gnupg et openssl" "Installing curl, gnupg and openssl")" apt_installer curl gnupg openssl ca-certificates
   fi
 fi
 
 # ------------------------------------------------------------------ Binaire
 
 if ((INSTALLER_HUB || INSTALLER_CLIENT)); then
-  etape "Binaire opencode"
+  etape "$(t "Binaire opencode" "opencode binary")"
   if ((CONSTRUIRE)); then
     construire() { en_tant_que "$APPELANT" bash -c 'cd "$1" && ./build.sh --skip-tests' _ "$REPO"; }
-    suivre "Construction d'opencode (./build.sh)" construire
+    suivre "$(t "Construction d'opencode (./build.sh)" "Building opencode (./build.sh)")" construire
     BINARY="$(ls -t "$REPO"/packages/cli/dist/*/bin/opencode 2>/dev/null | head -n1 || true)"
-    [[ -n "$BINARY" ]] || die "binaire introuvable après la construction (packages/cli/dist/*/bin/opencode)."
+    [[ -n "$BINARY" ]] || die "$(t "binaire introuvable après la construction" "binary not found after the build") (packages/cli/dist/*/bin/opencode)."
   fi
   if [[ "$BINARY" != "$BIN_CIBLE" ]]; then
     install -m 0755 "$BINARY" "$BIN_CIBLE.new"
     mv -f "$BIN_CIBLE.new" "$BIN_CIBLE"
-    ok "Binaire installé : $BIN_CIBLE"
+    ok "$(t "Binaire installé" "Binary installed")${DP}$BIN_CIBLE"
   else
-    ok "Binaire déjà en place : $BIN_CIBLE"
+    ok "$(t "Binaire déjà en place" "Binary already in place")${DP}$BIN_CIBLE"
   fi
   OPENCODE_BIN="$BIN_CIBLE"
-  info "Version : $(version_de "$OPENCODE_BIN")"
+  info "Version${DP}$(version_de "$OPENCODE_BIN")"
 fi
 
 # ------------------------------------------------------------------ Caddy
@@ -833,19 +886,19 @@ ip_publique() {
 verifier_dns() {
   local ip hote resolu
   if ! ip="$(ip_publique)"; then
-    warn "adresse IPv4 publique inconnue : vérification DNS ignorée."
+    warn "$(t "adresse IPv4 publique inconnue : vérification DNS ignorée." "public IPv4 address unknown: skipping the DNS check.")"
     return
   fi
-  info "IPv4 publique : $ip"
+  info "$(t "IPv4 publique" "Public IPv4")${DP}$ip"
   for hote in "$DOMAIN" "dnscheck-$(openssl rand -hex 4).$DOMAIN"; do
     resolu="$({ getent ahostsv4 "$hote" 2>/dev/null || true; } | awk '{ print $1 }' | sort -u | tr '\n' ' ')"
     if [[ -z "$resolu" ]]; then
-      if [[ "$hote" == "$DOMAIN" ]]; then warn "$DOMAIN ne se résout pas : ajouter un enregistrement A $DOMAIN → $ip"
-      else warn "*.$DOMAIN ne se résout pas : ajouter un enregistrement A *.$DOMAIN → $ip"; fi
+      if [[ "$hote" == "$DOMAIN" ]]; then warn "$(t "$DOMAIN ne se résout pas : ajouter un enregistrement A $DOMAIN → $ip" "$DOMAIN does not resolve: add an A record $DOMAIN → $ip")"
+      else warn "$(t "*.$DOMAIN ne se résout pas : ajouter un enregistrement A *.$DOMAIN → $ip" "*.$DOMAIN does not resolve: add an A record *.$DOMAIN → $ip")"; fi
     elif ! grep -qwF -- "$ip" <<<"$resolu"; then
-      warn "$hote pointe vers $resolu, pas vers ce serveur ($ip) : les certificats échoueront."
+      warn "$(t "$hote pointe vers $resolu, pas vers ce serveur ($ip) : les certificats échoueront." "$hote points to $resolu, not to this server ($ip): certificates will fail.")"
     else
-      ok "DNS : $hote → $ip"
+      ok "DNS${DP}$hote → $ip"
     fi
   done
 }
@@ -863,9 +916,9 @@ if ((INSTALLER_CADDY)); then
   etape "Caddy"
   verifier_dns
   if command -v caddy >/dev/null; then
-    ok "Caddy déjà installé ${dim}($(caddy version | head -n1))${reset}"
+    ok "$(t "Caddy déjà installé" "Caddy already installed") ${dim}($(caddy version | head -n1))${reset}"
   else
-    suivre "Installation de Caddy (dépôt apt officiel)" installer_caddy
+    suivre "$(t "Installation de Caddy (dépôt apt officiel)" "Installing Caddy (official apt repository)")" installer_caddy
   fi
 
   nouveau="$(mktemp)"
@@ -892,26 +945,26 @@ EOF
   if ! caddy validate --adapter caddyfile --config "$nouveau" >/dev/null 2>&1; then
     caddy validate --adapter caddyfile --config "$nouveau" || true
     rm -f "$nouveau"
-    die "le Caddyfile produit est invalide."
+    die "$(t "le Caddyfile produit est invalide." "the generated Caddyfile is invalid.")"
   fi
   mkdir -p /etc/caddy
   if [[ -f "$CADDYFILE" ]] && cmp -s "$nouveau" "$CADDYFILE"; then
-    ok "Caddyfile inchangé"
+    ok "$(t "Caddyfile inchangé" "Caddyfile unchanged")"
   else
     if [[ -f "$CADDYFILE" ]]; then
       sauvegarde="$CADDYFILE.bak.$(date +%Y%m%d%H%M%S)"
       cp -p "$CADDYFILE" "$sauvegarde"
-      info "Ancien Caddyfile sauvegardé : $sauvegarde"
+      info "$(t "Ancien Caddyfile sauvegardé" "Previous Caddyfile backed up")${DP}$sauvegarde"
     fi
     install -m 0644 "$nouveau" "$CADDYFILE"
-    ok "Caddyfile écrit : $CADDYFILE"
+    ok "$(t "Caddyfile écrit" "Caddyfile written")${DP}$CADDYFILE"
   fi
   rm -f "$nouveau"
 
   if command -v ufw >/dev/null && ufw status 2>/dev/null | grep -q '^Status: active'; then
     ufw allow 80/tcp >/dev/null
     ufw allow 443/tcp >/dev/null
-    ok "Ports 80 et 443 ouverts dans ufw"
+    ok "$(t "Ports 80 et 443 ouverts dans ufw" "Ports 80 and 443 opened in ufw")"
   fi
 
   systemctl enable caddy >/dev/null 2>&1
@@ -920,7 +973,7 @@ EOF
   else
     systemctl restart caddy
   fi
-  ok "Caddy démarré, démarrage automatique activé"
+  ok "$(t "Caddy démarré, démarrage automatique activé" "Caddy started, start at boot enabled")"
 fi
 
 # ------------------------------------------------------------------ Hub
@@ -939,20 +992,20 @@ if ((INSTALLER_HUB)); then
   etape "Hub"
   if ((SERVICE_HUB)); then
     if id "$HUB_UTILISATEUR" >/dev/null 2>&1; then
-      ok "Utilisateur $HUB_UTILISATEUR déjà présent"
+      ok "$(t "Utilisateur $HUB_UTILISATEUR déjà présent" "User $HUB_UTILISATEUR already exists")"
     else
       useradd --system --home-dir "$DATA_DIR" --create-home --shell /usr/sbin/nologin "$HUB_UTILISATEUR"
-      ok "Utilisateur système créé : $HUB_UTILISATEUR"
+      ok "$(t "Utilisateur système créé" "System user created")${DP}$HUB_UTILISATEUR"
     fi
     install -d -m 0750 -o "$HUB_UTILISATEUR" -g "$HUB_UTILISATEUR" "$DATA_DIR"
-    runuser -u "$HUB_UTILISATEUR" -- test -x "$OPENCODE_BIN" || die "$HUB_UTILISATEUR ne peut pas exécuter $OPENCODE_BIN."
+    runuser -u "$HUB_UTILISATEUR" -- test -x "$OPENCODE_BIN" || die "$(t "$HUB_UTILISATEUR ne peut pas exécuter $OPENCODE_BIN." "$HUB_UTILISATEUR cannot execute $OPENCODE_BIN.")"
 
     if [[ -f "$ENV_FILE" ]]; then
-      ok "$ENV_FILE conservé (mot de passe inchangé)"
+      ok "$(t "$ENV_FILE conservé (mot de passe inchangé)" "$ENV_FILE kept (password unchanged)")"
     else
       MOT_DE_PASSE_GENERE="$(openssl rand -base64 24 2>/dev/null || head -c 24 /dev/urandom | base64)"
       (umask 077; printf 'OPENCODE_HUB_PASSWORD=%s\n' "$MOT_DE_PASSE_GENERE" >"$ENV_FILE")
-      ok "Mot de passe du hub créé dans $ENV_FILE"
+      ok "$(t "Mot de passe du hub créé dans" "Hub password created in") $ENV_FILE"
     fi
     chown root:root "$ENV_FILE"
     chmod 0600 "$ENV_FILE"
@@ -995,24 +1048,24 @@ LockPersonality=true
 [Install]
 WantedBy=multi-user.target
 EOF
-    ok "Service écrit : $UNIT_HUB"
+    ok "$(t "Service écrit" "Service written")${DP}$UNIT_HUB"
     systemctl daemon-reload
     systemctl enable opencode-hub >/dev/null 2>&1
     systemctl restart opencode-hub
-    if suivre "Démarrage du hub" attendre_hub; then
-      ok "Hub en marche, démarrage automatique activé"
+    if suivre "$(t "Démarrage du hub" "Starting the hub")" attendre_hub; then
+      ok "$(t "Hub en marche, démarrage automatique activé" "Hub running, start at boot enabled")"
     else
-      warn "le hub ne répond pas encore sur 127.0.0.1:$PORT : journalctl -u opencode-hub -e"
+      warn "$(t "le hub ne répond pas encore sur 127.0.0.1:$PORT" "the hub does not answer on 127.0.0.1:$PORT yet")${DP}journalctl -u opencode-hub -e"
     fi
     if [[ -n "$MOT_DE_PASSE_GENERE" ]]; then
       echo
-      cadre "$yellow" "Mot de passe du hub" "" "${bold}$MOT_DE_PASSE_GENERE${reset}" "" \
-        "Affiché une seule fois. Il reste dans $ENV_FILE (OPENCODE_HUB_PASSWORD)."
+      cadre "$yellow" "$(t "Mot de passe du hub" "Hub password")" "" "${bold}$MOT_DE_PASSE_GENERE${reset}" "" \
+        "$(t "Affiché une seule fois. Il reste dans $ENV_FILE (OPENCODE_HUB_PASSWORD)." "Shown only once. It stays in $ENV_FILE (OPENCODE_HUB_PASSWORD).")"
     fi
   else
-    info "Sans service : lancer le hub à la main avec"
+    info "$(t "Sans service : lancer le hub à la main avec" "Without a service: start the hub by hand with")"
     echo "  $OPENCODE_BIN hub --hostname $HUB_HOTE --port $PORT --url $HUB_URL"
-    info "${dim}Le mot de passe est affiché au premier démarrage.${reset}"
+    info "${dim}$(t "Le mot de passe est affiché au premier démarrage." "The password is shown on the first start.")${reset}"
   fi
 fi
 
@@ -1024,18 +1077,18 @@ if ((INSTALLER_CLIENT)); then
   etat="$(en_tant_que "$CLIENT_UTILISATEUR" "$OPENCODE_BIN" agent status 2>/dev/null || true)"
   enroler=1
   if grep -q '^hub ' <<<"$etat"; then
-    info "Machine déjà enrôlée :"
+    info "$(t "Machine déjà enrôlée :" "Machine already enrolled:")"
     sed 's/^/    /' <<<"$etat"
-    if [[ -z "$CODE" ]] && ! oui_non "L'enrôler de nouveau ?" n; then enroler=0; fi
+    if [[ -z "$CODE" ]] && ! oui_non "$(t "L'enrôler de nouveau ?" "Enroll it again?")" n; then enroler=0; fi
   fi
   if ((enroler)); then
     if [[ -z "$CODE" ]]; then
-      info "Code d'enrôlement : tableau de bord $(lien "$CLIENT_URL"), bouton ${bold}add machine${reset}."
-      demander CODE "Code d'enrôlement"
+      info "$(t "Code d'enrôlement : tableau de bord" "Enrollment code: dashboard") $(lien "$CLIENT_URL"), $(t "bouton" "button") ${bold}add machine${reset}."
+      demander CODE "$(t "Code d'enrôlement" "Enrollment code")"
     fi
-    suivre "Enrôlement auprès de $CLIENT_URL" \
+    suivre "$(t "Enrôlement auprès de" "Enrolling with") $CLIENT_URL" \
       en_tant_que "$CLIENT_UTILISATEUR" "$OPENCODE_BIN" agent join "$CLIENT_URL" --code "$CODE" --name "$NOM_MACHINE" ||
-      die "enrôlement refusé : vérifier l'URL et le code (un code ne sert qu'une fois)."
+      die "$(t "enrôlement refusé : vérifier l'URL et le code (un code ne sert qu'une fois)." "enrollment refused: check the URL and the code (a code works only once).")"
   fi
 
   if ((SERVICE_CLIENT)); then
@@ -1060,18 +1113,18 @@ RestartSec=5
 [Install]
 WantedBy=multi-user.target
 EOF
-    ok "Service écrit : $UNIT_CLIENT"
+    ok "$(t "Service écrit" "Service written")${DP}$UNIT_CLIENT"
     systemctl daemon-reload
     systemctl enable opencode-agent >/dev/null 2>&1
     systemctl restart opencode-agent
     sleep 1
     if systemctl is-active --quiet opencode-agent; then
-      ok "Agent en marche, démarrage automatique activé"
+      ok "$(t "Agent en marche, démarrage automatique activé" "Agent running, start at boot enabled")"
     else
-      warn "l'agent ne tourne pas : journalctl -u opencode-agent -e"
+      warn "$(t "l'agent ne tourne pas" "the agent is not running")${DP}journalctl -u opencode-agent -e"
     fi
   else
-    info "Sans service : garder la machine reliée avec"
+    info "$(t "Sans service : garder la machine reliée avec" "Without a service: keep the machine connected with")"
     echo "  $OPENCODE_BIN agent run"
   fi
 fi
@@ -1080,18 +1133,18 @@ fi
 
 fin=()
 if ((INSTALLER_HUB || INSTALLER_CADDY)); then
-  [[ -n "$HUB_URL" ]] && fin+=("Tableau de bord  $(lien "$HUB_URL")")
-  [[ -n "$DOMAIN" ]] && fin+=("Machines         https://<id>.$DOMAIN")
+  [[ -n "$HUB_URL" ]] && fin+=("$(pad "$(t "Tableau de bord" "Dashboard")" 16) $(lien "$HUB_URL")")
+  [[ -n "$DOMAIN" ]] && fin+=("$(pad "Machines" 16) https://<id>.$DOMAIN")
 fi
-((INSTALLER_HUB && SERVICE_HUB)) && fin+=("Journal du hub   ${dim}journalctl -u opencode-hub -f${reset}")
-((INSTALLER_CADDY)) && fin+=("Journal Caddy    ${dim}journalctl -u caddy -f${reset}")
-((INSTALLER_CLIENT && SERVICE_CLIENT)) && fin+=("Journal agent    ${dim}journalctl -u opencode-agent -f${reset}")
-((INSTALLER_HUB && SERVICE_HUB)) && fin+=("Mot de passe     ${dim}$ENV_FILE${reset}")
+((INSTALLER_HUB && SERVICE_HUB)) && fin+=("$(pad "$(t "Journal du hub" "Hub logs")" 16) ${dim}journalctl -u opencode-hub -f${reset}")
+((INSTALLER_CADDY)) && fin+=("$(pad "$(t "Journal Caddy" "Caddy logs")" 16) ${dim}journalctl -u caddy -f${reset}")
+((INSTALLER_CLIENT && SERVICE_CLIENT)) && fin+=("$(pad "$(t "Journal agent" "Agent logs")" 16) ${dim}journalctl -u opencode-agent -f${reset}")
+((INSTALLER_HUB && SERVICE_HUB)) && fin+=("$(pad "$(t "Mot de passe" "Password")" 16) ${dim}$ENV_FILE${reset}")
+fin+=("$(pad "$(t "État" "Status")" 16) ${dim}./install.sh --status${reset}")
 if ((INSTALLER_HUB && !INSTALLER_CLIENT)); then
-  fin+=("" "Relier une machine : sur celle-ci,")
+  fin+=("" "$(t "Relier une machine : sur celle-ci," "Connect a machine: on that machine, run")")
   fin+=("  ${dim}sudo ./install.sh --client --client-url ${HUB_URL:-<url>} --code <code>${reset}")
 fi
 echo
-((${#fin[@]})) || fin=("Rien d'autre à faire.")
-cadre "$green" "Installation terminée" "${fin[@]}"
+cadre "$green" "$(t "Installation terminée" "Installation complete")" "${fin[@]}"
 echo
