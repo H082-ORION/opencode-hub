@@ -29,7 +29,7 @@ browser ──https──> Caddy ──http──> opencode hub (127.0.0.1:4800)
 
 | Who | Credential | Where it is checked |
 |---|---|---|
-| A user (browser) | login and password through OPAQUE (the hub never sees the password) -> `opencode_hub` session cookie of that user (host-only, HttpOnly, SameSite=Lax, Secure when the hub URL is https, 30 days, in memory) | hub, on the hub host and on every machine host; the account must exist and be active on every request |
+| A user (browser) | login and password through OPAQUE (the hub never sees the password) -> `opencode_hub` session cookie of that user (host-only, HttpOnly, SameSite=Lax, Secure when the hub URL is https, 30 days, in memory) | hub, on the hub host and on every machine host; the account must exist and be active, and own the machine, on every request |
 | A machine's tunnel | `tunnel token`, issued at enrollment, sent as `Authorization: Bearer` on the WebSocket upgrade | hub `/hub/agent/connect` |
 | A machine's LLM calls | `llm token`, issued at enrollment, used as the provider API key on the machine | hub `/llm/<provider>/...` |
 | The hub reaching the local server | the local service password (Basic `opencode:<password>`) | injected by the **agent**, never known to the hub |
@@ -41,7 +41,7 @@ Cookie handoff to machine hosts (cookies are host-only, so no `Domain=` attribut
 
 1. Unauthenticated request on `<m>.<domain>` -> 302 to `<hub-origin>/login?next=<full url>`.
 2. After login (or when already logged in), `GET <hub-origin>/hub/handoff?next=<full url>` validates that `next` is the
-   hub or a machine host, creates a one-time ticket (60 s), and 302s to `<m-origin>/auth/hub-session?ticket=..&next=<path>`.
+   hub or a machine host the user owns, creates a one-time ticket (60 s), and 302s to `<m-origin>/auth/hub-session?ticket=..&next=<path>`.
 3. The machine host consumes the ticket, sets its own `opencode_hub` cookie and 302s to `next`.
 
 ## Tunnel protocol (WebSocket, binary messages)
@@ -89,17 +89,24 @@ Rules:
   change roles and reset passwords; the hub always keeps one active administrator. `opencode hub invite [--admin]
   [--data <dir>]` writes an invitation straight into the database and prints its link; a hub started in a terminal
   without any account prints an administrator invitation itself, and otherwise prints that command.
-  Until machines belong to users (step 2), every signed-in user sees, opens and revokes every machine and manages the
-  shared providers.
+- Machines (step 2): each machine belongs to the user who created its enrollment code (`owner_user_id`, and
+  `enrolled_by`). A user lists (`machines`, `events`), opens (its host, WebSockets included) and gets handoff tickets
+  for their own machines only, checked on every request; another user's machine answers exactly like an unknown one
+  (404 page on its host, `/` from `/hub/handoff`, 404 on `DELETE`). Owners revoke their machines; administrators
+  revoke any machine and list them all with their owner (`admin/machines`), but cannot open them. Signing out,
+  disabling or resetting an account also cuts the proxied streams (SSE, WebSockets) its sessions hold open. Machines
+  enrolled before owners existed go to the oldest active administrator, at start or as soon as one exists; until
+  then nobody can open them. `owner_org_id` is reserved for organization machines (step 4) and stays empty. Providers
+  are still shared by every user (step 3).
 - User key: the browser draws a 32-byte key at registration and stores it wrapped (AES-256-GCM under a key derived from
   the OPAQUE export key) with an HMAC check value. At sign-in the browser unwraps it and sends it; the hub checks it
   against the stored check and keeps it in memory until it stops, the user locks it or the account is disabled or
   reset. Nothing uses it yet.
 - Storage: `bun:sqlite` file `<data>/hub.db` with tables `user` (id, login, role, registration_record, wrapped_key,
   key_check, created_at, updated_at, disabled_at), `invitation` (id, code_hash, role, created_by, user_id for a reset,
-  created_at, expires_at, used_at), `machine` (id, name, tunnel_token_hash, llm_token_hash, created_at,
-  last_seen_at), `provider` (id, name, base_url, api_key, created_at), `setting` (key, value; `url` is the public URL
-  the hub last started with, for `hub invite`). The OPAQUE server key lives in `<data>/opaque-server-setup`, outside
+  created_at, expires_at, used_at), `machine` (id, name, tunnel_token_hash, llm_token_hash, owner_user_id,
+  owner_org_id, enrolled_by, created_at, last_seen_at), `provider` (id, name, base_url, api_key, created_at),
+  `setting` (key, value; `url` is the public URL the hub last started with, for `hub invite`). The OPAQUE server key lives in `<data>/opaque-server-setup`, outside
   the database. The data dir is `0700`; `hub.db`, its WAL files, `opaque-server-setup` and `catalog.json` are `0600`.
   Sessions, unlocked user keys, OPAQUE attempts, enrollment codes and handoff tickets live in memory.
 - Routes on the hub host:
@@ -109,18 +116,21 @@ Rules:
   - JSON API under `/hub/api/`: `session`, `register/invite`, `register/start`, `register/finish`, `login/start`,
     `login/finish`, `logout`, `account/lock`, `account/password/start`, `account/password/finish`, and for
     administrators `users`, `users/<id>/{disable,enable,role,reset}`, `invitations`, `DELETE invitations/<id>`;
-    then `machines`, `events` (SSE, live machine list),
-    `machines/code`, `DELETE machines/<id>`, `providers`, `DELETE providers/<id>`, `presets` (provider catalog),
+    then `machines`, `events` (SSE, live list of the user's machines),
+    `machines/code` (a code tied to the signed-in user), `DELETE machines/<id>` (owner or administrator),
+    `admin/machines` (administrators: every machine with its owner), `providers`, `DELETE providers/<id>`, `presets` (provider catalog),
     `providers/chatgpt/begin`, `providers/chatgpt/complete`. Mutations need a JSON body and `Origin` = hub origin.
   - `GET /hub/handoff`.
-  - `POST /hub/agent/enroll` JSON `{ code, name }` -> `{ machine: { id, name }, tunnelToken, llmToken, url }`.
+  - `POST /hub/agent/enroll` JSON `{ code, name }` -> `{ machine: { id, name }, tunnelToken, llmToken, url }`. The
+    machine belongs to the code's author; a code whose author was disabled meanwhile is refused (403).
   - `GET /hub/agent/connect` WebSocket upgrade for the tunnel.
   - `ANY /llm/<provider>/<rest>`: LLM proxy (below).
   - `GET /hub/tls-allowed?domain=` -> 200 for the hub host and existing machine hosts, else 404.
   - `GET /hub/health` -> 200.
-- Routes on `<m>.<domain>`: `/auth/hub-session` (ticket consumption); everything else requires the cookie and is proxied
-  through the tunnel, including WebSocket upgrades. Machine offline -> 503 HTML page with a link back to the dashboard.
-  Unknown machine -> 404.
+- Routes on `<m>.<domain>`: `/auth/hub-session` (ticket consumption); everything else requires the cookie of the
+  machine's owner and is proxied through the tunnel, including WebSocket upgrades. Without a session -> login redirect
+  (401 for upgrades and mutations), whether the machine exists or not. Machine offline -> 503 HTML page with a link
+  back to the dashboard. Unknown machine, or another user's -> the same 404.
 - Sign-in is rate limited in memory: an exponential delay per client IP after failures, and 15 minutes after 5
   consecutive failures on a login, whether the account exists or not. A sign-in counts as failed from `login/start`
   until `login/finish` succeeds, since a wrong password fails in the browser. An unknown login gets a fake OPAQUE
@@ -158,7 +168,8 @@ Rules:
 
 ```ts
 Hub.start(options: { hostname?: string; port?: number; url: string; data: string })
-  -> Promise<{ url: string; port: number; userCount(): number; invite(role): { url, expiresAt }; stop(): Promise<void> }>
+  -> Promise<{ url: string; port: number; userCount(): number; invite(role): { url, expiresAt };
+       createEnrollmentCode(userID): { code, expiresAt }; stop(): Promise<void> }>
 Hub.invite(input: { data: string; role: "admin" | "user" }) -> { url: string; expiresAt: number }
 Agent.enroll(input: { url: string; code: string; name: string }) -> Promise<Enrollment>
 Agent.connect(input: {
@@ -172,5 +183,5 @@ Agent.connect(input: {
 
 ## Out of scope for the first version
 
-Per-user machines, keys and instances (see `specs/multi-users.md`), flow control, a queue for prompts sent while a machine is offline, mTLS, OAuth-based providers in the
+Per-user keys and instances, organizations (see `specs/multi-users.md`), flow control, a queue for prompts sent while a machine is offline, mTLS, OAuth-based providers in the
 LLM proxy.

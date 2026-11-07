@@ -2,6 +2,15 @@ import { copy } from "./copy"
 
 export type HubMachine = { id: string; name: string; online: boolean; lastSeenAt: number | null; url: string }
 
+/** A machine as administrators list it: with its owner's login (null before it has one), and no link to open it. */
+export type HubAdminMachine = {
+  id: string
+  name: string
+  owner: string | null
+  online: boolean
+  lastSeenAt: number | null
+}
+
 export type HubProvider = { id: string; name: string; baseURL: string; auth: "key" | "chatgpt" }
 
 /** A provider from opencode's models.dev catalog. */
@@ -99,6 +108,7 @@ export const hubApi = {
   setRole: (id: string, role: HubRole) => post<object>(`users/${encodeURIComponent(id)}/role`, { role }),
   reset: (id: string) => post<IssuedInvitation>(`users/${encodeURIComponent(id)}/reset`, {}),
   machines: () => request<HubMachine[]>("machines"),
+  allMachines: () => request<HubAdminMachine[]>("admin/machines"),
   createCode: () => request<EnrollmentCode>("machines/code", { method: "POST" }),
   revoke: (id: string) => request<void>(`machines/${encodeURIComponent(id)}`, { method: "DELETE" }),
   providers: () => request<HubProvider[]>("providers"),

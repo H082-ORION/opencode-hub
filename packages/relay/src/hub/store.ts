@@ -5,12 +5,24 @@ import path from "node:path"
 
 export * as Store from "./store.js"
 
+/**
+ * A machine belongs to exactly one owner: a user (`owner_user_id`) or, from step 4 of the multi-user spec, an
+ * organization (`owner_org_id`). The code keeps that invariant; a machine enrolled before owners existed has neither
+ * until it is adopted by the first administrator (see `adoptMachines`).
+ */
 export type Machine = {
   id: string
   name: string
+  owner_user_id: string | null
+  owner_org_id: string | null
+  /** The user whose enrollment code created the machine. */
+  enrolled_by: string | null
   created_at: number
   last_seen_at: number | null
 }
+
+/** A machine as the administration lists it, with its owner's login. */
+export type MachineSummary = Machine & { owner_login: string | null }
 
 const OAuth = Schema.Struct({
   access: Schema.String,
@@ -93,6 +105,9 @@ export function open(dir: string) {
     name TEXT NOT NULL,
     tunnel_token_hash TEXT NOT NULL UNIQUE,
     llm_token_hash TEXT NOT NULL UNIQUE,
+    owner_user_id TEXT,
+    owner_org_id TEXT,
+    enrolled_by TEXT,
     created_at INTEGER NOT NULL,
     last_seen_at INTEGER
   )`)
@@ -114,6 +129,16 @@ export function open(dir: string) {
   )
   if (!columns.has("auth")) db.run("ALTER TABLE provider ADD COLUMN auth TEXT NOT NULL DEFAULT 'key'")
   if (!columns.has("oauth")) db.run("ALTER TABLE provider ADD COLUMN oauth TEXT")
+  // Databases created before machines had owners lack these columns; their machines are adopted below.
+  const ownerColumns = new Set(
+    db
+      .query<{ name: string }, []>("PRAGMA table_info(machine)")
+      .all()
+      .map((row) => row.name),
+  )
+  ;["owner_user_id", "owner_org_id", "enrolled_by"]
+    .filter((column) => !ownerColumns.has(column))
+    .forEach((column) => db.run(`ALTER TABLE machine ADD COLUMN ${column} TEXT`))
   db.run("CREATE TABLE IF NOT EXISTS setting (key TEXT PRIMARY KEY, value TEXT NOT NULL)")
   // The single hub password of earlier versions is gone: accounts replace it.
   db.run("DELETE FROM setting WHERE key = 'password_hash'")
@@ -139,9 +164,17 @@ export function open(dir: string) {
     used_at INTEGER
   )`)
 
-  const machineColumns = "id, name, created_at, last_seen_at"
+  const machineColumns = "id, name, owner_user_id, owner_org_id, enrolled_by, created_at, last_seen_at"
   const queries = {
-    machines: db.query<Machine, []>(`SELECT ${machineColumns} FROM machine ORDER BY created_at`),
+    machines: db.query<MachineSummary, []>(
+      `SELECT machine.id, machine.name, machine.owner_user_id, machine.owner_org_id, machine.enrolled_by,
+         machine.created_at, machine.last_seen_at, user.login AS owner_login
+       FROM machine LEFT JOIN user ON user.id = machine.owner_user_id
+       ORDER BY machine.created_at`,
+    ),
+    machinesOf: db.query<Machine, [string]>(
+      `SELECT ${machineColumns} FROM machine WHERE owner_user_id = ? AND owner_org_id IS NULL ORDER BY created_at`,
+    ),
     machine: db.query<Machine, [string]>(`SELECT ${machineColumns} FROM machine WHERE id = ?`),
     byTunnel: db.query<Machine, [string]>(`SELECT ${machineColumns} FROM machine WHERE tunnel_token_hash = ?`),
     byLlm: db.query<Machine, [string]>(`SELECT ${machineColumns} FROM machine WHERE llm_token_hash = ?`),
@@ -171,6 +204,20 @@ export function open(dir: string) {
     ),
   }
 
+  /**
+   * Gives the machines that have no owner yet, enrolled before machines belonged to users, to the oldest active
+   * administrator. Until one exists they stay ownerless, which nobody may open.
+   */
+  const adoptMachines = () =>
+    db.run(
+      `UPDATE machine SET owner_user_id = (
+         SELECT id FROM user WHERE role = 'admin' AND disabled_at IS NULL ORDER BY created_at, rowid LIMIT 1
+       )
+       WHERE owner_user_id IS NULL AND owner_org_id IS NULL
+         AND EXISTS (SELECT 1 FROM user WHERE role = 'admin' AND disabled_at IS NULL)`,
+    ).changes
+  adoptMachines()
+
   /** Disabling or demoting the last active administrator would leave nobody able to administer the hub. */
   const lastAdmin = (user: User) =>
     user.role === "admin" && user.disabled_at === null && (queries.activeAdmins.get()?.count ?? 0) <= 1
@@ -190,23 +237,28 @@ export function open(dir: string) {
   }
 
   return {
+    /** Every machine with its owner's login, for administrators. */
     machines: () => queries.machines.all(),
+    /** The machines a user owns personally. */
+    machinesOf: (user: string) => queries.machinesOf.all(user),
     machine: (id: string) => queries.machine.get(id) ?? undefined,
     machineByTunnelToken: (token: string) => queries.byTunnel.get(hashToken(token)) ?? undefined,
     machineByLlmToken: (token: string) => queries.byLlm.get(hashToken(token)) ?? undefined,
-    /** Creates a machine with an id derived from `name` and returns it with its fresh plaintext tokens. */
-    createMachine(name: string) {
+    /**
+     * Creates a machine owned by the user who enrolled it, with an id derived from `name`, and returns it with its
+     * fresh plaintext tokens.
+     */
+    createMachine(input: { name: string; owner: string }) {
+      const name = input.name
       const tunnelToken = randomToken()
       const llmToken = randomToken()
       const id = db.transaction(() => {
         const machineID = availableID(slug(name), (candidate) => queries.machine.get(candidate) !== null)
-        db.run("INSERT INTO machine (id, name, tunnel_token_hash, llm_token_hash, created_at) VALUES (?, ?, ?, ?, ?)", [
-          machineID,
-          name,
-          hashToken(tunnelToken),
-          hashToken(llmToken),
-          Date.now(),
-        ])
+        db.run(
+          `INSERT INTO machine (id, name, tunnel_token_hash, llm_token_hash, owner_user_id, enrolled_by, created_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?)`,
+          [machineID, name, hashToken(tunnelToken), hashToken(llmToken), input.owner, input.owner, Date.now()],
+        )
         return machineID
       })()
       return { machine: { id, name }, tunnelToken, llmToken }
@@ -297,6 +349,7 @@ export function open(dir: string) {
           if (created.changes === 0) return "taken"
         }
         db.run("UPDATE invitation SET used_at = ? WHERE id = ?", [now, invitation.id])
+        adoptMachines()
         return "ok"
       })(),
     /** Replaces the OPAQUE record and the wrapped key after a password change; the user key itself is unchanged. */
@@ -315,6 +368,7 @@ export function open(dir: string) {
           Date.now(),
           id,
         ])
+        adoptMachines()
         return "ok"
       })(),
     setRole: (id: string, role: Role) =>
@@ -323,6 +377,7 @@ export function open(dir: string) {
         if (!user) return "unknown"
         if (role !== "admin" && lastAdmin(user)) return "last-admin"
         db.run("UPDATE user SET role = ?, updated_at = ? WHERE id = ?", [role, Date.now(), id])
+        adoptMachines()
         return "ok"
       })(),
     /**

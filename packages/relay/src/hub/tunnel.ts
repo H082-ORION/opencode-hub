@@ -13,6 +13,8 @@ type Head = { status: number; headers: Headers }
 
 type HttpStream = {
   kind: "http"
+  /** The browser session the stream was opened for, so it can be cut when that session loses access. */
+  session: string
   head: PromiseWithResolvers<Head | undefined>
   responded: boolean
   body: ReadableStreamDefaultController<Uint8Array>
@@ -20,6 +22,7 @@ type HttpStream = {
 
 type WsStream = {
   kind: "ws"
+  session: string
   head: PromiseWithResolvers<Protocol.Response | undefined>
   client?: ServerWebSocket<SocketData>
   // Messages the agent sends between its 101 and the moment the browser socket is open.
@@ -53,13 +56,13 @@ export function create(ws: ServerWebSocket<SocketData>, machine: Machine) {
     ws,
     send,
 
-    /** Proxies one HTTP request; `path` includes the query string. */
-    http(request: Request, path: string, headers: [string, string][]) {
+    /** Proxies one HTTP request for a browser session; `path` includes the query string. */
+    http(request: Request, path: string, headers: [string, string][], session: string) {
       const id = state.next++
       const head = Promise.withResolvers<Head | undefined>()
       const body = new ReadableStream<Uint8Array>({
         start(controller) {
-          streams.set(id, { kind: "http", head, responded: false, body: controller })
+          streams.set(id, { kind: "http", session, head, responded: false, body: controller })
         },
         cancel() {
           reset(id, "client went away")
@@ -76,10 +79,16 @@ export function create(ws: ServerWebSocket<SocketData>, machine: Machine) {
     },
 
     /** Opens a WebSocket stream and upgrades the browser connection once the machine accepted it. */
-    async websocket(request: Request, server: Server<SocketData>, path: string, headers: [string, string][]) {
+    async websocket(
+      request: Request,
+      server: Server<SocketData>,
+      path: string,
+      headers: [string, string][],
+      session: string,
+    ) {
       const id = state.next++
       const head = Promise.withResolvers<Protocol.Response | undefined>()
-      const stream: WsStream = { kind: "ws", head, pending: [] }
+      const stream: WsStream = { kind: "ws", session, head, pending: [] }
       streams.set(id, stream)
       const protocols = (request.headers.get("sec-websocket-protocol") ?? "")
         .split(",")
@@ -122,6 +131,21 @@ export function create(ws: ServerWebSocket<SocketData>, machine: Machine) {
       if (!stream) return
       if (stream.kind === "http") return receiveHttp(frame, stream)
       receiveWs(frame, stream)
+    },
+
+    /** Resets every stream whose session `allowed` refuses, e.g. after a sign-out or a disabled account. */
+    drop(allowed: (session: string) => boolean) {
+      Array.from(streams)
+        .filter((entry) => !allowed(entry[1].session))
+        .forEach((entry) => {
+          const stream = entry[1]
+          streams.delete(entry[0])
+          send(Protocol.encodeJson(Protocol.Type.RESET, entry[0], { message: "access revoked" }))
+          stream.head.resolve(undefined)
+          // A policy cut, not a failure: the response simply ends and the socket closes with 1008.
+          if (stream.kind === "http") return stream.body.close()
+          stream.client?.close(1008, "access revoked")
+        })
     },
 
     /** Fails every open stream; called when the tunnel goes away. */

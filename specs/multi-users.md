@@ -307,6 +307,27 @@ Chacune est une PR qui fonctionne seule, avec ses tests.
    - Pas encore fait : organisations dans l'invitation (étape 4), journal d'audit.
 2. **Machines par utilisateur** : propriétaire des machines, code d'enrôlement lié à son auteur, liste et accès filtrés
    (fail-closed, tickets compris), révocation selon les droits.
+   **Faite** (2026-11-07). Écarts et précisions :
+   - `machine` gagne `owner_user_id`, `owner_org_id` (toujours vide, réservé à l'étape 4) et `enrolled_by`, ajoutés
+     par `ALTER TABLE` sur une base existante. « Exactement un des deux » est assuré par le code : `createMachine`
+     exige un propriétaire, et une machine d'organisation ou sans propriétaire ne s'ouvre pour personne.
+   - Attribution des machines existantes : au plus ancien administrateur **actif** (pas désactivé), au démarrage et
+     après chaque inscription, changement de rôle ou réactivation, tant qu'il reste des machines sans propriétaire.
+     Un administrateur désactivé ne les reçoit pas, pour qu'elles restent utilisables.
+   - Accès refusé = machine inconnue : même page 404 sur l'hôte, `/` pour `/hub/handoff`, 404 pour `DELETE`. Pour ne
+     rien révéler sans session non plus, un hôte de machine sans session renvoie à la connexion que la machine existe
+     ou non (avant, une machine inconnue répondait 404). `GET /hub/tls-allowed`, inchangé, dit toujours quelles
+     machines existent.
+   - Session déjà établie : chaque requête est contrôlée ; en plus, la déconnexion, la désactivation ou la
+     réinitialisation d'un compte coupent aussitôt les flux relayés encore ouverts de ses sessions (réponse SSE close,
+     WebSocket fermée en 1008).
+   - Code d'enrôlement d'un auteur désactivé (ou réinitialisé, sans mot de passe) : refusé en 403, avec le même
+     message qu'un code invalide.
+   - Administration : `GET /hub/api/admin/machines` (toutes les machines, propriétaire, état, dernière connexion, sans
+     lien d'ouverture) ; un administrateur révoque toute machine par `DELETE machines/<id>`.
+   - Tableau de bord : « My machines » (flux en direct) et, pour les administrateurs, « All machines », rechargée à
+     chaque événement du flux.
+   - `Hub.start(...).createEnrollmentCode(userID)` prend désormais l'utilisateur.
 3. **Clés d'API chiffrées** : déverrouillage de `UK` à la connexion, fournisseurs par utilisateur chiffrés, relais LLM
    par utilisateur (jeton encore par machine, rattaché à son propriétaire), 423 quand c'est verrouillé, ChatGPT par
    utilisateur.

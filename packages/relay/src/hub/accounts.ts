@@ -94,10 +94,17 @@ export function create(input: {
   // Answers for unknown logins are derived from this key, so they stay the same from one attempt to the next.
   const dummyKey = createHash("sha256").update(`opencode-hub/v1/dummy|${setup}`).digest()
 
-  /** The session's user, only while the account exists and is active: anything else is no session. */
+  /** The user, only while the account exists, is enabled and has a password (a reset one has none yet). */
+  const activeUser = (id: string | undefined) => {
+    const user = id ? store.user(id) : undefined
+    if (!user || user.disabled_at !== null || user.registration_record === null) return undefined
+    return user
+  }
+
+  /** The session's user, only while the account is active: anything else is no session. */
   const active = (entry: { id: string; user: string } | undefined): Current | undefined => {
-    const user = entry ? store.user(entry.user) : undefined
-    if (!entry || !user || user.disabled_at !== null || user.registration_record === null) return undefined
+    const user = activeUser(entry?.user)
+    if (!entry || !user) return undefined
     return { session: entry.id, user }
   }
 
@@ -107,6 +114,7 @@ export function create(input: {
     current,
     /** The active user behind a session id, e.g. one carried by a handoff ticket. */
     active,
+    activeUser,
     /** Issues an invitation without an author, as `opencode hub invite` and the first start do. */
     invite: (role: Store.Role) => withURL(store.createInvitation({ role })),
     /** Handles the account and administration routes under `/hub/api/`; undefined for any other route. */

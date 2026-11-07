@@ -118,8 +118,8 @@ export const copy = {
     linkHint: "Shown only once. Anyone with this link can use it, so send it privately.",
   },
   machines: {
-    title: "Machines",
-    description: "Computers that run opencode and stay connected to this hub.",
+    title: "My machines",
+    description: "Your computers that run opencode and stay connected to this hub. Only you can open them.",
     add: "Add machine",
     open: "Open",
     revoke: "Revoke…",
@@ -136,6 +136,16 @@ export const copy = {
     revokeConfirm: "Revoke",
     revoked: (name: string) => `${name} was revoked`,
     revokeFailed: "Could not revoke the machine",
+  },
+  allMachines: {
+    title: "All machines",
+    description:
+      "Every machine enrolled on this hub, with its owner. Administrators can revoke any of them but only open their own.",
+    loadFailed: "Could not load machines",
+    retry: "Retry",
+    empty: "No machines on this hub",
+    owner: (login: string) => `Owned by ${login}`,
+    noOwner: "No owner yet",
   },
   add: {
     title: "Add a machine",
