@@ -331,6 +331,34 @@ Chacune est une PR qui fonctionne seule, avec ses tests.
 3. **Clés d'API chiffrées** : déverrouillage de `UK` à la connexion, fournisseurs par utilisateur chiffrés, relais LLM
    par utilisateur (jeton encore par machine, rattaché à son propriétaire), 423 quand c'est verrouillé, ChatGPT par
    utilisateur.
+   **Faite** (2026-11-07). Écarts et précisions :
+   - Module `hub/secrets.ts` (Web Crypto) : format et `aad` de la spec, la table étant `provider` et l'id de ligne
+     l'id du fournisseur. Stocké en base64url sans remplissage, comme la clé enveloppée. `hub/providers.ts` est le
+     seul à sceller et ouvrir, en mémoire, à chaque requête ; aucun journal ne contient de secret ni d'`UK`.
+   - Table `provider` : clé `(user_id, id)`, colonnes `api_key` (pour `key`) et `oauth` (JSON, pour `chatgpt`)
+     scellées, l'autre à `NULL`. Le nom, l'URL amont et le type restent en clair (ils partent vers les machines).
+   - Passage : une table `provider` sans `user_id` est supprimée sans être lue. La connexion tourne avec
+     `secure_delete` (pages libérées mises à zéro) et la suppression est suivie d'un `wal_checkpoint(TRUNCATE)` :
+     les anciennes clés ne restent ni dans `hub.db` ni dans son WAL (vérifié par un test sur le fichier brut).
+   - Relais : 401 (jeton invalide, ou jetons de deux machines dans une requête) ; 403 pour une machine
+     d'organisation ou sans propriétaire ; 423 si le propriétaire est désactivé, réinitialisé ou si sa clé n'est pas
+     en mémoire ; puis 404 pour un fournisseur inconnu de ce propriétaire ; 500 si le secret ne s'ouvre pas. Le 423
+     passe avant le 404 pour que réinitialisation et désactivation répondent « verrouillé ». Message en anglais,
+     comme le reste de l'API : « Keys locked: sign in to the hub to unlock them. »
+   - Routes `providers` : 423 `{ error, locked: true }` pour l'ajout, la modification et `chatgpt/begin|complete`
+     sans `UK` en mémoire ; la suppression n'en a pas besoin (rien n'est déchiffré). Une tentative ChatGPT est liée à
+     l'utilisateur qui l'a ouverte.
+   - ChatGPT : le jeton renouvelé est rescellé avec la clé qui a ouvert le fournisseur au début de la requête. Sans
+     `UK`, le relais répond 423 avant tout renouvellement ; un verrouillage qui tombe pendant un renouvellement déjà
+     parti ne perd donc pas le jeton de renouvellement, que OpenAI a pu remplacer.
+   - READY et CONFIG portent les fournisseurs du propriétaire (liste vide pour une machine d'organisation ou sans
+     propriétaire) ; un changement n'est poussé qu'aux machines de cet utilisateur, y compris après une
+     réinitialisation (liste vide).
+   - Indicateur d'administration : `waiting` dans `users`, vrai pour un utilisateur dont la clé est verrouillée et
+     qui a au moins une machine personnelle et un fournisseur ; affiché « Keys locked » dans la liste. C'est un
+     état calculé, pas un relevé des 423 effectivement renvoyés.
+   - Tableau de bord : section Fournisseurs propre à l'utilisateur ; clés verrouillées, une ligne l'explique avec
+     « Sign in again », et l'ajout est désactivé. L'état est partagé avec la section Compte.
 4. **Organisations** : tables, administration, enrôlement pour une organisation, accès des membres. Tant que l'étape 5
    n'est pas faite, les membres partagent l'instance unique de la machine, qui utilise les clés d'API de celui qui
    l'a enrôlée.

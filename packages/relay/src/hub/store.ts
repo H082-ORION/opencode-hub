@@ -1,5 +1,5 @@
 import { Database } from "bun:sqlite"
-import { Option, Schema } from "effect"
+import { Schema } from "effect"
 import { chmodSync, closeSync, existsSync, mkdirSync, openSync } from "node:fs"
 import path from "node:path"
 
@@ -32,19 +32,25 @@ const OAuth = Schema.Struct({
   scopes: Schema.Array(Schema.String),
 })
 export type OAuth = typeof OAuth.Type
-const decodeOAuth = Schema.decodeUnknownOption(Schema.fromJsonString(OAuth))
+export const decodeOAuth = Schema.decodeUnknownOption(Schema.fromJsonString(OAuth))
 
-/** `key` providers forward `api_key`; `chatgpt` providers use the OAuth credential in `oauth`. */
+/** `key` providers forward their API key; `chatgpt` providers use an OAuth credential. */
 export type Auth = "key" | "chatgpt"
 
-export type Provider = {
+/**
+ * A provider of one user as stored: `api_key` (for `key`) or `oauth` (JSON, for `chatgpt`) is sealed under the user's
+ * key (see `Secrets`), and the other is null. Only `Providers` opens them.
+ */
+export type ProviderRow = {
+  user_id: string
   id: string
   name: string
   base_url: string
-  api_key: string
   auth: Auth
-  oauth: OAuth | undefined
+  api_key: string | null
+  oauth: string | null
   created_at: number
+  updated_at: number
 }
 
 export type Role = "admin" | "user"
@@ -77,10 +83,8 @@ export type Invitation = {
 /** A pending invitation as the dashboard lists it, with the logins it refers to. */
 export type InvitationSummary = Invitation & { created_by_login: string | null; user_login: string | null }
 
-/** Provider fields that are safe to show in the UI: no key, no tokens. */
-export type ProviderSummary = Pick<Provider, "id" | "name" | "base_url" | "auth">
-
-type ProviderRow = Omit<Provider, "auth" | "oauth"> & { auth: string; oauth: string | null }
+/** Provider fields that are safe to show in the UI and to send to machines: no key, no tokens. */
+export type ProviderSummary = Pick<ProviderRow, "id" | "name" | "base_url" | "auth">
 
 // Labels that would collide with infrastructure names or look like the hub itself.
 const RESERVED = new Set(["www", "hub", "api", "app", "admin", "mail", "llm", "localhost", "static", "assets"])
@@ -111,24 +115,29 @@ export function open(dir: string) {
     created_at INTEGER NOT NULL,
     last_seen_at INTEGER
   )`)
+  // Earlier versions kept every provider's key in clear, shared by all users. That table is dropped unread: its keys
+  // have to be entered again by each user. secure_delete zeroes the freed pages, and the checkpoint below moves that
+  // into the main file, so the old keys do not linger on disk.
+  db.run("PRAGMA secure_delete = ON")
+  const providerColumns = db
+    .query<{ name: string }, []>("PRAGMA table_info(provider)")
+    .all()
+    .map((row) => row.name)
+  const legacyProviders = providerColumns.length > 0 && !providerColumns.includes("user_id")
+  if (legacyProviders) db.run("DROP TABLE provider")
   db.run(`CREATE TABLE IF NOT EXISTS provider (
-    id TEXT PRIMARY KEY,
+    user_id TEXT NOT NULL,
+    id TEXT NOT NULL,
     name TEXT NOT NULL,
     base_url TEXT NOT NULL,
-    api_key TEXT NOT NULL,
-    auth TEXT NOT NULL DEFAULT 'key',
+    auth TEXT NOT NULL CHECK (auth IN ('key', 'chatgpt')),
+    api_key TEXT,
     oauth TEXT,
-    created_at INTEGER NOT NULL
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL,
+    PRIMARY KEY (user_id, id)
   )`)
-  // Databases created before OAuth providers lack these columns.
-  const columns = new Set(
-    db
-      .query<{ name: string }, []>("PRAGMA table_info(provider)")
-      .all()
-      .map((row) => row.name),
-  )
-  if (!columns.has("auth")) db.run("ALTER TABLE provider ADD COLUMN auth TEXT NOT NULL DEFAULT 'key'")
-  if (!columns.has("oauth")) db.run("ALTER TABLE provider ADD COLUMN oauth TEXT")
+  if (legacyProviders) db.run("PRAGMA wal_checkpoint(TRUNCATE)")
   // Databases created before machines had owners lack these columns; their machines are adopted below.
   const ownerColumns = new Set(
     db
@@ -178,9 +187,15 @@ export function open(dir: string) {
     machine: db.query<Machine, [string]>(`SELECT ${machineColumns} FROM machine WHERE id = ?`),
     byTunnel: db.query<Machine, [string]>(`SELECT ${machineColumns} FROM machine WHERE tunnel_token_hash = ?`),
     byLlm: db.query<Machine, [string]>(`SELECT ${machineColumns} FROM machine WHERE llm_token_hash = ?`),
-    providers: db.query<ProviderRow, []>("SELECT * FROM provider ORDER BY id"),
-    provider: db.query<ProviderRow, [string]>("SELECT * FROM provider WHERE id = ?"),
-    summaries: db.query<ProviderSummary, []>("SELECT id, name, base_url, auth FROM provider ORDER BY id"),
+    provider: db.query<ProviderRow, [string, string]>("SELECT * FROM provider WHERE user_id = ? AND id = ?"),
+    summaries: db.query<ProviderSummary, [string]>(
+      "SELECT id, name, base_url, auth FROM provider WHERE user_id = ? ORDER BY id",
+    ),
+    /** Users whose personal machines rely on providers they saved, i.e. need their key in memory. */
+    keysInUse: db.query<{ user_id: string }, []>(
+      `SELECT DISTINCT provider.user_id FROM provider
+       JOIN machine ON machine.owner_user_id = provider.user_id AND machine.owner_org_id IS NULL`,
+    ),
     setting: db.query<{ value: string }, [string]>("SELECT value FROM setting WHERE key = ?"),
     users: db.query<User, []>("SELECT * FROM user ORDER BY created_at"),
     user: db.query<User, [string]>("SELECT * FROM user WHERE id = ?"),
@@ -265,32 +280,49 @@ export function open(dir: string) {
     },
     deleteMachine: (id: string) => db.run("DELETE FROM machine WHERE id = ?", [id]).changes > 0,
     touchMachine: (id: string) => db.run("UPDATE machine SET last_seen_at = ? WHERE id = ?", [Date.now(), id]),
-    /** Full provider rows including secrets; only for the proxy and other server-side code. */
-    providers: () => queries.providers.all().map(fromRow),
-    provider(id: string) {
-      const row = queries.provider.get(id)
-      return row ? fromRow(row) : undefined
-    },
-    providerSummaries: () => queries.summaries.all(),
-    saveProvider: (input: { id: string; name: string; baseURL: string; apiKey: string }) =>
+    /** A user's provider with its sealed secret; only `Providers` reads these. */
+    provider: (user: string, id: string) => queries.provider.get(user, id) ?? undefined,
+    /** A user's providers, without secrets. */
+    providerSummaries: (user: string) => queries.summaries.all(user),
+    /** The users who have both a personal machine and a saved provider. */
+    usersWithKeysInUse: () => new Set(queries.keysInUse.all().map((row) => row.user_id)),
+    /** Inserts or replaces a user's provider; exactly one of `apiKey` and `oauth` is set, both already sealed. */
+    saveProvider: (input: {
+      user: string
+      id: string
+      name: string
+      baseURL: string
+      auth: Auth
+      apiKey: string | null
+      oauth: string | null
+    }) =>
       db.run(
-        `INSERT INTO provider (id, name, base_url, api_key, auth, oauth, created_at) VALUES (?, ?, ?, ?, 'key', NULL, ?)
-         ON CONFLICT (id) DO UPDATE SET name = excluded.name, base_url = excluded.base_url, api_key = excluded.api_key,
-           auth = excluded.auth, oauth = excluded.oauth`,
-        [input.id, input.name, input.baseURL, input.apiKey, Date.now()],
+        `INSERT INTO provider (user_id, id, name, base_url, auth, api_key, oauth, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+         ON CONFLICT (user_id, id) DO UPDATE SET name = excluded.name, base_url = excluded.base_url,
+           auth = excluded.auth, api_key = excluded.api_key, oauth = excluded.oauth, updated_at = excluded.updated_at`,
+        [
+          input.user,
+          input.id,
+          input.name,
+          input.baseURL,
+          input.auth,
+          input.apiKey,
+          input.oauth,
+          Date.now(),
+          Date.now(),
+        ],
       ),
-    saveOAuthProvider: (input: { id: string; name: string; baseURL: string; oauth: OAuth }) =>
-      db.run(
-        `INSERT INTO provider (id, name, base_url, api_key, auth, oauth, created_at) VALUES (?, ?, ?, '', 'chatgpt', ?, ?)
-         ON CONFLICT (id) DO UPDATE SET name = excluded.name, base_url = excluded.base_url, api_key = excluded.api_key,
-           auth = excluded.auth, oauth = excluded.oauth`,
-        [input.id, input.name, input.baseURL, JSON.stringify(input.oauth), Date.now()],
-      ),
-    /** Replaces the credential of an existing OAuth provider, e.g. after a refresh. */
-    updateOAuth: (id: string, oauth: OAuth) =>
-      db.run("UPDATE provider SET oauth = ? WHERE id = ? AND auth = 'chatgpt'", [JSON.stringify(oauth), id]).changes >
-      0,
-    deleteProvider: (id: string) => db.run("DELETE FROM provider WHERE id = ?", [id]).changes > 0,
+    /** Replaces the sealed credential of an existing OAuth provider, e.g. after a refresh. */
+    updateOAuth: (user: string, id: string, oauth: string) =>
+      db.run("UPDATE provider SET oauth = ?, updated_at = ? WHERE user_id = ? AND id = ? AND auth = 'chatgpt'", [
+        oauth,
+        Date.now(),
+        user,
+        id,
+      ]).changes > 0,
+    deleteProvider: (user: string, id: string) =>
+      db.run("DELETE FROM provider WHERE user_id = ? AND id = ?", [user, id]).changes > 0,
     setting: (key: string) => queries.setting.get(key)?.value,
     setSetting: (key: string, value: string) =>
       db.run("INSERT INTO setting (key, value) VALUES (?, ?) ON CONFLICT (key) DO UPDATE SET value = excluded.value", [
@@ -392,6 +424,8 @@ export function open(dir: string) {
           "UPDATE user SET registration_record = NULL, wrapped_key = NULL, key_check = NULL, updated_at = ? WHERE id = ?",
           [Date.now(), id],
         )
+        // Sealed under the key that was just forgotten: unreadable from now on, so they go too.
+        db.run("DELETE FROM provider WHERE user_id = ?", [id])
         // An earlier reset link for this account must not outlive the new one.
         db.run("DELETE FROM invitation WHERE user_id = ? AND used_at IS NULL", [id])
         return insertInvitation({ role: user.role, days: input.days, createdBy: input.createdBy, userID: id })
@@ -407,14 +441,6 @@ export function secureDirectory(dir: string) {
 }
 
 export type Instance = ReturnType<typeof open>
-
-function fromRow(row: ProviderRow): Provider {
-  return {
-    ...row,
-    auth: row.auth === "chatgpt" ? "chatgpt" : "key",
-    oauth: row.oauth === null ? undefined : Option.getOrUndefined(decodeOAuth(row.oauth)),
-  }
-}
 
 /** Lowercase DNS label derived from a machine name: a-z, 0-9 and single hyphens, at most 32 characters. */
 export function slug(name: string) {

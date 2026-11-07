@@ -65,6 +65,8 @@ export function create() {
     unlock: (user: string, key: string) => keys.set(user, key),
     lock: (user: string) => keys.delete(user),
     unlocked: (user: string) => keys.has(user),
+    /** The unlocked key of a user, to seal or open their secrets; never logged or sent anywhere. */
+    key: (user: string) => keys.get(user),
 
     createAttempt(attempt: Attempt) {
       prune(attempts, (entry) => entry.expires)

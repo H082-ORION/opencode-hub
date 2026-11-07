@@ -87,6 +87,8 @@ export function create(input: {
   secure: boolean
   /** Called with the ids of sessions that were just closed, so whatever they hold open closes too. */
   closed: (sessions: string[]) => void
+  /** Called after an administrator reset a user, whose providers are gone with their key. */
+  reset: (user: string) => void
 }) {
   const store = input.store
   const auth = input.auth
@@ -330,7 +332,8 @@ export function create(input: {
 
   async function admin(request: Request, route: string, current: Current) {
     const method = request.method
-    if (route === "users" && method === "GET")
+    if (route === "users" && method === "GET") {
+      const inUse = store.usersWithKeysInUse()
       return json(
         200,
         store.users().map((user) => ({
@@ -342,9 +345,12 @@ export function create(input: {
           // A reset account has no password until its reset invitation is used.
           pending: user.registration_record === null,
           unlocked: auth.unlocked(user.id),
+          // Machines that rely on this user's providers get 423 until the user signs in again.
+          waiting: inUse.has(user.id) && !auth.unlocked(user.id),
           self: user.id === current.user.id,
         })),
       )
+    }
     if (route === "invitations" && method === "GET")
       return json(
         200,
@@ -379,6 +385,7 @@ export function create(input: {
       const reset = store.resetUser(id, { days: body.days, createdBy: current.user.id })
       if (!reset) return json(404, { error: "Unknown user." })
       signOut(id)
+      input.reset(id)
       return json(200, withURL(reset))
     }
     const body = action[2] === "role" ? Option.getOrUndefined(decodeRole(await request.text())) : undefined

@@ -17,6 +17,8 @@ export function Dashboard(props: { session: HubSession; onSignedOut: () => void 
   }
 
   const [revision, setRevision] = createSignal(0)
+  // Whether the hub holds this user's key: shared by the providers, which need it, and the account, which locks it.
+  const [unlocked, setUnlocked] = createSignal(props.session.unlocked)
 
   const signOut = () => hubApi.logout().then(props.onSignedOut, (error: unknown) => fail(copy.error.unknown, error))
 
@@ -34,8 +36,13 @@ export function Dashboard(props: { session: HubSession; onSignedOut: () => void 
       <main class="hub-scroll" data-scrollable>
         <div class="hub-content">
           <Machines onSignedOut={props.onSignedOut} fail={fail} onChange={() => setRevision((value) => value + 1)} />
-          <Providers fail={fail} />
-          <AccountSection session={props.session} fail={fail} />
+          <Providers fail={fail} unlocked={unlocked()} onLocked={() => setUnlocked(false)} onSignOut={signOut} />
+          <AccountSection
+            session={props.session}
+            fail={fail}
+            unlocked={unlocked()}
+            onLocked={() => setUnlocked(false)}
+          />
           <Show when={props.session.user.role === "admin"}>
             <Users fail={fail} />
             <AllMachines fail={fail} revision={revision} />
