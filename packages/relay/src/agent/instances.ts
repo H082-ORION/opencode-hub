@@ -3,7 +3,8 @@ import { randomBytes } from "node:crypto"
 import { chmodSync, mkdirSync, readdirSync, rmSync } from "node:fs"
 import path from "node:path"
 import { Option, Schema } from "effect"
-import type { Instance, Local } from "./index.js"
+import type { Instance, Local, Skills } from "./index.js"
+import { AgentSkills } from "./skills.js"
 
 export * as Instances from "./instances.js"
 
@@ -49,6 +50,11 @@ export function hubEnv(instance: Instance): Record<string, string> {
   }
 }
 
+/** Where an instance's opencode loads its skills from: its own configuration folder. */
+export function skillsFolder(root: string, iid: string) {
+  return AgentSkills.folder(path.join(directories(root, iid).XDG_CONFIG_HOME, "opencode"))
+}
+
 /** The data, configuration, state and cache directories of an instance, under its own folder. */
 export function directories(root: string, iid: string) {
   const dir = path.join(root, iid)
@@ -85,6 +91,8 @@ export function create(input: {
   const running = new Map<string, Promise<Running>>()
   // Drops in progress, so stopping the agent waits for their folders to be deleted.
   const dropping = new Set<Promise<void>>()
+  // Skill writes in progress, one at a time per instance; an instance starts only once its skills are written.
+  const writing = new Map<string, Promise<unknown>>()
 
   return {
     /** Records an instance's configuration; a running instance whose environment changed is stopped, to restart. */
@@ -111,6 +119,29 @@ export function create(input: {
         },
       )
       return started.then((entry) => entry.local)
+    },
+
+    /**
+     * Writes an instance's hub skills into its configuration folder, after any write still in progress, then makes
+     * its server reload them if it is running (a server that starts later reads them anyway).
+     */
+    async skills(payload: Skills) {
+      requireIID(payload.iid)
+      if (!configs.has(payload.iid)) throw new Error(`unknown instance ${payload.iid}`)
+      const write = (writing.get(payload.iid) ?? Promise.resolve()).then(() => {
+        secure(input.root)
+        secure(directories(input.root, payload.iid).dir)
+        return AgentSkills.write(skillsFolder(input.root, payload.iid), payload)
+      })
+      const settled = write.catch(() => undefined)
+      writing.set(payload.iid, settled)
+      void settled.then(() => writing.get(payload.iid) === settled && writing.delete(payload.iid))
+      const result = await write
+      result.skipped.forEach((name) => input.log?.(`Skipped hub skill ${name}: a local skill has this folder name`))
+      if (!result.changed) return
+      const current = await running.get(payload.iid)?.catch(() => undefined)
+      if (current) await AgentSkills.reload(current.local)
+      input.log?.(`Wrote ${result.written.length} hub skills for instance ${payload.iid}`)
     },
 
     drop,
@@ -143,7 +174,8 @@ export function create(input: {
   function drop(iid: string) {
     if (!IID.test(iid)) return Promise.resolve()
     configs.delete(iid)
-    const done = stop(iid).then(() => {
+    // A skill write still in progress would otherwise recreate the folder.
+    const done = Promise.all([stop(iid), writing.get(iid)]).then(() => {
       rmSync(path.join(input.root, iid), { recursive: true, force: true })
       input.log?.(`Deleted instance ${iid}`)
     })
@@ -152,6 +184,7 @@ export function create(input: {
   }
 
   async function start(instance: Instance): Promise<Running> {
+    await writing.get(instance.iid)
     const dirs = directories(input.root, instance.iid)
     secure(input.root)
     secure(dirs.dir)

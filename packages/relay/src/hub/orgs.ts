@@ -56,6 +56,8 @@ export function create(input: {
         if (result === "unknown") return unknownOrg()
         if (result === "has-machines")
           return json(409, { error: "This organization still has machines. Revoke them first." })
+        // Its members lose the skills they inherited from it.
+        input.changed([])
         return new Response(null, { status: 204 })
       }
       const members = /^orgs\/([^/]+)\/members$/.exec(route)

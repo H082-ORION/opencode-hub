@@ -14,6 +14,7 @@ export const Enrollment = Schema.Struct({
 export type Enrollment = typeof Enrollment.Type
 export type Ready = Protocol.Ready
 export type LlmConfig = Protocol.LlmConfig
+export type Skills = Protocol.Skills
 /** An instance as the agent hands it on: always with the token it holds for it. */
 export type Instance = Protocol.Instance & { token: string }
 /** `stopped` is final: the hub refused this agent for good (protocol mismatch, revoked, or replaced). */
@@ -32,15 +33,21 @@ export type ConnectInput = {
   enrollment: Enrollment
   /**
    * Instance tokens the agent already holds when it starts, e.g. the personal instance's from the service
-   * environment: announced in HELLO (as hashes) so the hub does not issue new ones.
+   * environment: announced in HELLO (as hashes) so the hub does not issue new ones, with the version of the skills
+   * already written for each, so the hub does not send them again.
    */
-  instances?: readonly { iid: string; token: string }[]
+  instances?: readonly { iid: string; token: string; skills?: string }[]
   /** Resolves an instance's local opencode server; called again after a local request to it fails to connect. */
   local: (iid: string) => Promise<Local>
   /** READY: `ready.instances` lists the instances that still exist; the others were already forgotten. */
   onReady?: (ready: Ready) => void
   /** INSTANCE: an instance's configuration, new or changed. */
   onInstance?: (instance: Instance) => void
+  /**
+   * SKILLS: the full set of an instance's hub skills, to write in place of the previous ones. Once it resolves, the
+   * version is announced at the next connection; a rejection leaves the previous version, so the hub sends them again.
+   */
+  onSkills?: (skills: Skills) => Promise<void> | void
   /** DROP, or an instance missing from READY: the instance is gone and its data should be deleted. */
   onDrop?: (iid: string) => void
   onStatus?: (status: Status, detail?: string) => void
@@ -134,6 +141,12 @@ export function connect(input: ConnectInput) {
   const streams = new Map<number, HttpStream | WsStream>()
   // Instance tokens live only here and in each instance's own configuration, never in agent.json.
   const tokens = new Map((input.instances ?? []).map((entry) => [entry.iid, entry.token]))
+  // The skills version written for each instance, announced with its token.
+  const versions = new Map(
+    (input.instances ?? []).flatMap((entry) =>
+      entry.skills === undefined ? [] : [[entry.iid, entry.skills] as const],
+    ),
+  )
   const locals = new Map<string, Promise<Local>>()
   const state: {
     stopped: boolean
@@ -177,6 +190,7 @@ export function connect(input: ConnectInput) {
           instances: Array.from(tokens, (entry) => ({
             iid: entry[0],
             hash: createHash("sha256").update(entry[1]).digest("hex"),
+            skills: versions.get(entry[0]),
           })),
         }),
       )
@@ -285,6 +299,17 @@ export function connect(input: ConnectInput) {
       locals.delete(instance.iid)
       return input.onInstance?.({ ...instance, token })
     }
+    if (frame.type === Protocol.Type.SKILLS) {
+      const skills = Protocol.decodeSkills(frame.payload)
+      // Only for an instance the hub configured here, which always comes first.
+      if (!skills || !tokens.has(skills.iid)) return
+      versions.delete(skills.iid)
+      void Promise.resolve(input.onSkills?.(skills)).then(
+        () => tokens.has(skills.iid) && versions.set(skills.iid, skills.version),
+        () => undefined,
+      )
+      return
+    }
     if (frame.type !== Protocol.Type.DROP) return
     const drop = Protocol.decodeDrop(frame.payload)
     if (drop) forget(drop.iid, send)
@@ -293,6 +318,7 @@ export function connect(input: ConnectInput) {
   /** Forgets an instance: its token, its address and its open streams, then lets the caller delete it. */
   function forget(iid: string, send: (data: Uint8Array<ArrayBuffer>) => void) {
     tokens.delete(iid)
+    versions.delete(iid)
     locals.delete(iid)
     Array.from(streams)
       .filter((entry) => entry[1].instance === iid)

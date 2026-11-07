@@ -42,6 +42,30 @@ export type HubProvider = { id: string; name: string; baseURL: string; auth: "ke
 /** A provider from opencode's models.dev catalog. */
 export type HubPreset = { id: string; name: string; baseURL: string; doc?: string; env: string[] }
 
+export type HubSkillFile = { path: string; content: string }
+
+/** A skill as the hub stores it: `SKILL.md` and any other text files. */
+export type HubSkill = {
+  id: string
+  name: string
+  description: string
+  files: HubSkillFile[]
+  createdAt: number
+  updatedAt: number
+}
+
+/**
+ * The user's skills and those inherited from their organizations. `hiddenBy` names the organization whose skill of
+ * the same name wins over this one; null when this one reaches the machines.
+ */
+export type HubSkills = {
+  own: (HubSkill & { hiddenBy: string | null })[]
+  inherited: (HubSkill & { org: { id: string; name: string }; hiddenBy: string | null })[]
+  version: string
+}
+
+export type SkillDraft = { name: string; files: HubSkillFile[] }
+
 export type EnrollmentCode = { code: string; expiresAt: number; command: string }
 
 export type HubRole = "admin" | "user"
@@ -150,6 +174,15 @@ export const hubApi = {
   removeMember: (org: string, user: string) =>
     request<void>(`orgs/${encodeURIComponent(org)}/members/${encodeURIComponent(user)}`, { method: "DELETE" }),
   revoke: (id: string) => request<void>(`machines/${encodeURIComponent(id)}`, { method: "DELETE" }),
+  skills: () => request<HubSkills>("skills"),
+  saveSkill: (body: SkillDraft, id?: string) =>
+    post<{ skill: HubSkill }>(id ? `skills/${encodeURIComponent(id)}` : "skills", body),
+  deleteSkill: (id: string) => request<void>(`skills/${encodeURIComponent(id)}`, { method: "DELETE" }),
+  orgSkills: (org: string) => request<HubSkill[]>(`orgs/${encodeURIComponent(org)}/skills`),
+  saveOrgSkill: (org: string, body: SkillDraft, id?: string) =>
+    post<{ skill: HubSkill }>(`orgs/${encodeURIComponent(org)}/skills${id ? `/${encodeURIComponent(id)}` : ""}`, body),
+  deleteOrgSkill: (org: string, id: string) =>
+    request<void>(`orgs/${encodeURIComponent(org)}/skills/${encodeURIComponent(id)}`, { method: "DELETE" }),
   providers: () => request<HubProvider[]>("providers"),
   presets: () => request<HubPreset[]>("presets"),
   saveProvider: (body: { id: string; name?: string; baseURL?: string; apiKey: string }) =>

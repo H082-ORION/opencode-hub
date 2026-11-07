@@ -12,6 +12,7 @@ import { createStore, reconcile } from "solid-js/store"
 import { errorText, hubApi, HubError, type HubOrg, type HubUser } from "./api"
 import { copy } from "./copy"
 import type { Fail } from "./dashboard"
+import { OrgSkillsDialog } from "./skills"
 
 const MAX_NAME = 64
 
@@ -61,6 +62,8 @@ export function Organizations(props: { fail: Fail }) {
         fail={props.fail}
       />
     ))
+
+  const skills = (org: HubOrg) => void dialog.show(() => <OrgSkillsDialog org={org} fail={props.fail} />)
 
   const remove = (org: HubOrg) => void dialog.show(() => <DeleteDialog org={org} onDone={load} fail={props.fail} />)
 
@@ -133,6 +136,7 @@ export function Organizations(props: { fail: Fail }) {
                       />
                       <Menu.Portal>
                         <Menu.Content>
+                          <Menu.Item onSelect={() => skills(org)}>{copy.orgs.skills}</Menu.Item>
                           <Menu.Item onSelect={() => rename(org)}>{copy.orgs.rename}</Menu.Item>
                           <Menu.Item onSelect={() => remove(org)}>{copy.orgs.delete}</Menu.Item>
                         </Menu.Content>

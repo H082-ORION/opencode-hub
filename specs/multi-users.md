@@ -440,7 +440,7 @@ Chacune est une PR qui fonctionne seule, avec ses tests.
      de `enrolled_by`, `ENROLLER_GONE`) est supprimée.
    - Indicateur `waiting` : utilisateur à clé verrouillée qui a un fournisseur **et** au moins une instance.
    - `mcp: []` et `skills: { version }` (empreinte SHA-256 de la liste vide) dans INSTANCE ; SKILLS est défini et
-     décodé mais jamais envoyé.
+     décodé mais jamais envoyé (envoyé depuis l'étape 6).
    - Agent : `agent.json` ne contient plus que `{ url, machine, tunnelToken }` ; un ancien fichier se charge et perd
      son `llmToken` à la première lecture. `agent status` affiche le dossier des instances ; `agent leave` retire la
      configuration du hub de l'environnement du service.
@@ -449,5 +449,59 @@ Chacune est une PR qui fonctionne seule, avec ses tests.
    - Non fait : arrêt des instances inactives (hors périmètre) ; à la révocation d'une machine personnelle, l'agent
      s'arrête avant d'avoir retiré la configuration du hub du service (le jeton, supprimé sur le hub, ne sert plus).
 6. **Skills** : skills personnels et d'organisation, héritage, distribution SKILLS, rechargement de l'instance.
+   **Faite** (2026-11-07). Écarts et précisions :
+   - Table `skill` (`id`, `owner_kind` `user` ou `org`, `owner_id`, `name`, `description`, `files` en JSON
+     `[{ path, content }]` en clair, `created_at`, `updated_at`, unique `(owner_kind, owner_id, name)`). Supprimer une
+     organisation supprime ses skills ; une réinitialisation garde ceux de l'utilisateur.
+   - Validation au dépôt (`src/skills.ts`, partagée avec l'agent) : nom `[a-z0-9]+(-[a-z0-9]+)*`, 64 caractères au
+     plus (c'est le nom du dossier `hub-<nom>`) ; `SKILL.md` à la racine, commençant par un frontmatter YAML dont
+     `name` est **égal au nom du skill** et `description` une chaîne non vide de 1024 caractères au plus (opencode
+     tolère l'absence de `name` et de `description`, le hub non : un skill sans description ne serait pas choisi) ;
+     chemins relatifs de segments `[A-Za-z0-9_][A-Za-z0-9._-]*` (ni `..`, ni chemin absolu, ni `\`, ni fichier
+     caché), 6 niveaux, 100 fichiers, deux chemins égaux sans distinction de casse refusés, pas d'octet nul ;
+     256 Kio comptés sur les chemins et contenus en UTF-8. Les liens n'existent pas dans ce format ; l'agent écrit
+     dans un dossier qu'il vient de créer, avec `wx`. Le YAML est lu par `Bun.YAML` ; opencode utilise gray-matter et
+     accepte en plus des valeurs non citées contenant `:`, que le hub refuse (message clair, le tableau de bord cite
+     toujours la description).
+   - Routes : `GET skills` → `{ own, inherited, version }` (chaque skill avec `hiddenBy`, l'organisation dont le skill
+     du même nom l'emporte), `POST skills { name, files }`, `POST|DELETE skills/<id>` ; administrateurs seulement :
+     `GET|POST orgs/<id>/skills`, `POST|DELETE orgs/<id>/skills/<skill>` (403 pour les autres, membres compris).
+     400 pour un skill invalide, 409 pour un nom déjà pris par ce propriétaire ou au-delà de 200, 404 pour le skill
+     d'un autre propriétaire (même réponse qu'un skill inconnu).
+   - Skills effectifs : organisations dans l'ordre de leur nom sans distinction de casse (comme leur liste), puis les
+     skills personnels ; le premier d'un nom l'emporte. Version : SHA-256 du JSON canonique (skills par nom,
+     fichiers par chemin), égale à l'empreinte de `[]` sans skill, comme à l'étape 5.
+   - Protocole : HELLO porte aussi `instances[].skills`, la version que l'agent a écrite pour chaque instance dont il
+     annonce le jeton ; sans cela le hub ne saurait pas qu'un agent reconnecté a déjà la bonne version. SKILLS suit
+     INSTANCE quand l'agent n'a pas la version, et part vers chaque instance que l'agent détient sur la connexion
+     quand la version de son utilisateur change : skill personnel ou d'organisation ajouté, modifié ou supprimé,
+     entrée ou retrait d'une organisation, organisation renommée (l'ordre change) ou supprimée. Les autres instances
+     le reçoivent avec INSTANCE avant leur premier flux. L'agent ignore SKILLS pour une instance inconnue, revérifie
+     noms et chemins, et n'annonce une version qu'une fois écrite.
+   - Écriture : `<config>/skills/hub-<nom>/`, avec un manifeste `.hub-skills.json` (caché du scan d'opencode) qui
+     liste les dossiers écrits par l'agent : seuls ceux-là sont remplacés ou supprimés. Un dossier local qui
+     s'appellerait déjà `hub-<nom>` est laissé tel quel et ce skill est sauté (journalisé). Chaque skill est écrit en
+     entier dans un dossier de préparation caché `.hub-staging-*` à l'intérieur de `skills/`, puis renommé à sa place ;
+     **le remplacement est atomique par skill, pas pour l'ensemble** (un renommage atomique de tout l'ensemble
+     demanderait de changer la disposition des dossiers attendue par la spec) : un scan au mauvais moment peut voir un
+     mélange, corrigé par le rechargement qui suit.
+   - Rechargement : `POST /api/location/reload` (l'API derrière `opencode reload`) sur l'instance **si elle tourne**
+     et si les skills ont réellement changé. Raisons : c'est le mécanisme documenté de rechargement de la
+     configuration, il relit les dossiers de skills de façon déterministe, et les sessions continuent ; un redémarrage
+     couperait sessions et terminaux. Le greffon de skills d'opencode surveille aussi ces dossiers, mais dépend des
+     événements du système de fichiers. Contrepartie : le rechargement annule les demandes de permission en attente,
+     d'où l'appel seulement quand la version change. Sur une machine d'organisation, l'instance ne démarre qu'une fois
+     ses skills écrits ; sur une machine personnelle, le service n'est pas démarré pour être rechargé.
+   - Machine personnelle : dossier de configuration du compte (`Global.config`, par exemple
+     `~/.config/opencode/skills/hub-*`). DROP, une instance absente de READY et `agent leave` retirent les dossiers
+     `hub-*` du manifeste, rien d'autre.
+   - Tableau de bord : section « Skills » (les siens, avec « Not used » et « Hidden by <organisation>'s skill of the
+     same name » quand un skill d'organisation l'emporte, puis « From your organizations » en lecture seule) ; pour
+     les administrateurs, « Skills… » dans le menu de chaque organisation. L'éditeur a nom, description,
+     instructions (corps de `SKILL.md`) et fichiers supplémentaires (chemin et contenu). Il réécrit le frontmatter avec
+     `name` et `description` seulement : d'autres clés (`metadata`…) posées par l'API sont perdues si le skill est
+     modifié depuis le tableau de bord. Écart à « classes existantes uniquement » : une règle CSS `hub-skill-dialog`
+     (sur le modèle de `hub-provider-dialog`), parce que l'éditeur peut dépasser la hauteur de l'écran et que son
+     bouton d'enregistrement devenait inaccessible ; et `w-full` (Tailwind) sur les zones de texte.
 7. **Connecteurs MCP** : connecteurs par utilisateur à secrets chiffrés, relais `/mcp/`, configuration des instances,
    puis OAuth géré par le hub.

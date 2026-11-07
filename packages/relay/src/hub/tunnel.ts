@@ -57,6 +57,8 @@ export function create(ws: ServerWebSocket<SocketData>, machine: Machine) {
     send,
     /** The instances whose current token the agent holds on this connection, so INSTANCE can omit it. */
     held: new Set<string>(),
+    /** The skills version the agent has for each instance, as it announced it or as the hub last sent it. */
+    skills: new Map<string, string>(),
 
     /** Proxies one HTTP request for a browser session to an instance; `path` includes the query string. */
     http(request: Request, instance: string, path: string, headers: [string, string][], session: string) {

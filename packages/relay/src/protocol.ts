@@ -85,9 +85,12 @@ export const Hello = Schema.Struct({
   platform: Schema.String,
   /**
    * The instances whose token the agent still holds, each with the SHA-256 (hex) of that token, so the hub only sends
-   * a new token when the agent lacks the current one.
+   * a new token when the agent lacks the current one. `skills` is the version of the skills it last wrote for that
+   * instance, so the hub only sends SKILLS again when they changed.
    */
-  instances: Schema.optional(Schema.Array(Schema.Struct({ iid: InstanceID, hash: Schema.String }))),
+  instances: Schema.optional(
+    Schema.Array(Schema.Struct({ iid: InstanceID, hash: Schema.String, skills: Schema.optional(Schema.String) })),
+  ),
 })
 export type Hello = typeof Hello.Type
 
@@ -125,6 +128,10 @@ export type Instance = typeof Instance.Type
 
 export const SkillFile = Schema.Struct({ path: Schema.String, content: Schema.String })
 
+/**
+ * The effective skills of an instance's user, all of them: the agent replaces the instance's `hub-*` skill folders
+ * with these. The agent checks names and paths again before writing (see `Skills`).
+ */
 export const Skills = Schema.Struct({
   iid: InstanceID,
   version: Schema.String,

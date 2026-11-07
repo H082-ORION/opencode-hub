@@ -1,5 +1,6 @@
 import { Agent } from "@opencode/relay/agent/index"
 import { Instances } from "@opencode/relay/agent/instances"
+import { AgentSkills } from "@opencode/relay/agent/skills"
 import { Service } from "@opencode/client/effect/service"
 import { Global } from "@opencode/util/global"
 import { Effect, FileSystem, Option, Schema } from "effect"
@@ -61,12 +62,54 @@ export const remove = Effect.fn("cli.relay-agent.remove")(function* () {
   return true
 })
 
-/** The personal instance whose token the service environment holds, so the agent announces it in HELLO. */
+/**
+ * The personal instance whose token the service environment holds, so the agent announces it in HELLO, with the
+ * version of the hub skills written for it.
+ */
 export const held = Effect.fn("cli.relay-agent.held")(function* () {
   const env = (yield* ServiceConfig.read()).env ?? {}
   const iid = env[INSTANCE]
   const token = env[TOKEN]
-  return iid && token ? [{ iid, token }] : []
+  if (!iid || !token) return []
+  const written = AgentSkills.manifest(yield* skillsFolder())
+  return [{ iid, token, ...(written?.iid === iid && written.version ? { skills: written.version } : {}) }]
+})
+
+/** The background service's skills folder (`<config>/skills`), where the owner's hub skills go as `hub-*`. */
+export const skillsFolder = Effect.fnUntraced(function* () {
+  const global = yield* Global.Service
+  return AgentSkills.folder(global.config)
+})
+
+/**
+ * Replaces the owner's hub skills in the service's skills folder, leaving the account's own skills alone, and makes a
+ * running service reload its configuration when they changed.
+ */
+export const writeSkills = Effect.fn("cli.relay-agent.write-skills")(function* (payload: Agent.Skills) {
+  const dir = yield* skillsFolder()
+  const result = yield* Effect.try(() => AgentSkills.write(dir, payload))
+  if (result.changed) yield* reloadService()
+  return result
+})
+
+/**
+ * Deletes the hub skills the agent wrote for an instance that `stale` says is gone (only the `hub-*` folders its
+ * manifest lists), and makes a running service reload. Returns whether there were any.
+ */
+export const removeSkills = Effect.fn("cli.relay-agent.remove-skills")(function* (stale: (iid: string) => boolean) {
+  const dir = yield* skillsFolder()
+  const written = AgentSkills.manifest(dir)
+  if (!written || !stale(written.iid)) return false
+  yield* Effect.try(() => AgentSkills.remove(dir))
+  yield* reloadService()
+  return true
+})
+
+const reloadService = Effect.fnUntraced(function* () {
+  const options = yield* ServiceConfig.options()
+  const endpoint = yield* Service.discover({ ...options, version: undefined })
+  if (!endpoint) return
+  yield* Effect.tryPromise(() => AgentSkills.reload({ url: endpoint.url, password: endpoint.auth?.password }))
 })
 
 /**

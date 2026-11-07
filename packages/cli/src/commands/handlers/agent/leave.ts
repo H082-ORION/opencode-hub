@@ -10,6 +10,8 @@ export default Runtime.handler(
     const removed = yield* RelayAgent.remove()
     // Stop routing the background service's LLM calls through the hub.
     yield* RelayAgent.apply(undefined)
+    // And remove the hub's skills from its skills folder, leaving the account's own.
+    yield* RelayAgent.removeSkills(() => true)
     process.stdout.write(
       (removed
         ? "Forgot this machine's enrollment. Revoke it from the hub dashboard to invalidate its tokens."
