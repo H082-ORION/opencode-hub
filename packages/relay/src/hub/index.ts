@@ -2,6 +2,7 @@ import type { Server, ServerWebSocket } from "bun"
 import { createHash } from "node:crypto"
 import { Option, Schema } from "effect"
 import { Protocol } from "../protocol.js"
+import { Accounts, json } from "./accounts.js"
 import { Auth } from "./auth.js"
 import { Catalog } from "./catalog.js"
 import { ChatGPT } from "./chatgpt.js"
@@ -20,10 +21,8 @@ export type Options = {
   port?: number
   /** Public base URL; its host is the routing domain. Defaults to `http://localhost:<port>`. */
   url?: string
-  /** Directory holding `hub.db`. */
+  /** Directory holding `hub.db` and the OPAQUE server key; kept owner-only. */
   data: string
-  /** Fixed password; defaults to `OPENCODE_HUB_PASSWORD`, then to the stored (or a newly generated) one. */
-  password?: string
   /** Milliseconds between tunnel PINGs. */
   pingInterval?: number
   /** The dashboard's assets. Without them the hub host serves a page explaining how to build them. */
@@ -38,7 +37,9 @@ export type Options = {
 /** A browser following `/hub/api/events`. */
 type Listener = { session: string; send: (text: string) => void; close: () => void }
 
-const PASSWORD_KEY = "password_hash"
+/** The public URL the hub last started with, so `opencode hub invite` can print a full link. */
+const URL_KEY = "url"
+const DEFAULT_URL = "http://localhost:4800"
 // The machine's web app installs a service worker that answers every navigation with its own index.html except under
 // /api and /auth, so the handoff has to live under /auth to reach the hub once that worker is installed.
 const SESSION_PATH = "/auth/hub-session"
@@ -49,9 +50,6 @@ const LABEL = /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/
 const PROVIDER_ID = /^[a-zA-Z0-9][a-zA-Z0-9._-]{0,63}$/
 const EnrollRequest = Schema.fromJsonString(Schema.Struct({ code: Schema.String, name: Schema.String }))
 const decodeEnrollRequest = Schema.decodeUnknownOption(EnrollRequest)
-const decodeLogin = Schema.decodeUnknownOption(
-  Schema.fromJsonString(Schema.Struct({ password: Schema.String, next: Schema.optional(Schema.String) })),
-)
 const decodeProvider = Schema.decodeUnknownOption(
   Schema.fromJsonString(
     Schema.Struct({
@@ -67,11 +65,8 @@ const decodeChatGPTComplete = Schema.decodeUnknownOption(
 )
 
 export async function start(options: Options) {
+  const setup = await Accounts.loadServerSetup(options.data)
   const store = Store.open(options.data)
-  const fixed = options.password ?? process.env.OPENCODE_HUB_PASSWORD
-  const fixedHash = fixed ? await Bun.password.hash(fixed) : undefined
-  const generated = fixedHash || store.setting(PASSWORD_KEY) ? undefined : await setStoredPassword(store)
-  if (generated) console.log(`opencode hub password (shown once): ${generated}`)
   const auth = Auth.create()
   const chatgpt = ChatGPT.create({
     store,
@@ -129,12 +124,23 @@ export async function start(options: Options) {
   const origin = base.origin
   const secure = base.protocol === "https:"
   const machineOrigin = (id: string) => `${base.protocol}//${id}.${domain}`
+  store.setSetting(URL_KEY, origin)
+  const accounts = Accounts.create({
+    store,
+    auth,
+    setup,
+    origin,
+    secure,
+    closed: (sessions) => listeners.forEach((listener) => sessions.includes(listener.session) && listener.close()),
+  })
 
   return {
     url: origin,
     port: server.port ?? 0,
-    /** The password generated on this first start, when one was generated. */
-    password: generated,
+    /** How many accounts exist; none means the first administrator still has to be invited. */
+    userCount: () => store.userCount(),
+    /** Issues an invitation and returns its one-time link, as `opencode hub invite` does. */
+    invite: (role: Store.Role) => accounts.invite(role),
     /** Issues a one-time enrollment code, as the dashboard's "Add machine" does. */
     createEnrollmentCode: () => auth.createCode(),
     async stop() {
@@ -164,7 +170,7 @@ export async function start(options: Options) {
     if (pathname === "/hub/agent/connect") return connect(request, server)
     if (pathname.startsWith("/llm/")) return Llm.proxy(request, url, store, chatgpt)
     if (pathname.startsWith("/hub/api/")) return api(request, pathname.slice("/hub/api/".length), server)
-    const session = auth.session(Auth.readCookie(request.headers.get("cookie")))
+    const session = accounts.current(request)?.session
     if (pathname === "/hub/handoff") {
       if (session) return handoff(url, session)
       const next = url.searchParams.get("next")
@@ -187,16 +193,10 @@ export async function start(options: Options) {
       if (!/^application\/json\b/i.test(request.headers.get("content-type") ?? ""))
         return json(415, { error: "Expected a JSON request body." })
     }
-    if (route === "login" && method === "POST") return login(request, server)
-    const session = auth.session(Auth.readCookie(request.headers.get("cookie")))
-    if (route === "session" && method === "GET")
-      return session ? json(200, { authenticated: true }) : json(401, { authenticated: false })
+    const handled = await accounts.handle(request, route, clientAddress(request, server))
+    if (handled) return handled
+    const session = accounts.current(request)?.session
     if (!session) return json(401, { error: "Sign in to the hub first." })
-    if (route === "logout" && method === "POST") {
-      auth.deleteSession(session)
-      listeners.forEach((listener) => listener.session === session && listener.close())
-      return json(200, {}, Auth.clearCookie(secure))
-    }
     if (route === "machines" && method === "GET") return json(200, machineList())
     if (route === "events" && method === "GET") return events(session)
     if (route === "machines/code" && method === "POST") {
@@ -235,29 +235,6 @@ export async function start(options: Options) {
       return new Response(null, { status: 204 })
     }
     return json(404, { error: "Not found." })
-  }
-
-  async function login(request: Request, server: Server<Tunnel.SocketData>) {
-    const client = clientAddress(request, server)
-    const wait = auth.throttled(client)
-    if (wait > 0) {
-      const seconds = Math.ceil(wait / 1000)
-      return json(429, { error: `Too many failed attempts. Try again in ${seconds} s.`, retryAfter: seconds })
-    }
-    const body = Option.getOrUndefined(decodeLogin(await request.text()))
-    const hash = fixedHash ?? store.setting(PASSWORD_KEY)
-    const valid = body !== undefined && hash !== undefined && (await Bun.password.verify(body.password, hash))
-    if (!valid) {
-      auth.fail(client)
-      return json(401, { error: "Wrong password." })
-    }
-    auth.succeed(client)
-    const next = body.next ?? ""
-    return json(
-      200,
-      { redirect: next ? `/hub/handoff?next=${encodeURIComponent(next)}` : "/" },
-      Auth.sessionCookie(auth.createSession(), secure),
-    )
   }
 
   async function saveProvider(request: Request) {
@@ -374,7 +351,7 @@ export async function start(options: Options) {
     if (url.pathname === SESSION_PATH) return session(url, machine)
     const cookie = request.headers.get("cookie")
     const upgrade = request.headers.get("upgrade")?.toLowerCase() === "websocket"
-    if (!auth.session(Auth.readCookie(cookie))) {
+    if (!accounts.current(request)) {
       if (upgrade || (request.method !== "GET" && request.method !== "HEAD"))
         return new Response("Unauthorized", { status: 401 })
       return redirect(
@@ -403,7 +380,7 @@ export async function start(options: Options) {
   }
 
   function session(url: URL, machine: Store.Machine) {
-    const id = auth.consumeTicket(url.searchParams.get("ticket") ?? "", machine.id)
+    const id = accounts.active(auth.consumeTicket(url.searchParams.get("ticket") ?? "", machine.id))?.session
     if (!id) return redirect(`${origin}/login?next=${encodeURIComponent(`${machineOrigin(machine.id)}/`)}`)
     const next = url.searchParams.get("next") ?? "/"
     const local = next.startsWith("/") && !next.startsWith("//") && !next.startsWith("/\\") ? next : "/"
@@ -500,17 +477,19 @@ export async function start(options: Options) {
   }
 }
 
-/** Sets the stored hub password (generating one when omitted) and returns it. */
-export async function setPassword(input: { data: string; password?: string }) {
+/**
+ * Writes an invitation straight into the hub's database, for the first administrator or a locked-out hub, and
+ * returns its one-time link on the URL the hub last started with.
+ */
+export function invite(input: { data: string; role: Store.Role }) {
   const store = Store.open(input.data)
-  const password = await setStoredPassword(store, input.password)
+  const url = store.setting(URL_KEY) ?? DEFAULT_URL
+  const invitation = store.createInvitation({ role: input.role })
   store.close()
-  return password
-}
-
-async function setStoredPassword(store: Store.Instance, password = Store.randomToken().slice(0, 24)) {
-  store.setSetting(PASSWORD_KEY, await Bun.password.hash(password))
-  return password
+  return {
+    url: `${url}/register?invite=${encodeURIComponent(invitation.code)}`,
+    expiresAt: invitation.expiresAt,
+  }
 }
 
 /** Behind a local reverse proxy every peer is loopback, so the forwarded client address is used instead. */
@@ -529,12 +508,6 @@ function redirect(location: string, cookie?: string) {
 
 function forbidden() {
   return new Response("Cross-origin request refused", { status: 403 })
-}
-
-function json(status: number, body: unknown, cookie?: string) {
-  const headers = new Headers({ "cache-control": "no-store" })
-  if (cookie) headers.set("set-cookie", cookie)
-  return Response.json(body, { status, headers })
 }
 
 function assetResponse(key: string, asset: { body: string | Uint8Array; type: string }) {
@@ -556,7 +529,8 @@ function csp(html: string) {
     /<script\b(?![^>]*\bsrc\s*=)[^>]*\bid=(["'])oc-theme-preload-script\1[^>]*>([\s\S]*?)<\/script>/i,
   )?.[2]
   const hash = script === undefined ? "" : ` 'sha256-${createHash("sha256").update(script).digest("base64")}'`
-  return `default-src 'self'; script-src 'self'${hash}; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self' data:; connect-src 'self'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'; object-src 'none'`
+  // OPAQUE runs in WebAssembly, which needs 'wasm-unsafe-eval' (and nothing that allows eval of scripts).
+  return `default-src 'self'; script-src 'self' 'wasm-unsafe-eval'${hash}; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self' data:; connect-src 'self'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'; object-src 'none'`
 }
 
 const MISSING_UI = `<p>This hub was started without its web interface. In a source checkout, build it with <code>bun run --cwd packages/app build</code> and restart <code>opencode hub</code>. Release builds embed it.</p>`

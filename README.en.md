@@ -27,7 +27,8 @@ front of it.
 
 ## Features
 
-- **Secure hub**: password login, automatic HTTPS (Let's Encrypt through Caddy), one session per browser.
+- **Secure hub**: accounts created by invitation, OPAQUE sign-in (the password never leaves the browser), automatic
+  HTTPS (Let's Encrypt through Caddy), one session per browser.
 - **Remote machines**: each machine runs `opencode agent run`, which keeps an outgoing WebSocket tunnel to the hub
   (heartbeat, automatic reconnection). No port to open; NAT and firewalls are not a problem.
 - **Each machine's full interface**: `https://<machine>.hub.example.com` shows the OpenCode web interface of the
@@ -70,7 +71,7 @@ Prerequisite: [Bun](https://bun.sh) (version given in `package.json`).
 ./build.sh                    # dependencies, tests, web UI and binary for this machine
 BIN=packages/cli/dist/cli-linux-x64/bin/opencode
 
-$BIN hub                      # http://localhost:4800, the password is shown once
+$BIN hub                      # http://localhost:4800; without accounts, prints the link that creates the administrator
 # In the dashboard: "Add machine", then on the machine:
 $BIN agent join http://localhost:4800      # asks for the code without echo
 $BIN agent run
@@ -119,7 +120,7 @@ Details on Caddy, DNS and troubleshooting: [`script/hub/README.md`](script/hub/R
 | Command | Purpose |
 |---|---|
 | `opencode hub [--port 4800] [--url https://hub.example.com] [--data <folder>]` | Starts the hub |
-| `opencode hub password` | Resets the hub password |
+| `opencode hub invite [--admin] [--data <folder>]` | Creates a one-time invitation and prints its link (`--admin` for an administrator) |
 | `opencode agent join <url> [--code <code>] [--name <name>] [--insecure]` | Enrolls this machine (without `--code`, the code is asked without echo or read from stdin) |
 | `opencode agent run` | Keeps the machine connected to the hub |
 | `opencode agent status` / `opencode agent leave` | Enrollment status / unenroll |

@@ -21,13 +21,14 @@ export default Runtime.handler(
         return body === undefined ? undefined : { body, type: FSUtil.mimeType(key) }
       },
     }))
+    const data = Option.getOrElse(input.data, () => path.join(global.data, "hub"))
     const hub = yield* Effect.acquireRelease(
       Effect.tryPromise(() =>
         Hub.start({
           hostname: input.hostname,
           port: input.port,
           url: Option.getOrElse(input.url, () => `http://localhost:${input.port}`),
-          data: Option.getOrElse(input.data, () => path.join(global.data, "hub")),
+          data,
           ui: Option.getOrUndefined(ui),
           version: OPENCODE_VERSION,
         }),
@@ -35,6 +36,14 @@ export default Runtime.handler(
       (hub) => Effect.promise(() => hub.stop()),
     )
     process.stdout.write(`Hub listening on ${hub.url}${EOL}`)
+    // A hub without accounts needs its first administrator. In a terminal the invitation link is printed; elsewhere
+    // (a systemd service writing to the journal) only the command that creates one, so no live link lands in a log.
+    if (hub.userCount() === 0)
+      process.stdout.write(
+        process.stdout.isTTY
+          ? `No account yet. Open this one-time link to create the first administrator:${EOL}${hub.invite("admin").url}${EOL}`
+          : `No account yet. Create the first administrator's invitation with: opencode hub invite --admin --data ${data}${EOL}`,
+      )
     return yield* Effect.never
   }, Effect.scoped),
 )

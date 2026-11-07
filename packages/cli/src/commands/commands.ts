@@ -559,9 +559,13 @@ const Root = Spec.make(typeof OPENCODE_CLI_NAME === "string" ? OPENCODE_CLI_NAME
         ),
       },
       commands: [
-        Spec.make("password", {
-          description: "Reset the hub password and print the new one",
+        Spec.make("invite", {
+          description: "Create a one-time invitation to the hub and print its link",
           params: {
+            admin: Flag.Boolean("admin").pipe(
+              Flag.withDescription("Invite an administrator, e.g. the first account"),
+              Flag.withDefault(false),
+            ),
             data: Flag.String("data").pipe(
               Flag.withDescription("Data directory (default: <global data>/hub)"),
               Flag.optional,

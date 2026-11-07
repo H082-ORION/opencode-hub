@@ -1,7 +1,7 @@
 # Remote machines (hub + agents)
 
-One public opencode **hub** (a VPS) gives a single user, behind a password, access to N **machines** that sit behind
-NAT. Each machine runs its own full local opencode server and keeps an outbound WebSocket tunnel open to the hub. The
+One public opencode **hub** (a VPS) gives its users, who sign in with their own accounts, access to N **machines** that
+sit behind NAT. Each machine runs its own full local opencode server and keeps an outbound WebSocket tunnel open to the hub. The
 hub reverse-proxies the machine's whole web UI and API through that tunnel. The hub also proxies LLM traffic so provider
 keys never leave the hub.
 
@@ -29,7 +29,7 @@ browser ──https──> Caddy ──http──> opencode hub (127.0.0.1:4800)
 
 | Who | Credential | Where it is checked |
 |---|---|---|
-| The user (browser) | hub password -> `opencode_hub` session cookie (host-only, HttpOnly, SameSite=Lax, Secure when the hub URL is https) | hub, on the hub host and on every machine host |
+| A user (browser) | login and password through OPAQUE (the hub never sees the password) -> `opencode_hub` session cookie of that user (host-only, HttpOnly, SameSite=Lax, Secure when the hub URL is https, 30 days, in memory) | hub, on the hub host and on every machine host; the account must exist and be active on every request |
 | A machine's tunnel | `tunnel token`, issued at enrollment, sent as `Authorization: Bearer` on the WebSocket upgrade | hub `/hub/agent/connect` |
 | A machine's LLM calls | `llm token`, issued at enrollment, used as the provider API key on the machine | hub `/llm/<provider>/...` |
 | The hub reaching the local server | the local service password (Basic `opencode:<password>`) | injected by the **agent**, never known to the hub |
@@ -83,16 +83,33 @@ Rules:
 `opencode hub [--hostname 127.0.0.1] [--port 4800] [--url http://localhost:4800] [--data <dir>]`
 
 - `--url` is the public base URL (`https://hub.example.com` in production). Its host is the `domain` used for routing.
-- Password: `OPENCODE_HUB_PASSWORD` env var; otherwise one is generated on first start, stored (hashed with
-  `Bun.password`) in the data dir and printed once. `opencode hub password` resets it.
-- Storage: `bun:sqlite` file `<data>/hub.db` with tables `machine` (id, name, tunnel_token_hash, llm_token_hash,
-  created_at, last_seen_at), `provider` (id, name, base_url, api_key, created_at), `setting` (key, value). Enrollment
-  codes and handoff tickets live in memory.
+- Accounts (see `specs/multi-users.md`, step 1): users are created only from single-use invitations (32 random bytes,
+  stored as a SHA-256 hash, 7 days by default, 30 at most), with a login and a password registered through OPAQUE
+  (`@serenity-kit/opaque`, Argon2id 64 MiB / 3 passes in the browser). Administrators invite, disable and enable users,
+  change roles and reset passwords; the hub always keeps one active administrator. `opencode hub invite [--admin]
+  [--data <dir>]` writes an invitation straight into the database and prints its link; a hub started in a terminal
+  without any account prints an administrator invitation itself, and otherwise prints that command.
+  Until machines belong to users (step 2), every signed-in user sees, opens and revokes every machine and manages the
+  shared providers.
+- User key: the browser draws a 32-byte key at registration and stores it wrapped (AES-256-GCM under a key derived from
+  the OPAQUE export key) with an HMAC check value. At sign-in the browser unwraps it and sends it; the hub checks it
+  against the stored check and keeps it in memory until it stops, the user locks it or the account is disabled or
+  reset. Nothing uses it yet.
+- Storage: `bun:sqlite` file `<data>/hub.db` with tables `user` (id, login, role, registration_record, wrapped_key,
+  key_check, created_at, updated_at, disabled_at), `invitation` (id, code_hash, role, created_by, user_id for a reset,
+  created_at, expires_at, used_at), `machine` (id, name, tunnel_token_hash, llm_token_hash, created_at,
+  last_seen_at), `provider` (id, name, base_url, api_key, created_at), `setting` (key, value; `url` is the public URL
+  the hub last started with, for `hub invite`). The OPAQUE server key lives in `<data>/opaque-server-setup`, outside
+  the database. The data dir is `0700`; `hub.db`, its WAL files, `opaque-server-setup` and `catalog.json` are `0600`.
+  Sessions, unlocked user keys, OPAQUE attempts, enrollment codes and handoff tickets live in memory.
 - Routes on the hub host:
   - The dashboard is a second entry of the web app (`packages/app/hub.html`, `packages/app/src/hub/`) built with
     `@opencode/ui`. The CLI passes the embedded app assets to `Hub.start({ ui })`; every non-API GET on the hub host
     serves `hub.html` (including `/login?next=`). Without assets the hub serves a 503 page explaining how to build them.
-  - JSON API under `/hub/api/`: `session`, `login`, `logout`, `machines`, `events` (SSE, live machine list),
+  - JSON API under `/hub/api/`: `session`, `register/invite`, `register/start`, `register/finish`, `login/start`,
+    `login/finish`, `logout`, `account/lock`, `account/password/start`, `account/password/finish`, and for
+    administrators `users`, `users/<id>/{disable,enable,role,reset}`, `invitations`, `DELETE invitations/<id>`;
+    then `machines`, `events` (SSE, live machine list),
     `machines/code`, `DELETE machines/<id>`, `providers`, `DELETE providers/<id>`, `presets` (provider catalog),
     `providers/chatgpt/begin`, `providers/chatgpt/complete`. Mutations need a JSON body and `Origin` = hub origin.
   - `GET /hub/handoff`.
@@ -104,7 +121,11 @@ Rules:
 - Routes on `<m>.<domain>`: `/auth/hub-session` (ticket consumption); everything else requires the cookie and is proxied
   through the tunnel, including WebSocket upgrades. Machine offline -> 503 HTML page with a link back to the dashboard.
   Unknown machine -> 404.
-- Login is rate limited in memory (exponential delay per client IP after failures).
+- Sign-in is rate limited in memory: an exponential delay per client IP after failures, and 15 minutes after 5
+  consecutive failures on a login, whether the account exists or not. A sign-in counts as failed from `login/start`
+  until `login/finish` succeeds, since a wrong password fails in the browser. An unknown login gets a fake OPAQUE
+  answer and a fake wrapped key, stable per login, so accounts cannot be enumerated.
+- The page's CSP allows `'wasm-unsafe-eval'` for OPAQUE's WebAssembly.
 
 ## LLM proxy
 
@@ -136,8 +157,9 @@ Rules:
 ## Library API (`@opencode/relay`)
 
 ```ts
-Hub.start(options: { hostname?: string; port?: number; url: string; data: string; password?: string })
-  -> Promise<{ url: string; port: number; stop(): Promise<void> }>
+Hub.start(options: { hostname?: string; port?: number; url: string; data: string })
+  -> Promise<{ url: string; port: number; userCount(): number; invite(role): { url, expiresAt }; stop(): Promise<void> }>
+Hub.invite(input: { data: string; role: "admin" | "user" }) -> { url: string; expiresAt: number }
 Agent.enroll(input: { url: string; code: string; name: string }) -> Promise<Enrollment>
 Agent.connect(input: {
   enrollment: Enrollment
@@ -150,5 +172,5 @@ Agent.connect(input: {
 
 ## Out of scope for the first version
 
-Multiple users, flow control, a queue for prompts sent while a machine is offline, mTLS, OAuth-based providers in the
+Per-user machines, keys and instances (see `specs/multi-users.md`), flow control, a queue for prompts sent while a machine is offline, mTLS, OAuth-based providers in the
 LLM proxy.

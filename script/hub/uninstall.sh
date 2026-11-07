@@ -5,7 +5,8 @@
 set -euo pipefail
 
 DATA_DIR="/var/lib/opencode-hub"
-ENV_FILE="/etc/opencode-hub.env"
+# Only an install from before accounts has it; removed when found.
+OLD_ENV_FILE="/etc/opencode-hub.env"
 UNIT_FILE="/etc/systemd/system/opencode-hub.service"
 CADDYFILE="/etc/caddy/Caddyfile"
 PURGE=""
@@ -52,8 +53,8 @@ fi
 rm -f "$UNIT_FILE"
 systemctl daemon-reload
 systemctl reset-failed opencode-hub >/dev/null 2>&1 || true
-rm -f "$ENV_FILE"
-log "Removed $UNIT_FILE and $ENV_FILE"
+rm -f "$OLD_ENV_FILE"
+log "Removed $UNIT_FILE"
 
 if [[ -n "$PURGE" ]]; then
   rm -rf "$DATA_DIR"

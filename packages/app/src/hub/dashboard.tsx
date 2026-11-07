@@ -1,12 +1,15 @@
 import { Button } from "@opencode/ui/button"
 import { Mark } from "@opencode/ui/logo"
 import { showToast } from "@opencode/ui/toast"
-import { errorText, hubApi, HubError } from "./api"
+import { Show } from "solid-js"
+import { AccountSection } from "./account"
+import { errorText, hubApi, HubError, type HubSession } from "./api"
 import { copy } from "./copy"
 import { Machines } from "./machines"
 import { Providers } from "./providers"
+import { Users } from "./users"
 
-export function Dashboard(props: { onSignedOut: () => void }) {
+export function Dashboard(props: { session: HubSession; onSignedOut: () => void }) {
   /** Reports a failed request; one refused for a missing session returns to the sign-in form instead. */
   const fail = (title: string, error: unknown) => {
     if (error instanceof HubError && error.status === 401) return props.onSignedOut()
@@ -30,6 +33,10 @@ export function Dashboard(props: { onSignedOut: () => void }) {
         <div class="hub-content">
           <Machines onSignedOut={props.onSignedOut} fail={fail} />
           <Providers fail={fail} />
+          <AccountSection session={props.session} fail={fail} />
+          <Show when={props.session.user.role === "admin"}>
+            <Users fail={fail} />
+          </Show>
         </div>
       </main>
     </div>

@@ -34,8 +34,17 @@ The installer is idempotent. It checks DNS (warnings only), installs Caddy from 
 the system user with data in `/var/lib/opencode-hub`, writes `/etc/caddy/Caddyfile` (backing up any existing file),
 writes `/etc/systemd/system/opencode-hub.service`, opens 80/443 if `ufw` is active and starts both services.
 
-The hub password lives in `/etc/opencode-hub.env` as `OPENCODE_HUB_PASSWORD`. It is generated on the first install and
-printed once. To change it, edit that file and run `sudo systemctl restart opencode-hub`.
+The hub has accounts instead of a password. On the first install the installer prints a one-time administrator
+invitation link (valid 7 days): open it to choose a login and a password. Sign-in uses OPAQUE, so the password never
+reaches the hub. Administrators invite other users from the dashboard. To create another administrator invitation, for
+example after losing access, run as the hub user:
+
+```sh
+sudo -u opencode env HOME=/var/lib/opencode-hub opencode hub invite --admin --data /var/lib/opencode-hub
+```
+
+`/var/lib/opencode-hub` is owner-only (`0700`); `hub.db` and `opaque-server-setup` (the OPAQUE server key, kept out of
+the database) are `0600`. An install from before accounts had `/etc/opencode-hub.env`; the installer removes it.
 
 ## Update
 
@@ -49,7 +58,7 @@ Re-running `install.sh --binary ./opencode` with the same options does the same.
 ## Uninstall
 
 ```sh
-sudo ./uninstall.sh            # stop and remove the service and /etc/opencode-hub.env
+sudo ./uninstall.sh            # stop and remove the service
 sudo ./uninstall.sh --purge    # also delete /var/lib/opencode-hub
 ```
 

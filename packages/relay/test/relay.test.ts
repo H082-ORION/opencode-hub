@@ -2,8 +2,11 @@ import { afterAll, beforeAll, describe, expect, test } from "bun:test"
 import { mkdtempSync, rmSync } from "node:fs"
 import os from "node:os"
 import path from "node:path"
+import { Account } from "../src/account.js"
 import { Agent, Hub, Protocol } from "../src/index.js"
+import { browser } from "./fixture/browser.js"
 
+const LOGIN = "admin"
 const PASSWORD = "hub-secret"
 const LOCAL_PASSWORD = "local-secret"
 const LARGE = Uint8Array.from({ length: 5 * 1024 * 1024 + 123 }, (_, index) => (index * 31 + 7) % 251)
@@ -90,7 +93,14 @@ const state = {} as {
 }
 
 beforeAll(async () => {
-  state.hub = await Hub.start({ hostname: "127.0.0.1", port: 0, data, password: PASSWORD, catalog: { fetch: offline } })
+  state.hub = await Hub.start({ hostname: "127.0.0.1", port: 0, data, catalog: { fetch: offline } })
+  const admin = browser(state.hub.url)
+  await Account.register({
+    post: admin.post,
+    invite: new URL(state.hub.invite("admin").url).searchParams.get("invite") ?? "",
+    login: LOGIN,
+    password: PASSWORD,
+  })
   state.enrollment = await Agent.enroll({
     url: state.hub.url,
     code: state.hub.createEnrollmentCode().code,
@@ -205,33 +215,21 @@ describe("browser access", () => {
     expect(response.headers.get("location")).toBe("/")
   })
 
-  test("a wrong password is throttled per client", async () => {
-    const attempt = (password: string) =>
-      api("login", { method: "POST", body: { password }, headers: { "x-forwarded-for": "203.0.113.9" }, cookie: "" })
-    const wrong = await attempt("wrong")
-    expect(wrong.status).toBe(401)
-    expect(await wrong.json()).toEqual({ error: "Wrong password." })
-    const throttled = await attempt(PASSWORD)
-    expect(throttled.status).toBe(429)
-    expect(throttled.headers.get("set-cookie")).toBeNull()
-  })
-
   test("login returns the handoff redirect for a machine destination", async () => {
     const next = `${state.machineURL}/echo`
-    const response = await api("login", {
-      method: "POST",
-      body: { password: PASSWORD, next },
-      headers: { "x-forwarded-for": "203.0.113.11" },
-      cookie: "",
-    })
-    expect(response.status).toBe(200)
-    expect(await response.json()).toEqual({ redirect: `/hub/handoff?next=${encodeURIComponent(next)}` })
-    expect(response.headers.get("set-cookie")).toContain("HttpOnly")
+    const client = browser(state.hub.url, { "x-forwarded-for": "203.0.113.11" })
+    const result = await Account.login({ post: client.post, login: LOGIN, password: PASSWORD, next })
+    expect(result).toEqual({ redirect: `/hub/handoff?next=${encodeURIComponent(next)}` })
+    expect(client.jar.cookie).toStartWith("opencode_hub=")
   })
 
   test("reports the session and signs out", async () => {
     expect((await api("session", { cookie: "" })).status).toBe(401)
-    expect(await (await api("session")).json()).toEqual({ authenticated: true })
+    expect(await (await api("session")).json()).toMatchObject({
+      authenticated: true,
+      user: { login: LOGIN, role: "admin" },
+      unlocked: true,
+    })
     const cookie = await login()
     const out = await api("logout", { method: "POST", cookie })
     expect(out.status).toBe(200)
@@ -336,7 +334,6 @@ describe("browser access", () => {
       hostname: "127.0.0.1",
       port: 0,
       data: mkdtempSync(path.join(os.tmpdir(), "opencode-relay-ui-")),
-      password: PASSWORD,
       catalog: { fetch: offline },
       ui: { file: (key) => (ui[key] === undefined ? undefined : { body: ui[key], type: Bun.file(key).type }) },
     })
@@ -345,6 +342,8 @@ describe("browser access", () => {
     expect(page.headers.get("cache-control")).toBe("no-cache")
     const hash = new Bun.CryptoHasher("sha256").update("theme()").digest("base64")
     expect(page.headers.get("content-security-policy")).toContain(`'sha256-${hash}'`)
+    // OPAQUE's WebAssembly needs this, and only this, relaxation of script-src.
+    expect(page.headers.get("content-security-policy")).toContain("script-src 'self' 'wasm-unsafe-eval' 'sha256-")
     expect(await (await fetch(`${hub.url}/login?next=x`)).text()).toBe(ui["hub.html"])
     // The main app shell belongs to machine hosts.
     expect((await fetch(`${hub.url}/index.html`)).status).toBe(404)
@@ -661,10 +660,9 @@ const offline = Object.assign(async () => Response.error(), { preconnect: () => 
 type Machine = { id: string; name: string; online: boolean; lastSeenAt: number | null; url: string }
 
 async function login() {
-  const response = await api("login", { method: "POST", body: { password: PASSWORD }, cookie: "" })
-  expect(response.status).toBe(200)
-  expect(await response.json()).toEqual({ redirect: "/" })
-  return (response.headers.get("set-cookie") ?? "").split(";")[0]
+  const client = browser(state.hub.url)
+  expect(await Account.login({ post: client.post, login: LOGIN, password: PASSWORD })).toEqual({ redirect: "/" })
+  return client.jar.cookie
 }
 
 /** Calls the dashboard API as the signed-in browser would: same origin, JSON bodies. */

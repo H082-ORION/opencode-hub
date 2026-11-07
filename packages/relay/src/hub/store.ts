@@ -1,6 +1,6 @@
 import { Database } from "bun:sqlite"
 import { Option, Schema } from "effect"
-import { mkdirSync } from "node:fs"
+import { chmodSync, closeSync, existsSync, mkdirSync, openSync } from "node:fs"
 import path from "node:path"
 
 export * as Store from "./store.js"
@@ -35,6 +35,36 @@ export type Provider = {
   created_at: number
 }
 
+export type Role = "admin" | "user"
+
+export type User = {
+  id: string
+  login: string
+  role: Role
+  /** OPAQUE registration record; null after an administrator reset, until the reset invitation is used. */
+  registration_record: string | null
+  /** The user key wrapped with the OPAQUE export key, and its HMAC check (see `Account`). */
+  wrapped_key: string | null
+  key_check: string | null
+  created_at: number
+  updated_at: number
+  disabled_at: number | null
+}
+
+export type Invitation = {
+  id: string
+  role: Role
+  created_by: string | null
+  /** The account a reset invitation re-registers; null for a new account. */
+  user_id: string | null
+  created_at: number
+  expires_at: number
+  used_at: number | null
+}
+
+/** A pending invitation as the dashboard lists it, with the logins it refers to. */
+export type InvitationSummary = Invitation & { created_by_login: string | null; user_login: string | null }
+
 /** Provider fields that are safe to show in the UI: no key, no tokens. */
 export type ProviderSummary = Pick<Provider, "id" | "name" | "base_url" | "auth">
 
@@ -44,10 +74,20 @@ type ProviderRow = Omit<Provider, "auth" | "oauth"> & { auth: string; oauth: str
 const RESERVED = new Set(["www", "hub", "api", "app", "admin", "mail", "llm", "localhost", "static", "assets"])
 const MAX_ID = 32
 
+const INVITATION_DAYS = 7
+const MAX_INVITATION_DAYS = 30
+const DAY = 24 * 60 * 60 * 1000
+// SQLite creates the WAL and shared-memory files with the database's own mode.
+const DATABASE_FILES = ["hub.db", "hub.db-wal", "hub.db-shm"]
+
 export function open(dir: string) {
-  mkdirSync(dir, { recursive: true })
-  const db = new Database(path.join(dir, "hub.db"), { create: true, strict: true })
+  secureDirectory(dir)
+  const file = path.join(dir, "hub.db")
+  // Created owner-only before SQLite opens it, whatever the process umask.
+  if (!existsSync(file)) closeSync(openSync(file, "a", 0o600))
+  const db = new Database(file, { create: true, strict: true })
   db.run("PRAGMA journal_mode = WAL")
+  DATABASE_FILES.forEach((name) => existsSync(path.join(dir, name)) && chmodSync(path.join(dir, name), 0o600))
   db.run(`CREATE TABLE IF NOT EXISTS machine (
     id TEXT PRIMARY KEY,
     name TEXT NOT NULL,
@@ -75,6 +115,29 @@ export function open(dir: string) {
   if (!columns.has("auth")) db.run("ALTER TABLE provider ADD COLUMN auth TEXT NOT NULL DEFAULT 'key'")
   if (!columns.has("oauth")) db.run("ALTER TABLE provider ADD COLUMN oauth TEXT")
   db.run("CREATE TABLE IF NOT EXISTS setting (key TEXT PRIMARY KEY, value TEXT NOT NULL)")
+  // The single hub password of earlier versions is gone: accounts replace it.
+  db.run("DELETE FROM setting WHERE key = 'password_hash'")
+  db.run(`CREATE TABLE IF NOT EXISTS user (
+    id TEXT PRIMARY KEY,
+    login TEXT NOT NULL UNIQUE,
+    role TEXT NOT NULL CHECK (role IN ('admin', 'user')),
+    registration_record TEXT,
+    wrapped_key TEXT,
+    key_check TEXT,
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL,
+    disabled_at INTEGER
+  )`)
+  db.run(`CREATE TABLE IF NOT EXISTS invitation (
+    id TEXT PRIMARY KEY,
+    code_hash TEXT NOT NULL UNIQUE,
+    role TEXT NOT NULL CHECK (role IN ('admin', 'user')),
+    created_by TEXT,
+    user_id TEXT,
+    created_at INTEGER NOT NULL,
+    expires_at INTEGER NOT NULL,
+    used_at INTEGER
+  )`)
 
   const machineColumns = "id, name, created_at, last_seen_at"
   const queries = {
@@ -86,6 +149,44 @@ export function open(dir: string) {
     provider: db.query<ProviderRow, [string]>("SELECT * FROM provider WHERE id = ?"),
     summaries: db.query<ProviderSummary, []>("SELECT id, name, base_url, auth FROM provider ORDER BY id"),
     setting: db.query<{ value: string }, [string]>("SELECT value FROM setting WHERE key = ?"),
+    users: db.query<User, []>("SELECT * FROM user ORDER BY created_at"),
+    user: db.query<User, [string]>("SELECT * FROM user WHERE id = ?"),
+    userByLogin: db.query<User, [string]>("SELECT * FROM user WHERE login = ?"),
+    userCount: db.query<{ count: number }, []>("SELECT count(*) AS count FROM user"),
+    activeAdmins: db.query<{ count: number }, []>(
+      "SELECT count(*) AS count FROM user WHERE role = 'admin' AND disabled_at IS NULL",
+    ),
+    invitation: db.query<Invitation, [string, number]>(
+      `SELECT id, role, created_by, user_id, created_at, expires_at, used_at FROM invitation
+       WHERE code_hash = ? AND used_at IS NULL AND expires_at > ?`,
+    ),
+    invitations: db.query<InvitationSummary, [number]>(
+      `SELECT invitation.id, invitation.role, invitation.created_by, invitation.user_id, invitation.created_at,
+         invitation.expires_at, invitation.used_at, creator.login AS created_by_login, target.login AS user_login
+       FROM invitation
+       LEFT JOIN user AS creator ON creator.id = invitation.created_by
+       LEFT JOIN user AS target ON target.id = invitation.user_id
+       WHERE invitation.used_at IS NULL AND invitation.expires_at > ?
+       ORDER BY invitation.created_at`,
+    ),
+  }
+
+  /** Disabling or demoting the last active administrator would leave nobody able to administer the hub. */
+  const lastAdmin = (user: User) =>
+    user.role === "admin" && user.disabled_at === null && (queries.activeAdmins.get()?.count ?? 0) <= 1
+
+  const insertInvitation = (input: { role: Role; days?: number; createdBy?: string; userID?: string }) => {
+    const code = randomToken()
+    const now = Date.now()
+    const days = Math.min(Math.max(Math.trunc(input.days ?? INVITATION_DAYS), 1), MAX_INVITATION_DAYS)
+    const id = randomToken().slice(0, 16)
+    const expiresAt = now + days * DAY
+    db.run(
+      `INSERT INTO invitation (id, code_hash, role, created_by, user_id, created_at, expires_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?)`,
+      [id, hashToken(code), input.role, input.createdBy ?? null, input.userID ?? null, now, expiresAt],
+    )
+    return { id, code, expiresAt }
   }
 
   return {
@@ -144,8 +245,110 @@ export function open(dir: string) {
         key,
         value,
       ]),
+
+    users: () => queries.users.all(),
+    user: (id: string) => queries.user.get(id) ?? undefined,
+    userByLogin: (login: string) => queries.userByLogin.get(login) ?? undefined,
+    userCount: () => queries.userCount.get()?.count ?? 0,
+    /** Issues a single-use invitation; its plaintext code exists only in the returned value. */
+    createInvitation: (input: { role: Role; days?: number; createdBy?: string }) => insertInvitation(input),
+    /** The unused, unexpired invitation behind a code; for a reset, only while its account still exists. */
+    invitation(code: string) {
+      const invitation = queries.invitation.get(hashToken(code), Date.now())
+      if (!invitation) return undefined
+      if (invitation.user_id !== null && !queries.user.get(invitation.user_id)) return undefined
+      return invitation
+    },
+    invitations: () => queries.invitations.all(Date.now()),
+    /** Deletes an invitation that has not been used yet. */
+    revokeInvitation: (id: string) =>
+      db.run("DELETE FROM invitation WHERE id = ? AND used_at IS NULL", [id]).changes > 0,
+    /**
+     * Uses an invitation: creates the account, or re-registers the account a reset invitation names, in the same
+     * transaction that marks the invitation used.
+     */
+    register: (input: {
+      code: string
+      userID: string
+      login: string
+      record: string
+      wrappedKey: string
+      keyCheck: string
+    }) =>
+      db.transaction((): "ok" | "invalid" | "taken" => {
+        const now = Date.now()
+        const invitation = queries.invitation.get(hashToken(input.code), now)
+        if (!invitation) return "invalid"
+        if (invitation.user_id !== null) {
+          if (invitation.user_id !== input.userID) return "invalid"
+          const reset = db.run(
+            `UPDATE user SET registration_record = ?, wrapped_key = ?, key_check = ?, updated_at = ?
+             WHERE id = ? AND login = ?`,
+            [input.record, input.wrappedKey, input.keyCheck, now, input.userID, input.login],
+          )
+          if (reset.changes === 0) return "invalid"
+        }
+        if (invitation.user_id === null) {
+          const created = db.run(
+            `INSERT INTO user (id, login, role, registration_record, wrapped_key, key_check, created_at, updated_at)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT DO NOTHING`,
+            [input.userID, input.login, invitation.role, input.record, input.wrappedKey, input.keyCheck, now, now],
+          )
+          if (created.changes === 0) return "taken"
+        }
+        db.run("UPDATE invitation SET used_at = ? WHERE id = ?", [now, invitation.id])
+        return "ok"
+      })(),
+    /** Replaces the OPAQUE record and the wrapped key after a password change; the user key itself is unchanged. */
+    setCredentials: (input: { userID: string; record: string; wrappedKey: string }) =>
+      db.run(
+        "UPDATE user SET registration_record = ?, wrapped_key = ?, updated_at = ? WHERE id = ? AND disabled_at IS NULL",
+        [input.record, input.wrappedKey, Date.now(), input.userID],
+      ).changes > 0,
+    setDisabled: (id: string, disabled: boolean) =>
+      db.transaction((): "ok" | "unknown" | "last-admin" => {
+        const user = queries.user.get(id)
+        if (!user) return "unknown"
+        if (disabled && lastAdmin(user)) return "last-admin"
+        db.run("UPDATE user SET disabled_at = ?, updated_at = ? WHERE id = ?", [
+          disabled ? (user.disabled_at ?? Date.now()) : null,
+          Date.now(),
+          id,
+        ])
+        return "ok"
+      })(),
+    setRole: (id: string, role: Role) =>
+      db.transaction((): "ok" | "unknown" | "last-admin" => {
+        const user = queries.user.get(id)
+        if (!user) return "unknown"
+        if (role !== "admin" && lastAdmin(user)) return "last-admin"
+        db.run("UPDATE user SET role = ?, updated_at = ? WHERE id = ?", [role, Date.now(), id])
+        return "ok"
+      })(),
+    /**
+     * Forgets the account's password and user key, so the old password stops working at once, and issues the
+     * invitation that registers a new one. Data encrypted under the old key can no longer be read.
+     */
+    resetUser: (id: string, input: { days?: number; createdBy: string }) =>
+      db.transaction(() => {
+        const user = queries.user.get(id)
+        if (!user) return undefined
+        db.run(
+          "UPDATE user SET registration_record = NULL, wrapped_key = NULL, key_check = NULL, updated_at = ? WHERE id = ?",
+          [Date.now(), id],
+        )
+        // An earlier reset link for this account must not outlive the new one.
+        db.run("DELETE FROM invitation WHERE user_id = ? AND used_at IS NULL", [id])
+        return insertInvitation({ role: user.role, days: input.days, createdBy: input.createdBy, userID: id })
+      })(),
     close: () => db.close(),
   }
+}
+
+/** Creates the data directory if needed and keeps it owner-only. */
+export function secureDirectory(dir: string) {
+  mkdirSync(dir, { recursive: true, mode: 0o700 })
+  chmodSync(dir, 0o700)
 }
 
 export type Instance = ReturnType<typeof open>
@@ -185,4 +388,9 @@ export function randomToken() {
 
 export function hashToken(token: string) {
   return new Bun.CryptoHasher("sha256").update(token).digest("hex")
+}
+
+/** A 128-bit random identifier, unpadded base64url. */
+export function randomID() {
+  return Buffer.from(crypto.getRandomValues(new Uint8Array(16))).toString("base64url")
 }

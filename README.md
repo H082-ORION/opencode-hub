@@ -27,7 +27,8 @@ un dossier, et on travaille comme si on était devant.
 
 ## Fonctionnalités
 
-- **Hub sécurisé** : connexion par mot de passe, HTTPS automatique (Let's Encrypt via Caddy), une session par navigateur.
+- **Hub sécurisé** : comptes créés sur invitation, connexion OPAQUE (le mot de passe ne quitte jamais le navigateur),
+  HTTPS automatique (Let's Encrypt via Caddy), une session par navigateur.
 - **Machines distantes** : chaque machine lance `opencode agent run`, qui garde un tunnel WebSocket sortant vers le hub
   (heartbeat, reconnexion automatique). Aucun port à ouvrir, NAT et pare-feu ne posent pas de problème.
 - **Interface complète de chaque machine** : `https://<machine>.hub.exemple.fr` affiche l'interface web d'OpenCode de
@@ -70,7 +71,7 @@ Prérequis : [Bun](https://bun.sh) (version indiquée dans `package.json`).
 ./build.sh                    # dépendances, tests, interface web et binaire pour cette machine
 BIN=packages/cli/dist/cli-linux-x64/bin/opencode
 
-$BIN hub                      # http://localhost:4800, le mot de passe s'affiche une fois
+$BIN hub                      # http://localhost:4800 ; sans compte, affiche le lien qui crée l'administrateur
 # Dans le tableau de bord : « Add machine », puis sur la machine :
 $BIN agent join http://localhost:4800      # demande le code sans l'afficher
 $BIN agent run
@@ -119,7 +120,7 @@ Détails sur Caddy, le DNS et le dépannage : [`script/hub/README.md`](script/hu
 | Commande | Rôle |
 |---|---|
 | `opencode hub [--port 4800] [--url https://hub.exemple.fr] [--data <dossier>]` | Lance le hub |
-| `opencode hub password` | Réinitialise le mot de passe du hub |
+| `opencode hub invite [--admin] [--data <dossier>]` | Crée une invitation à usage unique et affiche son lien (`--admin` pour un administrateur) |
 | `opencode agent join <url> [--code <code>] [--name <nom>] [--insecure]` | Enrôle cette machine (sans `--code`, le code est demandé sans affichage ou lu sur l'entrée standard) |
 | `opencode agent run` | Maintient la machine connectée au hub |
 | `opencode agent status` / `opencode agent leave` | État de l'enrôlement / désenrôlement |
