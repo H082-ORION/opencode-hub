@@ -1,5 +1,6 @@
 import { Option, Schema } from "effect"
 import { createRemoteJWKSet, jwtVerify } from "jose"
+import { Providers } from "./providers.js"
 import type { Store } from "./store.js"
 
 export * as ChatGPT from "./chatgpt.js"
@@ -30,9 +31,15 @@ const TokenResponse = Schema.Struct({
 type TokenResponse = typeof TokenResponse.Type
 const decodeTokenResponse = Schema.decodeUnknownOption(Schema.fromJsonString(TokenResponse))
 
-type Attempt = { verifier: string; state: string; nonce: string; savedClientID?: string; expires: number }
+/** A sign-in in progress, bound to the hub user who started it. */
+type Attempt = { user: string; verifier: string; state: string; nonce: string; savedClientID?: string; expires: number }
 
-export function create(input: { store: Store.Instance; options?: Options; app: { name: string; version: string } }) {
+export function create(input: {
+  store: Store.Instance
+  providers: Providers.Instance
+  options?: Options
+  app: { name: string; version: string }
+}) {
   const issuer = (input.options?.issuer ?? "https://auth.openai.com").replace(/\/+$/, "")
   const tokenURL = `${issuer}/api/accounts/oauth/token`
   const jwks = createRemoteJWKSet(new URL(input.options?.jwks ?? `${issuer}/.well-known/jwks.json`))
@@ -70,7 +77,11 @@ export function create(input: { store: Store.Instance; options?: Options; app: {
     if (payload.nonce !== nonce) throw new Error("ChatGPT sign-in returned an ID token for another sign-in attempt.")
   }
 
-  async function refresh(id: string, current: Store.OAuth) {
+  async function refresh(user: string, key: string, opened: Store.OAuth) {
+    // Another request may have refreshed it since this one opened the provider: its refresh token may be rotated.
+    const latest = await input.providers.open(user, PROVIDER.id)
+    const current = latest.kind === "ok" && latest.provider.oauth ? latest.provider.oauth : opened
+    if (current.expires - Date.now() > refreshMargin) return current.access
     const response = await tokens({
       grant_type: "refresh_token",
       client_id: current.clientID,
@@ -78,23 +89,28 @@ export function create(input: { store: Store.Instance; options?: Options; app: {
       resource,
     })
     const next = credential(response, current.clientID, current)
-    input.store.updateOAuth(id, next)
+    await input.providers.updateOAuth(user, PROVIDER.id, key, next)
     return next.access
   }
 
   return {
-    /** Starts a sign-in; the returned URL opens ChatGPT's consent page. */
-    begin() {
+    /**
+     * Starts a sign-in for a hub user; the returned URL opens ChatGPT's consent page. Throws `LockedError` when the
+     * user's key is not in memory, since finishing would have nothing to seal the tokens with.
+     */
+    async begin(user: string) {
       prune(attempts)
+      if (!input.providers.unlocked(user)) throw new Providers.LockedError()
+      const saved = await input.providers.open(user, PROVIDER.id)
       const hostID = input.store.setting(hostIDKey) ?? `urn:uuid:${crypto.randomUUID()}`
       input.store.setSetting(hostIDKey, hostID)
       const verifier = randomValue()
       const state = randomValue()
       const nonce = randomValue()
-      const saved = input.store.provider(PROVIDER.id)
-      const savedClientID = saved?.auth === "chatgpt" ? saved.oauth?.clientID : undefined
+      const savedClientID =
+        saved.kind === "ok" && saved.provider.auth === "chatgpt" ? saved.provider.oauth?.clientID : undefined
       const attempt = randomValue()
-      attempts.set(attempt, { verifier, state, nonce, savedClientID, expires: Date.now() + attemptTTL })
+      attempts.set(attempt, { user, verifier, state, nonce, savedClientID, expires: Date.now() + attemptTTL })
       const url = `${issuer}/api/accounts/authorize?${new URLSearchParams({
         client_id: savedClientID ?? registrationClientID,
         ...(savedClientID ? {} : { agent_name_hint: agentName }),
@@ -111,11 +127,15 @@ export function create(input: { store: Store.Instance; options?: Options; app: {
       return { attempt, url }
     },
 
-    /** Finishes a sign-in from the pasted callback URL (or bare code) and saves the `openai` provider. */
-    async complete(request: { attempt: string; callback: string }) {
+    /**
+     * Finishes a user's sign-in from the pasted callback URL (or bare code) and saves their `openai` provider. Throws
+     * `LockedError` when their key left memory meanwhile.
+     */
+    async complete(user: string, request: { attempt: string; callback: string }) {
       prune(attempts)
       const attempt = attempts.get(request.attempt)
-      if (!attempt) throw new Error("This ChatGPT sign-in expired. Start again.")
+      // Another user's attempt is as unknown as an expired one.
+      if (!attempt || attempt.user !== user) throw new Error("This ChatGPT sign-in expired. Start again.")
       const callback = parseCallback(request.callback)
       if (callback.state !== undefined && callback.state !== attempt.state)
         throw new Error("The pasted URL belongs to another sign-in attempt. Paste the URL from the latest sign-in.")
@@ -143,17 +163,21 @@ export function create(input: { store: Store.Instance; options?: Options; app: {
         )
       if (!response.id_token) throw new Error("ChatGPT sign-in did not return an ID token.")
       await verifyIDToken(response.id_token, clientID, attempt.nonce)
-      input.store.saveOAuthProvider({ ...PROVIDER, oauth: credential(response, clientID) })
+      await input.providers.saveOAuth(user, { ...PROVIDER, oauth: credential(response, clientID) })
     },
 
-    /** Returns a valid access token for a `chatgpt` provider, refreshing it once for concurrent callers. */
-    accessToken(provider: Store.Provider) {
-      const current = input.store.provider(provider.id)?.oauth ?? provider.oauth
+    /**
+     * Returns a valid access token for a user's `chatgpt` provider, opened with `key`, refreshing it once for
+     * concurrent callers. The refreshed credential is sealed again under the same key.
+     */
+    accessToken(user: string, provider: Providers.Provider, key: string) {
+      const current = provider.oauth
       if (!current) return Promise.reject(new Error("ChatGPT is not signed in. Sign in again from the hub dashboard."))
       if (current.expires - Date.now() > refreshMargin) return Promise.resolve(current.access)
-      const pending =
-        refreshing.get(provider.id) ?? refresh(provider.id, current).finally(() => refreshing.delete(provider.id))
-      refreshing.set(provider.id, pending)
+      // A user id never contains a NUL, so the pair cannot collide with another user's.
+      const slot = `${user}\0${provider.id}`
+      const pending = refreshing.get(slot) ?? refresh(user, key, current).finally(() => refreshing.delete(slot))
+      refreshing.set(slot, pending)
       return pending
     },
   }

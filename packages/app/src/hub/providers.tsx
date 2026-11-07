@@ -20,7 +20,7 @@ import { featuredGroups, groupKey, groupProviders, type ProviderGroup } from "./
 
 type ListState = { status: "loading" | "ready" | "failed"; list: HubProvider[]; error?: string }
 
-export function Providers(props: { fail: Fail }) {
+export function Providers(props: { fail: Fail; unlocked: boolean; onLocked: () => void; onSignOut: () => void }) {
   const dialog = useDialog()
   const [state, setState] = createStore<ListState>({ status: "loading", list: [] })
 
@@ -41,8 +41,14 @@ export function Providers(props: { fail: Fail }) {
 
   onMount(() => void load())
 
-  const add = () => void dialog.show(() => <AddProviderDialog onSaved={load} fail={props.fail} />)
-  const chatgpt = () => void dialog.show(() => <ChatGPTDialog onConnected={load} fail={props.fail} />)
+  const add = () =>
+    void dialog.show(() => <AddProviderDialog onSaved={load} onLocked={props.onLocked} fail={props.fail} />)
+
+  const chatgpt = () =>
+    void dialog.show(() => <ChatGPTDialog onConnected={load} onLocked={props.onLocked} fail={props.fail} />)
+
+  // Adding a provider seals its key under the user's key, which the hub only holds after a sign-in.
+  const ready = () => state.status === "ready" && props.unlocked
 
   const remove = (provider: HubProvider) =>
     void dialog.show(() => <RemoveProviderDialog provider={provider} onRemoved={load} fail={props.fail} />)
@@ -57,14 +63,32 @@ export function Providers(props: { fail: Fail }) {
           <p class="hub-section-description">{copy.providers.description}</p>
         </div>
         <div class="hub-section-actions">
-          <Button variant="neutral" size="small" onClick={chatgpt} disabled={state.status !== "ready"}>
+          <Button variant="neutral" size="small" onClick={chatgpt} disabled={!ready()}>
             {copy.providers.chatgpt}
           </Button>
-          <Button variant="neutral" size="small" icon="plus" onClick={add} disabled={state.status !== "ready"}>
+          <Button variant="neutral" size="small" icon="plus" onClick={add} disabled={!ready()}>
             {copy.providers.add}
           </Button>
         </div>
       </div>
+      <Show when={!props.unlocked}>
+        <div class="hub-list">
+          <div class="hub-row" role="status">
+            <div class="hub-row-lead">
+              <span class="hub-status" role="img" aria-label={copy.providers.locked} />
+              <div class="hub-row-copy">
+                <span class="hub-row-name">{copy.providers.locked}</span>
+                <span class="hub-row-meta">{copy.providers.lockedDescription}</span>
+              </div>
+            </div>
+            <div class="hub-row-actions">
+              <Button variant="neutral" size="small" onClick={props.onSignOut}>
+                {copy.providers.signInAgain}
+              </Button>
+            </div>
+          </div>
+        </div>
+      </Show>
       <div class="hub-list">
         <Switch>
           <Match when={state.status === "loading"}>
@@ -153,7 +177,7 @@ type PickItem =
 
 type CatalogState = { status: "loading" | "ready" | "failed"; list: HubPreset[]; error?: string }
 
-function AddProviderDialog(props: { onSaved: () => void; fail: Fail }) {
+function AddProviderDialog(props: { onSaved: () => void; onLocked: () => void; fail: Fail }) {
   const dialog = useDialog()
   // The hub downloads the models.dev catalog on first use, so the picker can wait a few seconds the first time.
   const [catalog, setCatalog] = createStore<CatalogState>({ status: "loading", list: [] })
@@ -284,6 +308,7 @@ function AddProviderDialog(props: { onSaved: () => void; fail: Fail }) {
             return props.fail(copy.error.unknown, error)
           }
 
+          if (error instanceof HubError && error.status === 423) props.onLocked()
           setForm({ status: "editing", error: errorText(error) })
         },
       )

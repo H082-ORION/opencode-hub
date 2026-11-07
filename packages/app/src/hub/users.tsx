@@ -131,12 +131,19 @@ export function Users(props: { fail: Fail }) {
                           <Show when={user.disabled}>
                             <Badge variant="neutral">{copy.users.disabled}</Badge>
                           </Show>
+                          <Show when={user.waiting}>
+                            <Badge variant="neutral">{copy.users.waiting}</Badge>
+                          </Show>
                         </span>
                         <span class="hub-row-meta">
                           <span>{copy.users.created(date.format(user.createdAt))}</span>
                           <Show when={user.pending}>
                             <span aria-hidden="true">·</span>
                             <span>{copy.users.pending}</span>
+                          </Show>
+                          <Show when={user.waiting}>
+                            <span aria-hidden="true">·</span>
+                            <span>{copy.users.waitingDescription}</span>
                           </Show>
                         </span>
                       </div>

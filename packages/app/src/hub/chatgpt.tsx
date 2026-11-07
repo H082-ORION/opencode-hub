@@ -9,7 +9,7 @@ import { copy } from "./copy"
 import type { Fail } from "./dashboard"
 import { createChatGPT, transitionChatGPT, viewChatGPT, type ChatGPTEffect, type ChatGPTEvent } from "./machine"
 
-export function ChatGPTDialog(props: { onConnected: () => void; fail: Fail }) {
+export function ChatGPTDialog(props: { onConnected: () => void; onLocked: () => void; fail: Fail }) {
   const dialog = useDialog()
   const initial = createChatGPT()
   const [state, setState] = createSignal(initial.state)
@@ -22,8 +22,11 @@ export function ChatGPTDialog(props: { onConnected: () => void; fail: Fail }) {
     next.effects.forEach(run)
   }
 
-  // A lost session closes the dialog and returns to sign-in; every other failure stays in the dialog.
+  // A lost session closes the dialog and returns to sign-in; every other failure stays in the dialog. Locked keys also
+  // show on the dashboard behind it.
   const signedOut = (error: unknown) => {
+    if (error instanceof HubError && error.status === 423) props.onLocked()
+
     if (!(error instanceof HubError && error.status === 401)) return false
     dialog.close()
     props.fail(copy.error.unknown, error)

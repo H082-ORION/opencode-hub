@@ -11,9 +11,9 @@ import { copy } from "./copy"
 import type { Fail } from "./dashboard"
 import { MIN_PASSWORD } from "./register"
 
-export function AccountSection(props: { session: HubSession; fail: Fail }) {
+export function AccountSection(props: { session: HubSession; fail: Fail; unlocked: boolean; onLocked: () => void }) {
   const dialog = useDialog()
-  const [unlocked, setUnlocked] = createSignal(props.session.unlocked)
+  const unlocked = () => props.unlocked
   const [locking, setLocking] = createSignal(false)
 
   const lock = () => {
@@ -22,7 +22,7 @@ export function AccountSection(props: { session: HubSession; fail: Fail }) {
     hubApi.lock().then(
       () => {
         setLocking(false)
-        setUnlocked(false)
+        props.onLocked()
         showToast({ variant: "success", title: copy.account.lockedToast })
       },
       (error: unknown) => {

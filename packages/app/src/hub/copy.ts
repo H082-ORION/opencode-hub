@@ -77,6 +77,8 @@ export const copy = {
     admin: "Administrator",
     disabled: "Disabled",
     pending: "Waiting for a new password",
+    waiting: "Keys locked",
+    waitingDescription: "Machines wait for this user to sign in and unlock their keys",
     created: (when: string) => `Joined ${when}`,
     makeAdmin: "Make administrator",
     makeUser: "Remove administrator role",
@@ -89,7 +91,7 @@ export const copy = {
     disableConfirm: "Disable",
     resetTitle: "Reset password?",
     resetDescription: (login: string) =>
-      `${login} will be signed out and the current password stops working. The keys saved on the hub are deleted; a one-time link lets them choose a new password.`,
+      `${login} will be signed out and the current password stops working. Their providers, API keys and ChatGPT sign-in are deleted; a one-time link lets them choose a new password.`,
     resetConfirm: "Reset",
     actionFailed: "Could not update the account",
     invitations: "Pending invitations",
@@ -162,7 +164,10 @@ export const copy = {
   providers: {
     title: "LLM providers",
     description:
-      "Machines call these providers through the hub, so keys and sign-ins never leave it. The id must match the opencode provider id.",
+      "Your providers. Your machines call them through the hub, which keeps the keys encrypted under your own key. The id must match the opencode provider id.",
+    locked: "Your keys are locked",
+    lockedDescription: "Your machines get an error from the hub until you sign in again.",
+    signInAgain: "Sign in again",
     add: "Add provider",
     chatgpt: "Sign in with ChatGPT",
     apiKey: "API key",
@@ -173,7 +178,7 @@ export const copy = {
     loadFailed: "Could not load providers",
     retry: "Retry",
     removeTitle: "Remove provider?",
-    removeDescription: (name: string) => `Machines will stop reaching ${name} through the hub.`,
+    removeDescription: (name: string) => `Your machines will stop reaching ${name} through the hub.`,
     removeConfirm: "Remove",
     removed: (name: string) => `${name} was removed`,
     removeFailed: "Could not remove the provider",
@@ -206,7 +211,7 @@ export const copy = {
   },
   chatgpt: {
     title: "Sign in with ChatGPT",
-    description: "Use your ChatGPT subscription for OpenAI models on every machine.",
+    description: "Use your ChatGPT subscription for OpenAI models on your machines.",
     step1: "Open the ChatGPT sign-in page and approve access, including token sharing.",
     open: "Open ChatGPT sign-in",
     preparing: "Preparing sign-in…",
@@ -218,7 +223,7 @@ export const copy = {
     completing: "Finishing…",
     restart: "Start over",
     success: "ChatGPT is connected",
-    successDescription: "Machines now reach OpenAI models through your ChatGPT subscription.",
+    successDescription: "Your machines now reach OpenAI models through your ChatGPT subscription.",
   },
   error: {
     unreachable: "The hub could not be reached.",

@@ -8,6 +8,7 @@ import { Catalog } from "./catalog.js"
 import { ChatGPT } from "./chatgpt.js"
 import { Html } from "./html.js"
 import { Llm } from "./llm.js"
+import { Providers } from "./providers.js"
 import { Store } from "./store.js"
 import { Tunnel } from "./tunnel.js"
 
@@ -48,6 +49,8 @@ const KEEPALIVE_INTERVAL = 25_000
 const HELLO_TIMEOUT = 10_000
 const LABEL = /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/
 const PROVIDER_ID = /^[a-zA-Z0-9][a-zA-Z0-9._-]{0,63}$/
+/** The provider changes, all of which seal a secret under the user's key. */
+const PROVIDER_ROUTES = new Set(["providers", "providers/chatgpt/begin", "providers/chatgpt/complete"])
 const EnrollRequest = Schema.fromJsonString(Schema.Struct({ code: Schema.String, name: Schema.String }))
 const decodeEnrollRequest = Schema.decodeUnknownOption(EnrollRequest)
 const decodeProvider = Schema.decodeUnknownOption(
@@ -68,8 +71,10 @@ export async function start(options: Options) {
   const setup = await Accounts.loadServerSetup(options.data)
   const store = Store.open(options.data)
   const auth = Auth.create()
+  const providers = Providers.create({ store, key: auth.key })
   const chatgpt = ChatGPT.create({
     store,
+    providers,
     options: options.chatgpt,
     app: { name: "hub", version: options.version ?? "local" },
   })
@@ -135,6 +140,8 @@ export async function start(options: Options) {
       listeners.forEach((listener) => sessions.includes(listener.session) && listener.close())
       recheckStreams()
     },
+    // A reset deletes the user's providers: their machines stop listing them.
+    reset: (user) => pushConfig(user),
   })
 
   return {
@@ -171,7 +178,8 @@ export async function start(options: Options) {
     if (pathname === "/hub/tls-allowed") return tlsAllowed(url)
     if (pathname === "/hub/agent/enroll") return enroll(request, server)
     if (pathname === "/hub/agent/connect") return connect(request, server)
-    if (pathname.startsWith("/llm/")) return Llm.proxy(request, url, store, chatgpt)
+    if (pathname.startsWith("/llm/"))
+      return Llm.proxy(request, url, { store, providers, activeUser: accounts.activeUser, chatgpt })
     if (pathname.startsWith("/hub/api/")) return api(request, pathname.slice("/hub/api/".length), server)
     const current = accounts.current(request)
     if (pathname === "/hub/handoff") {
@@ -224,31 +232,40 @@ export async function start(options: Options) {
       notifyMachines()
       return new Response(null, { status: 204 })
     }
-    if (route === "providers" && method === "GET") return json(200, providerList())
-    if (route === "providers" && method === "POST") return saveProvider(request)
+    if (route === "providers" && method === "GET") return json(200, providerList(user.id))
     if (route === "presets" && method === "GET") return json(200, await catalog.list())
-    if (route === "providers/chatgpt/begin" && method === "POST") return json(200, chatgpt.begin())
-    if (route === "providers/chatgpt/complete" && method === "POST") {
+    const provider = /^providers\/([^/]+)$/.exec(route)
+    // Removing a provider needs no key: nothing is decrypted.
+    if (provider && method === "DELETE") {
+      if (!providers.delete(user.id, decodeURIComponent(provider[1]))) return json(404, { error: "Unknown provider." })
+      pushConfig(user.id)
+      return new Response(null, { status: 204 })
+    }
+    if (!PROVIDER_ROUTES.has(route) || method !== "POST") return json(404, { error: "Not found." })
+    // Every provider change seals a secret under the user's key, so it needs that key in memory.
+    if (!auth.unlocked(user.id)) return locked()
+    if (route === "providers") return saveProvider(request, user.id)
+    if (route === "providers/chatgpt/begin")
+      return chatgpt.begin(user.id).then(
+        (started) => json(200, started),
+        (error: unknown) => (error instanceof Providers.LockedError ? locked() : Promise.reject(error)),
+      )
+    if (route === "providers/chatgpt/complete") {
       const body = Option.getOrUndefined(decodeChatGPTComplete(await request.text()))
       if (!body) return json(400, { error: "Expected { attempt, callback }." })
-      const failure = await chatgpt.complete(body).then(
+      const failure = await chatgpt.complete(user.id, body).then(
         () => undefined,
-        (error: unknown) => (error instanceof Error ? error.message : String(error)),
+        (error: unknown) => error,
       )
-      if (failure) return json(400, { error: failure })
-      pushConfig()
-      return json(200, { provider: providerList().find((provider) => provider.id === ChatGPT.PROVIDER.id) })
-    }
-    const provider = /^providers\/([^/]+)$/.exec(route)
-    if (provider && method === "DELETE") {
-      if (!store.deleteProvider(decodeURIComponent(provider[1]))) return json(404, { error: "Unknown provider." })
-      pushConfig()
-      return new Response(null, { status: 204 })
+      if (failure instanceof Providers.LockedError) return locked()
+      if (failure) return json(400, { error: failure instanceof Error ? failure.message : String(failure) })
+      pushConfig(user.id)
+      return json(200, { provider: providerList(user.id).find((entry) => entry.id === ChatGPT.PROVIDER.id) })
     }
     return json(404, { error: "Not found." })
   }
 
-  async function saveProvider(request: Request) {
+  async function saveProvider(request: Request, user: string) {
     const body = Option.getOrUndefined(decodeProvider(await request.text()))
     if (!body) return json(400, { error: "Expected { id, apiKey, name?, baseURL? }." })
     const id = body.id.trim()
@@ -262,8 +279,12 @@ export async function start(options: Options) {
       return json(400, { error: "Upstream base URL must be http(s)." })
     if (!apiKey) return json(400, { error: "API key is required." })
     const name = body.name?.trim() || entry?.name || id
-    store.saveProvider({ id, name, baseURL, apiKey })
-    pushConfig()
+    const saved = await providers.saveKey(user, { id, name, baseURL, apiKey }).then(
+      () => true,
+      (error: unknown) => (error instanceof Providers.LockedError ? false : Promise.reject(error)),
+    )
+    if (!saved) return locked()
+    pushConfig(user)
     return json(200, { provider: { id, name, baseURL, auth: "key" } })
   }
 
@@ -345,8 +366,8 @@ export async function start(options: Options) {
     })
   }
 
-  function providerList() {
-    return store.providerSummaries().map((provider) => ({
+  function providerList(user: string) {
+    return providers.summaries(user).map((provider) => ({
       id: provider.id,
       name: provider.name,
       baseURL: provider.base_url,
@@ -490,7 +511,7 @@ export async function start(options: Options) {
     tunnel.send(
       Protocol.encodeJson(Protocol.Type.READY, 0, {
         machine: { id: machine.id, name: machine.name },
-        llm: llmConfig(),
+        llm: llmConfig(machine),
       }),
     )
     pings.set(
@@ -499,16 +520,23 @@ export async function start(options: Options) {
     )
   }
 
-  function llmConfig(): Protocol.LlmConfig {
+  /** The providers a machine may call: its owner's. An organization or ownerless machine gets none (step 4). */
+  function llmConfig(machine: Store.Machine): Protocol.LlmConfig {
+    const owner = machine.owner_org_id === null ? machine.owner_user_id : null
     return {
       baseURL: `${origin}/llm`,
-      providers: store.providers().map((provider) => ({ id: provider.id, name: provider.name })),
+      providers: owner ? providers.summaries(owner).map((provider) => ({ id: provider.id, name: provider.name })) : [],
     }
   }
 
-  function pushConfig() {
-    const frame = Protocol.encodeJson(Protocol.Type.CONFIG, 0, llmConfig())
-    tunnels.forEach((tunnel) => tunnel.send(frame))
+  /** Sends the new provider list to the connected machines of one user, and to nobody else. */
+  function pushConfig(user: string) {
+    tunnels.forEach((tunnel) => {
+      // The stored row, not the one captured at HELLO: its owner may have been set since (adoption).
+      const machine = store.machine(tunnel.machine.id)
+      if (!machine || machine.owner_org_id !== null || machine.owner_user_id !== user) return
+      tunnel.send(Protocol.encodeJson(Protocol.Type.CONFIG, 0, llmConfig(machine)))
+    })
   }
 
   function unknownMachine() {
@@ -561,6 +589,10 @@ function redirect(location: string, cookie?: string) {
   const headers = new Headers({ location, "cache-control": "no-store" })
   if (cookie) headers.set("set-cookie", cookie)
   return new Response(null, { status: 302, headers })
+}
+
+function locked() {
+  return json(423, { error: Providers.LOCKED, locked: true })
 }
 
 function forbidden() {

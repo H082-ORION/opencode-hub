@@ -1,4 +1,5 @@
 import { toHeaders, withoutDecodedHeaders, withoutHopByHop } from "../headers.js"
+import { Providers } from "./providers.js"
 import type { Store } from "./store.js"
 
 export * as Llm from "./llm.js"
@@ -6,16 +7,22 @@ export * as Llm from "./llm.js"
 // Headers that describe the client's connection or encoding rather than the request itself.
 const DROPPED_REQUEST = new Set(["host", "cookie", "origin", "referer", "content-length", "accept-encoding"])
 
+type ChatGPT = { accessToken(user: string, provider: Providers.Provider, key: string): Promise<string> }
+
+export type Deps = {
+  store: Store.Instance
+  providers: Providers.Instance
+  /** The user, only while the account is active (see `Accounts.activeUser`). */
+  activeUser: (id: string) => Store.User | undefined
+  chatgpt?: ChatGPT
+}
+
 /**
- * Forwards `/llm/<provider>/<rest>` to the provider's upstream, replacing the machine's llm token with the real key
- * in whichever place carried it. ChatGPT providers always get a bearer access token from `chatgpt` instead.
+ * Forwards `/llm/<provider>/<rest>` to the upstream of that provider **of the machine's owner**, replacing the
+ * machine's llm token with the owner's real key in whichever place carried it. ChatGPT providers always get a bearer
+ * access token from `chatgpt` instead. The key is opened with the owner's user key in memory; without it, 423.
  */
-export async function proxy(
-  request: Request,
-  url: URL,
-  store: Store.Instance,
-  chatgpt?: { accessToken(provider: Store.Provider): Promise<string> },
-) {
+export async function proxy(request: Request, url: URL, deps: Deps) {
   const match = /^\/llm\/([^/]+)(\/.*)?$/.exec(url.pathname)
   if (!match) return json(404, "unknown provider")
   const headers = toHeaders(
@@ -42,11 +49,27 @@ export async function proxy(
       clear: () => headers.delete("x-goog-api-key"),
     },
     { token: query.get("key"), apply: (key: string) => query.set("key", key), clear: () => query.delete("key") },
-  ].filter((slot) => slot.token && store.machineByLlmToken(slot.token))
-  if (slots.length === 0) return json(401, "invalid llm token")
-  const provider = store.provider(match[1])
-  if (!provider) return json(404, "unknown provider")
-  const access = provider.auth === "chatgpt" ? await chatgptToken(provider, chatgpt) : undefined
+  ].flatMap((slot) => {
+    const machine = slot.token ? deps.store.machineByLlmToken(slot.token) : undefined
+    return machine ? [{ ...slot, machine }] : []
+  })
+  const machines = new Set(slots.map((slot) => slot.machine.id))
+  // Tokens of two machines in one request could pick either owner's keys: refused.
+  if (machines.size !== 1) return json(401, "invalid llm token")
+  const machine = slots[0]!.machine
+  // Organization machines (step 4) have no keys of their own yet, and an ownerless machine has none at all.
+  if (machine.owner_org_id !== null || machine.owner_user_id === null)
+    return json(403, "this machine has no owner whose keys it may use")
+  const owner = machine.owner_user_id
+  // A disabled or reset account has no key in memory either: both answer as locked until the owner signs in again.
+  if (!deps.activeUser(owner)) return json(423, Providers.LOCKED)
+  const opened = await deps.providers.open(owner, match[1])
+  if (opened.kind === "unknown") return json(404, "unknown provider")
+  if (opened.kind === "locked") return json(423, Providers.LOCKED)
+  if (opened.kind === "unreadable")
+    return json(500, "stored provider credential is unreadable; save the provider again")
+  const provider = opened.provider
+  const access = provider.auth === "chatgpt" ? await chatgptToken(owner, provider, opened.key, deps.chatgpt) : undefined
   if (access instanceof Response) return access
   slots.forEach((slot) => (access === undefined ? slot.apply(provider.api_key) : slot.clear()))
   if (access !== undefined) headers.set("authorization", `Bearer ${access}`)
@@ -74,13 +97,10 @@ export async function proxy(
   })
 }
 
-async function chatgptToken(
-  provider: Store.Provider,
-  chatgpt: { accessToken(provider: Store.Provider): Promise<string> } | undefined,
-) {
+async function chatgptToken(user: string, provider: Providers.Provider, key: string, chatgpt: ChatGPT | undefined) {
   if (!chatgpt) return json(502, "ChatGPT sign-in is not available on this hub")
   return chatgpt
-    .accessToken(provider)
+    .accessToken(user, provider, key)
     .catch((error: unknown) =>
       json(502, `ChatGPT token refresh failed: ${error instanceof Error ? error.message : String(error)}`),
     )

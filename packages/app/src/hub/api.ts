@@ -36,6 +36,8 @@ export type HubUser = {
   /** Reset by an administrator, waiting for its reset invitation to be used. */
   pending: boolean
   unlocked: boolean
+  /** Has machines that rely on providers it saved, while its key is locked: they get 423 until it signs in. */
+  waiting: boolean
   self: boolean
 }
 
@@ -52,7 +54,7 @@ export type HubInvitation = {
 /** A newly issued invitation; its link is shown once. */
 export type IssuedInvitation = { id: string; url: string; expiresAt: number }
 
-/** A failed hub request; `status` is 0 when the hub could not be reached. */
+/** A failed hub request; `status` is 0 when the hub could not be reached, 423 when the user's keys are locked. */
 export class HubError extends Error {
   constructor(
     message: string,
