@@ -46,7 +46,19 @@ export default Runtime.handler(
       Effect.forever,
       Effect.forkScoped,
     )
+    // Reported, then rethrown so the agent does not record the skills as written.
+    const fail = (action: string) => (error: unknown) => {
+      log(`Failed to ${action}: ${errorMessage(error)}`)
+      throw error
+    }
     const report = (action: string) => (error: unknown) => log(`Failed to ${action}: ${errorMessage(error)}`)
+    // The personal instance's skills go into the account's own skills folder, one write at a time.
+    const personalSkills = { chain: Promise.resolve() as Promise<unknown> }
+    const personal = <A>(effect: Effect.Effect<A, unknown, FileSystem.FileSystem | Global.Service>) => {
+      const next = personalSkills.chain.then(() => run(effect))
+      personalSkills.chain = next.catch(() => undefined)
+      return next
+    }
     yield* Effect.acquireRelease(
       Effect.map(RelayAgent.held(), (held) =>
         Agent.connect({
@@ -70,15 +82,29 @@ export default Runtime.handler(
             )
             // Instance folders the hub no longer knows, e.g. members removed while this agent was offline.
             instances.prune(ready.instances).catch(report("delete stale instances"))
+            // Hub skills of a personal instance that no longer exists.
+            if (ready.owner === "user")
+              personal(RelayAgent.removeSkills((iid) => !ready.instances.includes(iid))).catch(
+                report("delete stale hub skills"),
+              )
           },
           onInstance: (instance) => {
             if (owner.kind === "org") return void instances.configure(instance).catch(report("configure an instance"))
             Queue.offerUnsafe(changes, { kind: "apply", instance })
           },
+          onSkills: (skills) => {
+            if (owner.kind === "org") return instances.skills(skills).catch(fail("write hub skills"))
+            return personal(RelayAgent.writeSkills(skills)).then((result) => {
+              result.skipped.forEach((name) => log(`Skipped hub skill ${name}: a local skill has this folder name`))
+              if (result.changed) log(`Wrote ${result.written.length} hub skills into the background service's skills`)
+            }, fail("write hub skills"))
+          },
           onDrop: (iid) => {
             log(`Dropping instance ${iid}`)
             if (owner.kind === "org") return void instances.drop(iid).catch(report("delete an instance"))
             Queue.offerUnsafe(changes, { kind: "clear", iid })
+            // The account's own skills stay; only the hub's folders go.
+            personal(RelayAgent.removeSkills((written) => written === iid)).catch(report("delete hub skills"))
           },
           onStatus: (status, detail) => {
             log(detail ? `${status}: ${detail}` : status)

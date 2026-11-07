@@ -2,6 +2,7 @@ import type { Server, ServerWebSocket } from "bun"
 import { createHash } from "node:crypto"
 import { Option, Schema } from "effect"
 import { Protocol } from "../protocol.js"
+import { Skills } from "../skills.js"
 import { Accounts, json } from "./accounts.js"
 import { Auth } from "./auth.js"
 import { Catalog } from "./catalog.js"
@@ -10,6 +11,7 @@ import { Html } from "./html.js"
 import { Llm } from "./llm.js"
 import { Orgs } from "./orgs.js"
 import { Providers } from "./providers.js"
+import { HubSkills } from "./skills.js"
 import { Store } from "./store.js"
 import { Tunnel } from "./tunnel.js"
 
@@ -48,8 +50,6 @@ const SESSION_PATH = "/auth/hub-session"
 const PING_INTERVAL = 25_000
 const KEEPALIVE_INTERVAL = 25_000
 const HELLO_TIMEOUT = 10_000
-/** The skills version of an instance without skills (they arrive at step 6): the digest of an empty list. */
-const NO_SKILLS = createHash("sha256").update("[]").digest("hex")
 const LABEL = /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/
 const PROVIDER_ID = /^[a-zA-Z0-9][a-zA-Z0-9._-]{0,63}$/
 /** The provider changes, all of which seal a secret under the user's key. */
@@ -153,6 +153,8 @@ export async function start(options: Options) {
     reset: () => syncInstances(),
     updated: () => syncInstances(),
   })
+  // A skill change goes to every connected instance whose effective skills it changes.
+  const skills = HubSkills.create({ store, changed: () => pushSkills() })
   const orgs = Orgs.create({
     store,
     changed() {
@@ -161,6 +163,8 @@ export async function start(options: Options) {
       recheckStreams()
       syncInstances()
       notifyMachines()
+      // Joining, leaving, renaming (which orders organizations) or deleting an organization changes inherited skills.
+      pushSkills()
     },
   })
 
@@ -231,6 +235,9 @@ export async function start(options: Options) {
     const current = accounts.current(request)
     if (!current) return json(401, { error: "Sign in to the hub first." })
     const user = current.user
+    // Before `orgs`, which owns every other `orgs/…` route.
+    const skill = await skills.handle(request, route, current)
+    if (skill) return skill
     const organizations = await orgs.handle(request, route, current)
     if (organizations) return organizations
     if (route === "machines" && method === "GET") return json(200, machineList(user.id))
@@ -582,11 +589,16 @@ export async function start(options: Options) {
     store.touchMachine(machine.id)
     notifyMachines()
     // The agent keeps the tokens it still holds, as long as they are the current ones.
-    const held = new Map((greeting.instances ?? []).map((entry) => [entry.iid, entry.hash]))
+    const held = new Map((greeting.instances ?? []).map((entry) => [entry.iid, entry]))
     store
       .instancesOf(machine.id)
-      .filter((instance) => instance.token_hash !== null && held.get(instance.id) === instance.token_hash)
-      .forEach((instance) => tunnel.held.add(instance.id))
+      .filter((instance) => instance.token_hash !== null && held.get(instance.id)?.hash === instance.token_hash)
+      .forEach((instance) => {
+        tunnel.held.add(instance.id)
+        // The skills the agent already wrote for it: SKILLS follows INSTANCE only when they differ.
+        const version = held.get(instance.id)?.skills
+        if (version !== undefined) tunnel.skills.set(instance.id, version)
+      })
     // A personal machine's owner instance is the machine's own opencode service, configured even before it is opened.
     const owner = machine.owner_org_id === null ? machine.owner_user_id : null
     if (owner !== null && mayOpen(owner, machine)) store.ensureInstance(machine.id, owner)
@@ -619,12 +631,15 @@ export async function start(options: Options) {
   }
 
   /**
-   * Sends an instance's configuration: its user's providers, no connectors and no skills yet (steps 6 and 7). A token
-   * is issued, replacing the previous one, only when the agent does not hold the current one.
+   * Sends an instance's configuration: its user's providers, no connectors yet (step 7), and the version of its
+   * user's effective skills, followed by the skills themselves when the agent does not have that version. A token is
+   * issued, replacing the previous one, only when the agent does not hold the current one.
    */
   function sendInstance(tunnel: Tunnel.Instance, instance: Store.InstanceRow) {
     const token = tunnel.held.has(instance.id) ? undefined : store.issueInstanceToken(instance.id)
     tunnel.held.add(instance.id)
+    const effective = skills.effective(instance.user_id).skills
+    const version = Skills.version(effective)
     tunnel.send(
       Protocol.encodeJson(Protocol.Type.INSTANCE, 0, {
         iid: instance.id,
@@ -636,8 +651,41 @@ export async function start(options: Options) {
             .map((provider) => ({ id: provider.id, name: provider.name })),
         },
         mcp: [],
-        skills: { version: NO_SKILLS },
+        skills: { version },
       }),
+    )
+    sendSkills(tunnel, instance.id, effective, version)
+  }
+
+  /** Sends SKILLS for an instance unless the agent already has this version. */
+  function sendSkills(tunnel: Tunnel.Instance, iid: string, effective: readonly Skills.Skill[], version: string) {
+    if (tunnel.skills.get(iid) === version) return
+    tunnel.skills.set(iid, version)
+    tunnel.send(Protocol.encodeJson(Protocol.Type.SKILLS, 0, { iid, version, skills: effective }))
+  }
+
+  /**
+   * Sends the new skills of every connected instance whose user's effective skills changed. Only instances the agent
+   * holds on this connection: the others get theirs with INSTANCE, before their first stream.
+   */
+  function pushSkills() {
+    const versions = new Map<string, { skills: Skills.Skill[]; version: string }>()
+    const of = (user: string) => {
+      const known = versions.get(user)
+      if (known) return known
+      const effective = skills.effective(user).skills
+      const entry = { skills: effective, version: Skills.version(effective) }
+      versions.set(user, entry)
+      return entry
+    }
+    tunnels.forEach((tunnel) =>
+      store
+        .instancesOf(tunnel.machine.id)
+        .filter((instance) => tunnel.held.has(instance.id))
+        .forEach((instance) => {
+          const entry = of(instance.user_id)
+          sendSkills(tunnel, instance.id, entry.skills, entry.version)
+        }),
     )
   }
 
@@ -661,6 +709,7 @@ export async function start(options: Options) {
       const tunnel = tunnels.get(instance.machine_id)
       if (!tunnel) return
       tunnel.held.delete(instance.id)
+      tunnel.skills.delete(instance.id)
       tunnel.send(Protocol.encodeJson(Protocol.Type.DROP, 0, { iid: instance.id }))
     })
     tunnels.forEach((tunnel) => {

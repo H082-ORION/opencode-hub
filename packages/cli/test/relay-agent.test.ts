@@ -113,3 +113,37 @@ it.live("the personal instance's token is found again in the service environment
     }).pipe(Effect.provideService(Global.Service, Global.make({ config, state })))
   }).pipe(Effect.provide(NodeServices.layer)),
 )
+
+it.live("the owner's hub skills go into the service's skills folder as hub-*, and a drop removes only those", () =>
+  Effect.gen(function* () {
+    const fs = yield* FileSystem.FileSystem
+    const root = yield* fs.makeTempDirectoryScoped({ prefix: "opencode-relay-agent-" })
+    const config = path.join(root, "config")
+    const state = path.join(root, "state")
+    const skills = path.join(config, "skills")
+    yield* fs.makeDirectory(path.join(skills, "mine"), { recursive: true })
+    yield* fs.writeFileString(path.join(skills, "mine", "SKILL.md"), "local")
+    yield* fs.makeDirectory(state, { recursive: true })
+    const entry = { path: "SKILL.md", content: "---\nname: review\ndescription: Reviews.\n---\n" }
+    yield* Effect.gen(function* () {
+      expect(yield* RelayAgent.skillsFolder()).toBe(skills)
+      // No service is running here, so nothing is reloaded.
+      const written = yield* RelayAgent.writeSkills({
+        iid: instance.iid,
+        version: "v1",
+        skills: [{ name: "review", files: [entry] }],
+      })
+      expect(written).toMatchObject({ changed: true, written: ["hub-review"] })
+      expect(yield* fs.readFileString(path.join(skills, "hub-review", "SKILL.md"))).toBe(entry.content)
+      // The version written is announced with the instance's token.
+      yield* RelayAgent.apply(instance)
+      expect(yield* RelayAgent.held()).toEqual([{ iid: instance.iid, token: "token", skills: "v1" }])
+      // A drop of another instance leaves them; a drop of this one removes the hub's folders only.
+      expect(yield* RelayAgent.removeSkills((iid) => iid === "another-instance-01")).toBe(false)
+      expect(yield* RelayAgent.removeSkills((iid) => iid === instance.iid)).toBe(true)
+      expect((yield* fs.readDirectory(skills)).toSorted()).toEqual(["mine"])
+      expect(yield* fs.readFileString(path.join(skills, "mine", "SKILL.md"))).toBe("local")
+      expect(yield* RelayAgent.held()).toEqual([{ iid: instance.iid, token: "token" }])
+    }).pipe(Effect.provideService(Global.Service, Global.make({ config, state })))
+  }).pipe(Effect.provide(NodeServices.layer)),
+)

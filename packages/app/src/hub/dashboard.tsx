@@ -8,6 +8,7 @@ import { copy } from "./copy"
 import { AllMachines, Machines } from "./machines"
 import { Organizations } from "./orgs"
 import { Providers } from "./providers"
+import { Skills } from "./skills"
 import { Users } from "./users"
 
 export function Dashboard(props: { session: HubSession; onSignedOut: () => void }) {
@@ -38,6 +39,7 @@ export function Dashboard(props: { session: HubSession; onSignedOut: () => void 
         <div class="hub-content">
           <Machines onSignedOut={props.onSignedOut} fail={fail} onChange={() => setRevision((value) => value + 1)} />
           <Providers fail={fail} unlocked={unlocked()} onLocked={() => setUnlocked(false)} onSignOut={signOut} />
+          <Skills fail={fail} />
           <AccountSection
             session={props.session}
             fail={fail}

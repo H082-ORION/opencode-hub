@@ -518,6 +518,16 @@
   max-height: calc(100dvh - 24px);
 }
 
+/* The skill editor can be taller than the screen: it keeps a margin, and the whole dialog scrolls. */
+[data-component="dialog-v2"][data-fit]:has(.hub-skill-dialog) [data-slot="dialog-container"] {
+  width: min(calc(100vw - 24px), 640px);
+  max-height: calc(100dvh - 24px);
+}
+
+[data-component="dialog-v2"][data-fit] [data-slot="dialog-container"] .hub-skill-dialog [data-slot="dialog-body"] {
+  flex: none;
+}
+
 [data-component="dialog-v2"][data-fit]:has(.hub-picker) [data-slot="dialog-container"] {
   height: min(calc(100dvh - 24px), 560px);
 }

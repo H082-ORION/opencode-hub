@@ -47,6 +47,21 @@ export type OrgSummary = Org & { machines: number }
 
 export type Member = { org_id: string; user_id: string; login: string; created_at: number }
 
+/** Who a skill belongs to: a user's own skill, or one every member of an organization inherits. */
+export type SkillOwner = { kind: "user" | "org"; id: string }
+
+/** A skill as stored: its files are JSON `[{ path, content }]`, in clear (skills hold no secret). */
+export type SkillRow = {
+  id: string
+  owner_kind: "user" | "org"
+  owner_id: string
+  name: string
+  description: string
+  files: string
+  created_at: number
+  updated_at: number
+}
+
 const OAuth = Schema.Struct({
   access: Schema.String,
   refresh: Schema.String,
@@ -233,6 +248,18 @@ export function open(dir: string) {
     created_at INTEGER NOT NULL,
     PRIMARY KEY (org_id, user_id)
   )`)
+  // Skills of a user or of an organization (specs/multi-users.md, "Skills"); names are unique per owner.
+  db.run(`CREATE TABLE IF NOT EXISTS skill (
+    id TEXT PRIMARY KEY,
+    owner_kind TEXT NOT NULL CHECK (owner_kind IN ('user', 'org')),
+    owner_id TEXT NOT NULL,
+    name TEXT NOT NULL,
+    description TEXT NOT NULL,
+    files TEXT NOT NULL,
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL,
+    UNIQUE (owner_kind, owner_id, name)
+  )`)
   // The organizations a new account joins when its invitation is used.
   db.run(`CREATE TABLE IF NOT EXISTS invitation_org (
     invitation_id TEXT NOT NULL,
@@ -306,6 +333,13 @@ export function open(dir: string) {
     invitationOrgs: db.query<{ invitation_id: string; name: string }, []>(
       `SELECT invitation_org.invitation_id, org.name FROM invitation_org JOIN org ON org.id = invitation_org.org_id
        ORDER BY org.name COLLATE NOCASE`,
+    ),
+    skills: db.query<SkillRow, [string, string]>(
+      "SELECT * FROM skill WHERE owner_kind = ? AND owner_id = ? ORDER BY name",
+    ),
+    skill: db.query<SkillRow, [string]>("SELECT * FROM skill WHERE id = ?"),
+    skillCount: db.query<{ count: number }, [string, string]>(
+      "SELECT count(*) AS count FROM skill WHERE owner_kind = ? AND owner_id = ?",
     ),
     invitations: db.query<InvitationSummary, [number]>(
       `SELECT invitation.id, invitation.role, invitation.created_by, invitation.user_id, invitation.created_at,
@@ -649,6 +683,7 @@ export function open(dir: string) {
         if (db.query("SELECT 1 FROM machine WHERE owner_org_id = ?").get(id)) return "has-machines"
         db.run("DELETE FROM membership WHERE org_id = ?", [id])
         db.run("DELETE FROM invitation_org WHERE org_id = ?", [id])
+        db.run("DELETE FROM skill WHERE owner_kind = 'org' AND owner_id = ?", [id])
         db.run("DELETE FROM org WHERE id = ?", [id])
         return "ok"
       })(),
@@ -665,6 +700,54 @@ export function open(dir: string) {
       })(),
     removeMember: (org: string, user: string) =>
       db.run("DELETE FROM membership WHERE org_id = ? AND user_id = ?", [org, user]).changes > 0,
+
+    /** The skills of one owner, by name. */
+    skills: (owner: SkillOwner) => queries.skills.all(owner.kind, owner.id),
+    skill: (id: string) => queries.skill.get(id) ?? undefined,
+    /**
+     * Creates a skill (no `id`) or replaces one of the same owner (`id`), already checked. Refused when another skill
+     * of the owner has the name, when the owner already has `limit` skills, or when `id` names no skill of the owner.
+     */
+    saveSkill: (input: {
+      owner: SkillOwner
+      id?: string
+      name: string
+      description: string
+      files: readonly { path: string; content: string }[]
+      limit: number
+    }) =>
+      db.transaction((): { status: "ok"; id: string } | { status: "taken" | "limit" | "unknown" } => {
+        const now = Date.now()
+        const owner = input.owner
+        const files = JSON.stringify(input.files)
+        const other = db
+          .query<
+            { id: string },
+            [string, string, string]
+          >("SELECT id FROM skill WHERE owner_kind = ? AND owner_id = ? AND name = ?")
+          .get(owner.kind, owner.id, input.name)
+        if (other && other.id !== input.id) return { status: "taken" }
+        if (input.id !== undefined) {
+          const updated = db.run(
+            `UPDATE skill SET name = ?, description = ?, files = ?, updated_at = ?
+             WHERE id = ? AND owner_kind = ? AND owner_id = ?`,
+            [input.name, input.description, files, now, input.id, owner.kind, owner.id],
+          )
+          return updated.changes > 0 ? { status: "ok", id: input.id } : { status: "unknown" }
+        }
+        if ((queries.skillCount.get(owner.kind, owner.id)?.count ?? 0) >= input.limit) return { status: "limit" }
+        const id = randomID()
+        db.run(
+          `INSERT INTO skill (id, owner_kind, owner_id, name, description, files, created_at, updated_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+          [id, owner.kind, owner.id, input.name, input.description, files, now, now],
+        )
+        return { status: "ok", id }
+      })(),
+    /** Deletes a skill of this owner only. */
+    deleteSkill: (owner: SkillOwner, id: string) =>
+      db.run("DELETE FROM skill WHERE id = ? AND owner_kind = ? AND owner_id = ?", [id, owner.kind, owner.id]).changes >
+      0,
     close: () => db.close(),
   }
 }
