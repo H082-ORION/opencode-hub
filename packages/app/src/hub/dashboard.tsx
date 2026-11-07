@@ -6,6 +6,7 @@ import { AccountSection } from "./account"
 import { errorText, hubApi, HubError, type HubSession } from "./api"
 import { copy } from "./copy"
 import { AllMachines, Machines } from "./machines"
+import { Organizations } from "./orgs"
 import { Providers } from "./providers"
 import { Users } from "./users"
 
@@ -45,6 +46,7 @@ export function Dashboard(props: { session: HubSession; onSignedOut: () => void 
           />
           <Show when={props.session.user.role === "admin"}>
             <Users fail={fail} />
+            <Organizations fail={fail} />
             <AllMachines fail={fail} revision={revision} />
           </Show>
         </div>

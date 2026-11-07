@@ -9,6 +9,10 @@ const DROPPED_REQUEST = new Set(["host", "cookie", "origin", "referer", "content
 
 type ChatGPT = { accessToken(user: string, provider: Providers.Provider, key: string): Promise<string> }
 
+/** Answered for an organization machine whose enroller left the organization or is no longer active. */
+export const ENROLLER_GONE =
+  "The member who enrolled this organization machine is no longer an active member of it: its keys cannot be used. Enroll the machine again."
+
 export type Deps = {
   store: Store.Instance
   providers: Providers.Instance
@@ -18,9 +22,28 @@ export type Deps = {
 }
 
 /**
- * Forwards `/llm/<provider>/<rest>` to the upstream of that provider **of the machine's owner**, replacing the
- * machine's llm token with the owner's real key in whichever place carried it. ChatGPT providers always get a bearer
- * access token from `chatgpt` instead. The key is opened with the owner's user key in memory; without it, 423.
+ * Whose keys a machine uses: a personal machine its owner's, an organization machine those of the member who enrolled
+ * it, only while that account is active and still a member (step 4: every member shares the machine's one instance).
+ * A personal owner who is disabled still holds the keys, so that the relay answers it as locked.
+ */
+export function keyHolder(
+  machine: Store.Machine,
+  deps: Pick<Deps, "store" | "activeUser">,
+): { kind: "user"; user: string } | { kind: "none" } | { kind: "gone" } {
+  if (machine.owner_org_id === null)
+    return machine.owner_user_id === null ? { kind: "none" } : { kind: "user", user: machine.owner_user_id }
+  // An organization machine never has a user owner too; a row that does uses nobody's keys.
+  if (machine.owner_user_id !== null || machine.enrolled_by === null) return { kind: "none" }
+  const enroller = deps.activeUser(machine.enrolled_by)
+  if (!enroller || !deps.store.isMember(machine.owner_org_id, enroller.id)) return { kind: "gone" }
+  return { kind: "user", user: enroller.id }
+}
+
+/**
+ * Forwards `/llm/<provider>/<rest>` to the upstream of that provider **of the machine's key holder** (see
+ * `keyHolder`), replacing the machine's llm token with the holder's real key in whichever place carried it. ChatGPT
+ * providers always get a bearer access token from `chatgpt` instead. The key is opened with the holder's user key in
+ * memory; without it, 423.
  */
 export async function proxy(request: Request, url: URL, deps: Deps) {
   const match = /^\/llm\/([^/]+)(\/.*)?$/.exec(url.pathname)
@@ -57,10 +80,10 @@ export async function proxy(request: Request, url: URL, deps: Deps) {
   // Tokens of two machines in one request could pick either owner's keys: refused.
   if (machines.size !== 1) return json(401, "invalid llm token")
   const machine = slots[0]!.machine
-  // Organization machines (step 4) have no keys of their own yet, and an ownerless machine has none at all.
-  if (machine.owner_org_id !== null || machine.owner_user_id === null)
-    return json(403, "this machine has no owner whose keys it may use")
-  const owner = machine.owner_user_id
+  const holder = keyHolder(machine, deps)
+  if (holder.kind === "gone") return json(403, ENROLLER_GONE)
+  if (holder.kind === "none") return json(403, "this machine has no owner whose keys it may use")
+  const owner = holder.user
   // A disabled or reset account has no key in memory either: both answer as locked until the owner signs in again.
   if (!deps.activeUser(owner)) return json(423, Providers.LOCKED)
   const opened = await deps.providers.open(owner, match[1])

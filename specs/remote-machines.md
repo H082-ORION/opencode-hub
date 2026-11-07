@@ -59,8 +59,8 @@ Stream 0 is the control stream. Streams are opened only by the hub; ids are allo
 | 0x06 | TEXT     | both                    | UTF-8 text WebSocket message                                                                                                                        |
 | 0x07 | CLOSE    | both                    | JSON `{ code, reason }`: WebSocket closed                                                                                                           |
 | 0x10 | HELLO    | agent -> hub (stream 0) | JSON `{ protocol: 1, version, name, platform }` — first frame after connecting                                                                      |
-| 0x11 | READY    | hub -> agent (stream 0) | JSON `{ machine: { id, name }, llm: { baseURL, providers: [{ id, name }] } }`; `providers` are the machine owner's                                  |
-| 0x12 | CONFIG   | hub -> agent (stream 0) | same `llm` object as READY, pushed to an owner's machines when that owner's provider list changes                                                   |
+| 0x11 | READY    | hub -> agent (stream 0) | JSON `{ machine: { id, name }, llm: { baseURL, providers: [{ id, name }] } }`; `providers` are the key holder's (see LLM proxy)                     |
+| 0x12 | CONFIG   | hub -> agent (stream 0) | same `llm` object as READY, pushed when the key holder's provider list or right to the keys changes                                                 |
 | 0x13 | PING     | hub -> agent (stream 0) | empty, every 25 s                                                                                                                                   |
 | 0x14 | PONG     | agent -> hub (stream 0) | empty                                                                                                                                               |
 
@@ -88,8 +88,9 @@ Rules:
   stored as a SHA-256 hash, 7 days by default, 30 at most), with a login and a password registered through OPAQUE
   (`@serenity-kit/opaque`, Argon2id 64 MiB / 3 passes in the browser). Administrators invite, disable and enable users,
   change roles and reset passwords; the hub always keeps one active administrator. `opencode hub invite [--admin]
-[--data <dir>]` writes an invitation straight into the database and prints its link; a hub started in a terminal
-  without any account prints an administrator invitation itself, and otherwise prints that command.
+[--org <name>]... [--data <dir>]` writes an invitation straight into the database and prints its link (an unknown
+  organization name fails and writes nothing); a hub started in a terminal without any account prints an
+  administrator invitation itself, and otherwise prints that command.
 - Machines (step 2): each machine belongs to the user who created its enrollment code (`owner_user_id`, and
   `enrolled_by`). A user lists (`machines`, `events`), opens (its host, WebSockets included) and gets handoff tickets
   for their own machines only, checked on every request; another user's machine answers exactly like an unknown one
@@ -97,7 +98,18 @@ Rules:
   revoke any machine and list them all with their owner (`admin/machines`), but cannot open them. Signing out,
   disabling or resetting an account also cuts the proxied streams (SSE, WebSockets) its sessions hold open. Machines
   enrolled before owners existed go to the oldest active administrator, at start or as soon as one exists; until
-  then nobody can open them. `owner_org_id` is reserved for organization machines (step 4) and stays empty.
+  then nobody can open them.
+- Organizations (step 4): administrators create, rename (`orgs/<id>/rename`) and delete organizations (names unique,
+  case-insensitive, 1 to 64 characters) and add or remove members (routes below); every other user gets 403 on all `orgs` routes. An administrator is a member only once
+  added. Deleting an organization that owns machines is refused (409). An invitation may name organizations
+  (`invitations { role, days?, orgs? }`); the new account joins those that still exist in the transaction that
+  creates it. A member creates an enrollment code for the organization (`machines/code { org }`); membership is
+  checked when the code is created and again at enrollment (403 otherwise, with the same message as an invalid code).
+  The machine then has `owner_org_id` (and no `owner_user_id`) and `enrolled_by`. Every current member lists, follows,
+  opens and gets tickets for it, checked on every request; removing a member cuts their open streams at once, as a
+  disabled account does. At this step all members share the machine's single opencode instance. A machine
+  belonging to an organization is revoked by the member who enrolled it (while still a member) or by an
+  administrator; another member gets 403, a non-member 404.
 - Providers (step 3): each user has their own, keyed `(user_id, id)`, so two users can both have an `anthropic` with
   different keys. Every `providers` route (list, add, `DELETE providers/<id>`, `chatgpt/begin|complete`) acts on the
   signed-in user's providers. Adding a provider or signing in with ChatGPT needs the user key in memory, otherwise
@@ -106,15 +118,17 @@ Rules:
   the OPAQUE export key) with an HMAC check value. At sign-in the browser unwraps it and sends it; the hub checks it
   against the stored check and keeps it in memory until it stops, the user locks it or the account is disabled or
   reset. It seals the user's secrets (below); the administrators' user list shows `waiting` for a user whose key is
-  locked while they have a personal machine and a saved provider, i.e. machines that get 423.
+  locked while they have a saved provider and a personal machine, or an organization machine they enrolled and whose
+  organization they still belong to, i.e. machines that get 423.
 - Sealed secrets (`hub/secrets.ts`): an API key, or a ChatGPT OAuth credential as JSON, is stored as unpadded base64url
   of `1 | nonce (12 bytes) | ciphertext + tag`, AES-256-GCM under the user key, with additional data
   `"opencode-hub/v1|provider|" + provider id + "|" + user id`, so a secret cannot move to another row or user. Only
   `hub/providers.ts` opens them, in memory, per request; nothing logs a secret or a user key.
 - Storage: `bun:sqlite` file `<data>/hub.db` with tables `user` (id, login, role, registration_record, wrapped_key,
   key_check, created_at, updated_at, disabled_at), `invitation` (id, code_hash, role, created_by, user_id for a reset,
-  created_at, expires_at, used_at), `machine` (id, name, tunnel_token_hash, llm_token_hash, owner_user_id,
-  owner_org_id, enrolled_by, created_at, last_seen_at), `provider` (user_id, id, name, base_url, auth `key` or
+  created_at, expires_at, used_at), `invitation_org` (invitation_id, org_id: the organizations a new account joins),
+  `org` (id, name unique without case, created_at), `membership` (org_id, user_id, created_at), `machine` (id, name,
+  tunnel_token_hash, llm_token_hash, owner_user_id, owner_org_id, enrolled_by, created_at, last_seen_at), `provider` (user_id, id, name, base_url, auth `key` or
   `chatgpt`, api_key and oauth sealed, created_at, updated_at; primary key `(user_id, id)`),
   `setting` (key, value; `url` is the public URL the hub last started with, for `hub invite`). The OPAQUE server key lives in `<data>/opaque-server-setup`, outside
   the database. The data dir is `0700`; `hub.db`, its WAL files, `opaque-server-setup` and `catalog.json` are `0600`.
@@ -128,20 +142,23 @@ Rules:
     serves `hub.html` (including `/login?next=`). Without assets the hub serves a 503 page explaining how to build them.
   - JSON API under `/hub/api/`: `session`, `register/invite`, `register/start`, `register/finish`, `login/start`,
     `login/finish`, `logout`, `account/lock`, `account/password/start`, `account/password/finish`, and for
-    administrators `users`, `users/<id>/{disable,enable,role,reset}`, `invitations`, `DELETE invitations/<id>`;
-    then `machines`, `events` (SSE, live list of the user's machines),
-    `machines/code` (a code tied to the signed-in user), `DELETE machines/<id>` (owner or administrator),
-    `admin/machines` (administrators: every machine with its owner), `providers`, `DELETE providers/<id>`, `presets` (provider catalog),
+    administrators `users`, `users/<id>/{disable,enable,role,reset}`, `invitations`, `DELETE invitations/<id>`,
+    `orgs`, `orgs/<id>/rename`, `DELETE orgs/<id>`, `orgs/<id>/members`, `DELETE orgs/<id>/members/<user>`;
+    then `memberships` (the user's organizations), `machines`, `events` (SSE, live list of the user's machines,
+    personal then grouped by organization, each with `org` and `canRevoke`), `machines/code { org? }` (a code tied to
+    the signed-in user, and to one of their organizations), `DELETE machines/<id>` (see Organizations),
+    `admin/machines` (administrators: every machine with its owner or organization), `providers`, `DELETE providers/<id>`, `presets` (provider catalog),
     `providers/chatgpt/begin`, `providers/chatgpt/complete`. Mutations need a JSON body and `Origin` = hub origin.
   - `GET /hub/handoff`.
   - `POST /hub/agent/enroll` JSON `{ code, name }` -> `{ machine: { id, name }, tunnelToken, llmToken, url }`. The
-    machine belongs to the code's author; a code whose author was disabled meanwhile is refused (403).
+    machine belongs to the code's author, or to the organization the code names; a code whose author was disabled
+    meanwhile, or left that organization, is refused (403).
   - `GET /hub/agent/connect` WebSocket upgrade for the tunnel.
   - `ANY /llm/<provider>/<rest>`: LLM proxy (below).
   - `GET /hub/tls-allowed?domain=` -> 200 for the hub host and existing machine hosts, else 404.
   - `GET /hub/health` -> 200.
 - Routes on `<m>.<domain>`: `/auth/hub-session` (ticket consumption); everything else requires the cookie of the
-  machine's owner and is proxied through the tunnel, including WebSocket upgrades. Without a session -> login redirect
+  machine's owner, or of a member of its organization, and is proxied through the tunnel, including WebSocket upgrades. Without a session -> login redirect
   (401 for upgrades and mutations), whether the machine exists or not. Machine offline -> 503 HTML page with a link
   back to the dashboard. Unknown machine, or another user's -> the same 404.
 - Sign-in is rate limited in memory: an exponential delay per client IP after failures, and 15 minutes after 5
@@ -163,12 +180,15 @@ Rules:
 - Anthropic subscriptions cannot be proxied: opencode only uses them through the local `claude` CLI.
 - `<hub>/llm/<id>/<rest>` -> `<baseURL>/<rest>` with the same query string. The machine's llm token is looked for in
   `authorization: Bearer`, `x-api-key`, `x-goog-api-key` and the `key` query parameter; whichever carried it is rewritten
-  with the real key, the others are left alone. The token gives the machine, the machine its owner, and the hub uses
-  that owner's provider `<id>`, opened with the owner's user key in memory.
-- Answers, in this order: no valid llm token, or tokens of two machines -> 401; organization or ownerless machine ->
-  403 (fail-closed until step 4); owner disabled or reset, or owner's key not in memory (hub restarted, keys locked,
+  with the real key, the others are left alone. The token gives the machine, the machine its key holder, and the hub
+  uses that user's provider `<id>`, opened with their user key in memory. The key holder of a personal machine is its
+  owner; that of an organization machine is the member who enrolled it, only while that account is active and still a
+  member of the organization.
+- Answers, in this order: no valid llm token, or tokens of two machines -> 401; ownerless machine, or one with both
+  owners -> 403; organization machine whose enroller is disabled, reset or no longer a member -> 403 with a message
+  that says so; personal owner disabled or reset, or the key holder's key not in memory (hub restarted, keys locked,
   never signed in since) -> `423 { error: "Keys locked: sign in to the hub to unlock them." }`; unknown provider of
-  that owner -> 404; a secret that does not open -> 500.
+  that user -> 404; a secret that does not open -> 500.
 - Responses (including SSE) are streamed back unchanged except hop-by-hop headers.
 
 ## Agent
@@ -188,8 +208,8 @@ Rules:
 ```ts
 Hub.start(options: { hostname?: string; port?: number; url: string; data: string })
   -> Promise<{ url: string; port: number; userCount(): number; invite(role): { url, expiresAt };
-       createEnrollmentCode(userID): { code, expiresAt }; stop(): Promise<void> }>
-Hub.invite(input: { data: string; role: "admin" | "user" }) -> { url: string; expiresAt: number }
+       createEnrollmentCode(userID, orgID?): { code, expiresAt }; stop(): Promise<void> }>
+Hub.invite(input: { data: string; role: "admin" | "user"; orgs?: string[] /* names */ }) -> { url: string; expiresAt: number }
 Agent.enroll(input: { url: string; code: string; name: string }) -> Promise<Enrollment>
 Agent.connect(input: {
   enrollment: Enrollment
@@ -202,5 +222,5 @@ Agent.connect(input: {
 
 ## Out of scope for the first version
 
-Per-user instances, organizations (see `specs/multi-users.md`), flow control, a queue for prompts sent while a machine is offline, mTLS, OAuth-based providers in the
+Per-user instances, organization skills (see `specs/multi-users.md`), flow control, a queue for prompts sent while a machine is offline, mTLS, OAuth-based providers in the
 LLM proxy.

@@ -6,8 +6,8 @@ import path from "node:path"
 export * as Store from "./store.js"
 
 /**
- * A machine belongs to exactly one owner: a user (`owner_user_id`) or, from step 4 of the multi-user spec, an
- * organization (`owner_org_id`). The code keeps that invariant; a machine enrolled before owners existed has neither
+ * A machine belongs to exactly one owner: a user (`owner_user_id`) or an organization (`owner_org_id`). The code keeps
+ * that invariant, and a row that breaks it opens for nobody; a machine enrolled before owners existed has neither
  * until it is adopted by the first administrator (see `adoptMachines`).
  */
 export type Machine = {
@@ -21,8 +21,18 @@ export type Machine = {
   last_seen_at: number | null
 }
 
-/** A machine as the administration lists it, with its owner's login. */
-export type MachineSummary = Machine & { owner_login: string | null }
+/** A machine as the administration lists it, with its owner's login or organization name. */
+export type MachineSummary = Machine & { owner_login: string | null; org_name: string | null }
+
+/** A machine a user may open, with the name of its organization (null for a personal machine). */
+export type VisibleMachine = Machine & { org_name: string | null }
+
+export type Org = { id: string; name: string; created_at: number }
+
+/** An organization as administrators list it, with how many machines it owns. */
+export type OrgSummary = Org & { machines: number }
+
+export type Member = { org_id: string; user_id: string; login: string; created_at: number }
 
 const OAuth = Schema.Struct({
   access: Schema.String,
@@ -90,6 +100,7 @@ export type ProviderSummary = Pick<ProviderRow, "id" | "name" | "base_url" | "au
 const RESERVED = new Set(["www", "hub", "api", "app", "admin", "mail", "llm", "localhost", "static", "assets"])
 const MAX_ID = 32
 
+const MAX_ORG_NAME = 64
 const INVITATION_DAYS = 7
 const MAX_INVITATION_DAYS = 30
 const DAY = 24 * 60 * 60 * 1000
@@ -172,17 +183,44 @@ export function open(dir: string) {
     expires_at INTEGER NOT NULL,
     used_at INTEGER
   )`)
+  // Organization names compare case-insensitively, so "Acme" and "acme" cannot both exist.
+  db.run(`CREATE TABLE IF NOT EXISTS org (
+    id TEXT PRIMARY KEY,
+    name TEXT NOT NULL UNIQUE COLLATE NOCASE,
+    created_at INTEGER NOT NULL
+  )`)
+  db.run(`CREATE TABLE IF NOT EXISTS membership (
+    org_id TEXT NOT NULL,
+    user_id TEXT NOT NULL,
+    created_at INTEGER NOT NULL,
+    PRIMARY KEY (org_id, user_id)
+  )`)
+  // The organizations a new account joins when its invitation is used.
+  db.run(`CREATE TABLE IF NOT EXISTS invitation_org (
+    invitation_id TEXT NOT NULL,
+    org_id TEXT NOT NULL,
+    PRIMARY KEY (invitation_id, org_id)
+  )`)
 
   const machineColumns = "id, name, owner_user_id, owner_org_id, enrolled_by, created_at, last_seen_at"
   const queries = {
     machines: db.query<MachineSummary, []>(
       `SELECT machine.id, machine.name, machine.owner_user_id, machine.owner_org_id, machine.enrolled_by,
-         machine.created_at, machine.last_seen_at, user.login AS owner_login
-       FROM machine LEFT JOIN user ON user.id = machine.owner_user_id
+         machine.created_at, machine.last_seen_at, user.login AS owner_login, org.name AS org_name
+       FROM machine LEFT JOIN user ON user.id = machine.owner_user_id LEFT JOIN org ON org.id = machine.owner_org_id
        ORDER BY machine.created_at`,
     ),
-    machinesOf: db.query<Machine, [string]>(
-      `SELECT ${machineColumns} FROM machine WHERE owner_user_id = ? AND owner_org_id IS NULL ORDER BY created_at`,
+    /**
+     * A user's personal machines, then those of the organizations they belong to, grouped by organization name. The
+     * same conditions as `canOpen`: an organization machine never has a user owner as well.
+     */
+    machinesFor: db.query<VisibleMachine, [string, string]>(
+      `SELECT machine.id, machine.name, machine.owner_user_id, machine.owner_org_id, machine.enrolled_by,
+         machine.created_at, machine.last_seen_at, org.name AS org_name
+       FROM machine LEFT JOIN org ON org.id = machine.owner_org_id
+       WHERE (machine.owner_org_id IS NULL AND machine.owner_user_id = ?)
+         OR (machine.owner_user_id IS NULL AND org.id IN (SELECT org_id FROM membership WHERE user_id = ?))
+       ORDER BY org.name IS NOT NULL, org.name COLLATE NOCASE, machine.created_at`,
     ),
     machine: db.query<Machine, [string]>(`SELECT ${machineColumns} FROM machine WHERE id = ?`),
     byTunnel: db.query<Machine, [string]>(`SELECT ${machineColumns} FROM machine WHERE tunnel_token_hash = ?`),
@@ -191,10 +229,16 @@ export function open(dir: string) {
     summaries: db.query<ProviderSummary, [string]>(
       "SELECT id, name, base_url, auth FROM provider WHERE user_id = ? ORDER BY id",
     ),
-    /** Users whose personal machines rely on providers they saved, i.e. need their key in memory. */
+    /**
+     * Users whose machines rely on providers they saved, i.e. need their key in memory: their personal machines, and
+     * the organization machines they enrolled while they are still members.
+     */
     keysInUse: db.query<{ user_id: string }, []>(
       `SELECT DISTINCT provider.user_id FROM provider
-       JOIN machine ON machine.owner_user_id = provider.user_id AND machine.owner_org_id IS NULL`,
+       JOIN machine ON (machine.owner_user_id = provider.user_id AND machine.owner_org_id IS NULL)
+         OR (machine.owner_user_id IS NULL AND machine.enrolled_by = provider.user_id
+           AND EXISTS (SELECT 1 FROM membership
+             WHERE membership.org_id = machine.owner_org_id AND membership.user_id = provider.user_id))`,
     ),
     setting: db.query<{ value: string }, [string]>("SELECT value FROM setting WHERE key = ?"),
     users: db.query<User, []>("SELECT * FROM user ORDER BY created_at"),
@@ -207,6 +251,28 @@ export function open(dir: string) {
     invitation: db.query<Invitation, [string, number]>(
       `SELECT id, role, created_by, user_id, created_at, expires_at, used_at FROM invitation
        WHERE code_hash = ? AND used_at IS NULL AND expires_at > ?`,
+    ),
+    orgs: db.query<OrgSummary, []>(
+      `SELECT org.id, org.name, org.created_at,
+         (SELECT count(*) FROM machine WHERE machine.owner_org_id = org.id) AS machines
+       FROM org ORDER BY org.name COLLATE NOCASE`,
+    ),
+    org: db.query<Org, [string]>("SELECT id, name, created_at FROM org WHERE id = ?"),
+    orgByName: db.query<Org, [string]>("SELECT id, name, created_at FROM org WHERE name = ?"),
+    members: db.query<Member, []>(
+      `SELECT membership.org_id, membership.user_id, user.login, membership.created_at
+       FROM membership JOIN user ON user.id = membership.user_id ORDER BY user.login`,
+    ),
+    membershipsOf: db.query<Org, [string]>(
+      `SELECT org.id, org.name, org.created_at FROM org JOIN membership ON membership.org_id = org.id
+       WHERE membership.user_id = ? ORDER BY org.name COLLATE NOCASE`,
+    ),
+    member: db.query<{ found: number }, [string, string]>(
+      "SELECT 1 AS found FROM membership WHERE org_id = ? AND user_id = ?",
+    ),
+    invitationOrgs: db.query<{ invitation_id: string; name: string }, []>(
+      `SELECT invitation_org.invitation_id, org.name FROM invitation_org JOIN org ON org.id = invitation_org.org_id
+       ORDER BY org.name COLLATE NOCASE`,
     ),
     invitations: db.query<InvitationSummary, [number]>(
       `SELECT invitation.id, invitation.role, invitation.created_by, invitation.user_id, invitation.created_at,
@@ -237,7 +303,13 @@ export function open(dir: string) {
   const lastAdmin = (user: User) =>
     user.role === "admin" && user.disabled_at === null && (queries.activeAdmins.get()?.count ?? 0) <= 1
 
-  const insertInvitation = (input: { role: Role; days?: number; createdBy?: string; userID?: string }) => {
+  const insertInvitation = (input: {
+    role: Role
+    days?: number
+    createdBy?: string
+    userID?: string
+    orgs?: readonly string[]
+  }) => {
     const code = randomToken()
     const now = Date.now()
     const days = Math.min(Math.max(Math.trunc(input.days ?? INVITATION_DAYS), 1), MAX_INVITATION_DAYS)
@@ -248,31 +320,44 @@ export function open(dir: string) {
        VALUES (?, ?, ?, ?, ?, ?, ?)`,
       [id, hashToken(code), input.role, input.createdBy ?? null, input.userID ?? null, now, expiresAt],
     )
+    new Set(input.orgs ?? []).forEach((org) =>
+      db.run("INSERT INTO invitation_org (invitation_id, org_id) VALUES (?, ?)", [id, org]),
+    )
     return { id, code, expiresAt }
   }
 
   return {
     /** Every machine with its owner's login, for administrators. */
     machines: () => queries.machines.all(),
-    /** The machines a user owns personally. */
-    machinesOf: (user: string) => queries.machinesOf.all(user),
+    /** The machines a user may open: their own, then their organizations'. */
+    machinesFor: (user: string) => queries.machinesFor.all(user, user),
     machine: (id: string) => queries.machine.get(id) ?? undefined,
     machineByTunnelToken: (token: string) => queries.byTunnel.get(hashToken(token)) ?? undefined,
     machineByLlmToken: (token: string) => queries.byLlm.get(hashToken(token)) ?? undefined,
     /**
-     * Creates a machine owned by the user who enrolled it, with an id derived from `name`, and returns it with its
-     * fresh plaintext tokens.
+     * Creates a machine with an id derived from `name`, owned by the user who enrolled it or by an organization, and
+     * returns it with its fresh plaintext tokens.
      */
-    createMachine(input: { name: string; owner: string }) {
+    createMachine(input: { name: string; enrolledBy: string; org?: string }) {
       const name = input.name
       const tunnelToken = randomToken()
       const llmToken = randomToken()
       const id = db.transaction(() => {
         const machineID = availableID(slug(name), (candidate) => queries.machine.get(candidate) !== null)
         db.run(
-          `INSERT INTO machine (id, name, tunnel_token_hash, llm_token_hash, owner_user_id, enrolled_by, created_at)
-           VALUES (?, ?, ?, ?, ?, ?, ?)`,
-          [machineID, name, hashToken(tunnelToken), hashToken(llmToken), input.owner, input.owner, Date.now()],
+          `INSERT INTO machine (id, name, tunnel_token_hash, llm_token_hash, owner_user_id, owner_org_id, enrolled_by,
+             created_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+          [
+            machineID,
+            name,
+            hashToken(tunnelToken),
+            hashToken(llmToken),
+            input.org === undefined ? input.enrolledBy : null,
+            input.org ?? null,
+            input.enrolledBy,
+            Date.now(),
+          ],
         )
         return machineID
       })()
@@ -334,8 +419,20 @@ export function open(dir: string) {
     user: (id: string) => queries.user.get(id) ?? undefined,
     userByLogin: (login: string) => queries.userByLogin.get(login) ?? undefined,
     userCount: () => queries.userCount.get()?.count ?? 0,
-    /** Issues a single-use invitation; its plaintext code exists only in the returned value. */
-    createInvitation: (input: { role: Role; days?: number; createdBy?: string }) => insertInvitation(input),
+    /**
+     * Issues a single-use invitation, which may name organizations for the new account to join; its plaintext code
+     * exists only in the returned value.
+     */
+    createInvitation: (input: { role: Role; days?: number; createdBy?: string; orgs?: readonly string[] }) =>
+      db.transaction(() => insertInvitation(input))(),
+    /** The names of the organizations each pending invitation joins, by invitation id. */
+    invitationOrgs() {
+      const names = new Map<string, string[]>()
+      queries.invitationOrgs
+        .all()
+        .forEach((row) => names.set(row.invitation_id, [...(names.get(row.invitation_id) ?? []), row.name]))
+      return names
+    },
     /** The unused, unexpired invitation behind a code; for a reset, only while its account still exists. */
     invitation(code: string) {
       const invitation = queries.invitation.get(hashToken(code), Date.now())
@@ -346,7 +443,11 @@ export function open(dir: string) {
     invitations: () => queries.invitations.all(Date.now()),
     /** Deletes an invitation that has not been used yet. */
     revokeInvitation: (id: string) =>
-      db.run("DELETE FROM invitation WHERE id = ? AND used_at IS NULL", [id]).changes > 0,
+      db.transaction(() => {
+        const deleted = db.run("DELETE FROM invitation WHERE id = ? AND used_at IS NULL", [id]).changes > 0
+        if (deleted) db.run("DELETE FROM invitation_org WHERE invitation_id = ?", [id])
+        return deleted
+      })(),
     /**
      * Uses an invitation: creates the account, or re-registers the account a reset invitation names, in the same
      * transaction that marks the invitation used.
@@ -379,7 +480,15 @@ export function open(dir: string) {
             [input.userID, input.login, invitation.role, input.record, input.wrappedKey, input.keyCheck, now, now],
           )
           if (created.changes === 0) return "taken"
+          // The organizations the invitation names, as far as they still exist, in the same transaction.
+          db.run(
+            `INSERT OR IGNORE INTO membership (org_id, user_id, created_at)
+             SELECT invitation_org.org_id, ?, ? FROM invitation_org JOIN org ON org.id = invitation_org.org_id
+             WHERE invitation_org.invitation_id = ?`,
+            [input.userID, now, invitation.id],
+          )
         }
+        db.run("DELETE FROM invitation_org WHERE invitation_id = ?", [invitation.id])
         db.run("UPDATE invitation SET used_at = ? WHERE id = ?", [now, invitation.id])
         adoptMachines()
         return "ok"
@@ -428,10 +537,70 @@ export function open(dir: string) {
         db.run("DELETE FROM provider WHERE user_id = ?", [id])
         // An earlier reset link for this account must not outlive the new one.
         db.run("DELETE FROM invitation WHERE user_id = ? AND used_at IS NULL", [id])
+        db.run("DELETE FROM invitation_org WHERE invitation_id NOT IN (SELECT id FROM invitation)")
         return insertInvitation({ role: user.role, days: input.days, createdBy: input.createdBy, userID: id })
       })(),
+
+    /** Every organization with its machine count, by name. */
+    orgs: () => queries.orgs.all(),
+    org: (id: string) => queries.org.get(id) ?? undefined,
+    /** An organization by name, compared case-insensitively. */
+    orgByName: (name: string) => queries.orgByName.get(name) ?? undefined,
+    /** Every membership with the member's login, for administrators. */
+    members: () => queries.members.all(),
+    /** The organizations a user belongs to, by name. */
+    membershipsOf: (user: string) => queries.membershipsOf.all(user),
+    isMember: (org: string, user: string) => queries.member.get(org, user) !== null,
+    /** Creates an organization; undefined when the name is already taken. */
+    createOrg(name: string) {
+      const org = { id: randomID(), name, created_at: Date.now() }
+      const created = db.run("INSERT INTO org (id, name, created_at) VALUES (?, ?, ?) ON CONFLICT DO NOTHING", [
+        org.id,
+        org.name,
+        org.created_at,
+      ])
+      return created.changes > 0 ? org : undefined
+    },
+    renameOrg: (id: string, name: string) =>
+      db.transaction((): "ok" | "unknown" | "taken" => {
+        if (!queries.org.get(id)) return "unknown"
+        const other = queries.orgByName.get(name)
+        if (other && other.id !== id) return "taken"
+        db.run("UPDATE org SET name = ? WHERE id = ?", [name, id])
+        return "ok"
+      })(),
+    /** Deletes an organization with its memberships; refused while it still owns machines. */
+    deleteOrg: (id: string) =>
+      db.transaction((): "ok" | "unknown" | "has-machines" => {
+        if (!queries.org.get(id)) return "unknown"
+        if (db.query("SELECT 1 FROM machine WHERE owner_org_id = ?").get(id)) return "has-machines"
+        db.run("DELETE FROM membership WHERE org_id = ?", [id])
+        db.run("DELETE FROM invitation_org WHERE org_id = ?", [id])
+        db.run("DELETE FROM org WHERE id = ?", [id])
+        return "ok"
+      })(),
+    addMember: (org: string, user: string) =>
+      db.transaction((): "ok" | "unknown-org" | "unknown-user" => {
+        if (!queries.org.get(org)) return "unknown-org"
+        if (!queries.user.get(user)) return "unknown-user"
+        db.run("INSERT OR IGNORE INTO membership (org_id, user_id, created_at) VALUES (?, ?, ?)", [
+          org,
+          user,
+          Date.now(),
+        ])
+        return "ok"
+      })(),
+    removeMember: (org: string, user: string) =>
+      db.run("DELETE FROM membership WHERE org_id = ? AND user_id = ?", [org, user]).changes > 0,
     close: () => db.close(),
   }
+}
+
+/** An organization name: trimmed, 1 to 64 characters, no control characters; undefined otherwise. */
+export function orgName(input: string) {
+  const name = input.normalize("NFKC").trim().replace(/\s+/g, " ")
+  if (!name || name.length > MAX_ORG_NAME || /\p{Cc}/u.test(name)) return undefined
+  return name
 }
 
 /** Creates the data directory if needed and keeps it owner-only. */
