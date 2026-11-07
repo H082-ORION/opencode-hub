@@ -17,6 +17,10 @@ asks the hub (`/hub/tls-allowed`) first, so only the hub host and enrolled machi
 
 ## Install
 
+The interactive installer at the repository root, `sudo ./install.sh`, offers Caddy, the hub and the client
+(agent), each with an optional systemd service started at boot. `./install.sh --help` lists the options for
+unattended installs. The script below installs Caddy and the hub only.
+
 ```sh
 sudo ./install.sh --domain hub.example.com --email you@example.com --binary ./opencode
 ```
