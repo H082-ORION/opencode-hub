@@ -37,6 +37,9 @@ un dossier, et on travaille comme si on était devant.
   Chaque machine reçoit son propre jeton, révocable à tout moment.
 - **Proxy LLM** : les clés des fournisseurs restent sur le hub. Les machines n'ont qu'un jeton propre au hub, qui
   remplace la vraie clé au passage. Changer une clé ne demande aucune action sur les machines.
+- **Relais MCP** : les connecteurs MCP distants de chaque utilisateur (en-têtes secrets ou connexion OAuth gérée par le
+  hub) sont chiffrés sur le hub ; les machines les joignent par `<hub>/mcp/<id>` avec le même jeton, et le hub ajoute
+  les secrets au passage. Ils apparaissent sur les machines comme les serveurs MCP `hub-<id>`.
 - **Catalogue de fournisseurs** : plus de 200 fournisseurs issus du catalogue d'OpenCode, groupés par entreprise, avec
   l'URL de l'API déjà renseignée. Il ne reste qu'à coller la clé.
 - **Abonnement ChatGPT** : connexion « Sign in with ChatGPT » sur le hub, jeton renouvelé automatiquement *(non testé
@@ -51,7 +54,7 @@ un dossier, et on travaille comme si on était devant.
 
 ```
 navigateur ──https──> Caddy ──> opencode hub (127.0.0.1:4800)
-                                  ├─ hub.exemple.fr            tableau de bord, connexion, enrôlement, proxy LLM
+                                  ├─ hub.exemple.fr            tableau de bord, connexion, enrôlement, proxy LLM et MCP
                                   └─ <machine>.hub.exemple.fr  proxy vers la machine
                                             ▲
                          tunnel WebSocket sortant (initié par la machine)
@@ -119,7 +122,7 @@ Détails sur Caddy, le DNS et le dépannage : [`script/hub/README.md`](script/hu
 
 | Commande | Rôle |
 |---|---|
-| `opencode hub [--port 4800] [--url https://hub.exemple.fr] [--data <dossier>]` | Lance le hub |
+| `opencode hub [--port 4800] [--url https://hub.exemple.fr] [--data <dossier>] [--mcp-private-network]` | Lance le hub (`--mcp-private-network` : connecteurs MCP autorisés vers les adresses privées et de boucle locale) |
 | `opencode hub invite [--admin] [--data <dossier>]` | Crée une invitation à usage unique et affiche son lien (`--admin` pour un administrateur) |
 | `opencode agent join <url> [--code <code>] [--name <nom>] [--insecure]` | Enrôle cette machine (sans `--code`, le code est demandé sans affichage ou lu sur l'entrée standard) |
 | `opencode agent run` | Maintient la machine connectée au hub |
@@ -150,7 +153,7 @@ de cause. Sans `--code`, le code n'apparaît ni dans la liste des processus ni d
 
 | Chemin | Contenu |
 |---|---|
-| `packages/relay` | Hub, protocole du tunnel, agent, proxy LLM, catalogue, connexion ChatGPT |
+| `packages/relay` | Hub, protocole du tunnel, agent, proxy LLM, relais MCP, catalogue, connexion ChatGPT |
 | `packages/app/hub.html`, `packages/app/src/hub` | Interface du hub (composants `@opencode/ui`) |
 | `packages/cli/src/commands/handlers/{hub,agent}` | Commandes `opencode hub` et `opencode agent` |
 | `install.sh` | Installation, état et désinstallation (Caddy, hub, client, services systemd) |

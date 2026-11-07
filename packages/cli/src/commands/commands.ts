@@ -557,6 +557,12 @@ const Root = Spec.make(typeof OPENCODE_CLI_NAME === "string" ? OPENCODE_CLI_NAME
           Flag.withDescription("Data directory (default: <global data>/hub)"),
           Flag.optional,
         ),
+        mcpPrivateNetwork: Flag.Boolean("mcp-private-network").pipe(
+          Flag.withDescription(
+            "Let MCP connectors reach private and loopback addresses, plain HTTP included (default: public HTTPS only)",
+          ),
+          Flag.withDefault(false),
+        ),
       },
       commands: [
         Spec.make("invite", {

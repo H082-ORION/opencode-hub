@@ -31,6 +31,7 @@ export default Runtime.handler(
           data,
           ui: Option.getOrUndefined(ui),
           version: OPENCODE_VERSION,
+          mcp: { privateNetworks: input.mcpPrivateNetwork },
         }),
       ),
       (hub) => Effect.promise(() => hub.stop()),

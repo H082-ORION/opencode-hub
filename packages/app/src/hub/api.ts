@@ -39,6 +39,25 @@ export type HubOrg = {
 
 export type HubProvider = { id: string; name: string; baseURL: string; auth: "key" | "chatgpt" }
 
+/**
+ * A remote MCP server the user's machines reach through the hub, as `server` (`hub-<id>`) in their configuration.
+ * `headers` names the injected headers (their values are never sent back); `connected` says whether an OAuth
+ * connector has its tokens, and is null for a headers one.
+ */
+export type HubConnector = {
+  id: string
+  name: string
+  url: string
+  auth: "headers" | "oauth"
+  headers: string[]
+  connected: boolean | null
+  server: string
+}
+
+export type ConnectorDraft =
+  | { name: string; url: string; auth: "headers"; headers: { name: string; value: string }[] }
+  | { name: string; url: string; auth: "oauth"; clientID?: string; clientSecret?: string }
+
 /** A provider from opencode's models.dev catalog. */
 export type HubPreset = { id: string; name: string; baseURL: string; doc?: string; env: string[] }
 
@@ -188,6 +207,11 @@ export const hubApi = {
   saveProvider: (body: { id: string; name?: string; baseURL?: string; apiKey: string }) =>
     request<{ provider: HubProvider }>("providers", { method: "POST", body }),
   deleteProvider: (id: string) => request<void>(`providers/${encodeURIComponent(id)}`, { method: "DELETE" }),
+  connectors: () => request<HubConnector[]>("connectors"),
+  saveConnector: (body: ConnectorDraft) => post<{ connector: HubConnector }>("connectors", body),
+  deleteConnector: (id: string) => request<void>(`connectors/${encodeURIComponent(id)}`, { method: "DELETE" }),
+  /** Starts the OAuth sign-in of a connector; the browser goes to `url` and comes back to the dashboard. */
+  connectorSignIn: (id: string) => post<{ url: string }>(`connectors/${encodeURIComponent(id)}/oauth/begin`, {}),
   chatgptBegin: () => request<{ attempt: string; url: string }>("providers/chatgpt/begin", { method: "POST" }),
   chatgptComplete: (attempt: string, callback: string) =>
     request<{ provider?: HubProvider }>("providers/chatgpt/complete", { method: "POST", body: { attempt, callback } }),

@@ -7,8 +7,12 @@ import { Accounts, json } from "./accounts.js"
 import { Auth } from "./auth.js"
 import { Catalog } from "./catalog.js"
 import { ChatGPT } from "./chatgpt.js"
+import { Connectors } from "./connectors.js"
+import { Egress } from "./egress.js"
 import { Html } from "./html.js"
 import { Llm } from "./llm.js"
+import { Mcp } from "./mcp.js"
+import { McpOAuth } from "./mcp-oauth.js"
 import { Orgs } from "./orgs.js"
 import { Providers } from "./providers.js"
 import { HubSkills } from "./skills.js"
@@ -36,6 +40,8 @@ export type Options = {
   catalog?: { source?: string; fetch?: typeof fetch }
   /** The running opencode version, sent to OpenAI when signing in with ChatGPT. */
   version?: string
+  /** Where connectors may point (see `Egress`): by default public HTTPS servers only. */
+  mcp?: Egress.Options
 }
 
 /** A browser following `/hub/api/events`; it only ever hears about its user's machines. */
@@ -138,6 +144,19 @@ export async function start(options: Options) {
   const secure = base.protocol === "https:"
   const machineOrigin = (id: string) => `${base.protocol}//${id}.${domain}`
   store.setSetting(URL_KEY, origin)
+  const egress = Egress.create({
+    options: options.mcp,
+    hostname: base.hostname,
+    listen: { hostname: options.hostname ?? "127.0.0.1", port: server.port ?? 0 },
+  })
+  const connectors = Connectors.create({ store, key: auth.key, egress, changed: (user) => pushConfig(user) })
+  const oauth = McpOAuth.create({
+    connectors,
+    egress,
+    origin,
+    key: auth.key,
+    app: { name: "hub", version: options.version ?? "local" },
+  })
   const accounts = Accounts.create({
     store,
     auth,
@@ -206,6 +225,9 @@ export async function start(options: Options) {
     if (pathname === "/hub/agent/enroll") return enroll(request, server)
     if (pathname === "/hub/agent/connect") return connect(request, server)
     if (pathname.startsWith("/llm/")) return Llm.proxy(request, url, { store, providers, allowed: mayOpen, chatgpt })
+    if (pathname.startsWith("/mcp/"))
+      return Mcp.proxy(request, url, { store, connectors, oauth, egress, allowed: mayOpen, origin })
+    if (pathname === McpOAuth.CALLBACK_PATH) return oauthCallback(request, url)
     if (pathname.startsWith("/hub/api/")) return api(request, pathname.slice("/hub/api/".length), server)
     const current = accounts.current(request)
     if (pathname === "/hub/handoff") {
@@ -240,6 +262,10 @@ export async function start(options: Options) {
     if (skill) return skill
     const organizations = await orgs.handle(request, route, current)
     if (organizations) return organizations
+    const connector = await connectors.handle(request, route, current)
+    if (connector) return connector
+    const signIn = /^connectors\/([^/]+)\/oauth\/begin$/.exec(route)
+    if (signIn && method === "POST") return beginOAuth(user.id, decodeURIComponent(signIn[1]))
     if (route === "machines" && method === "GET") return json(200, machineList(user.id))
     if (route === "events" && method === "GET") return events(current)
     if (route === "admin/machines" && method === "GET") {
@@ -305,6 +331,44 @@ export async function start(options: Options) {
       return json(200, { provider: providerList(user.id).find((entry) => entry.id === ChatGPT.PROVIDER.id) })
     }
     return json(404, { error: "Not found." })
+  }
+
+  /** Starts a connector's OAuth sign-in; the dashboard sends the browser to the returned URL. */
+  async function beginOAuth(user: string, id: string) {
+    const started = await oauth.begin(user, id).then(
+      (value) => value,
+      (error: unknown) => (error instanceof Error ? error : new Error(String(error))),
+    )
+    if (started instanceof Providers.LockedError) return locked()
+    if (started instanceof McpOAuth.OAuthError) return json(400, { error: started.message })
+    if (started instanceof Error) throw started
+    return json(200, started)
+  }
+
+  /**
+   * The authorization server sends the browser back here. The sign-in belongs to the user who started it: another
+   * session, or none, cannot finish it. Back to the dashboard on success, an explanation otherwise.
+   */
+  async function oauthCallback(request: Request, url: URL) {
+    if (request.method !== "GET") return new Response("Method not allowed", { status: 405 })
+    const current = accounts.current(request)
+    const back = `<p><a href="${Html.escape(origin)}/">Back to the dashboard</a></p>`
+    if (!current)
+      return Html.respond(
+        Html.message("Sign-in not finished", `<p class="muted">Sign in to the hub, then connect again.</p>${back}`),
+        { status: 401 },
+      )
+    const finished = await oauth.complete(current.user.id, url).then(
+      (value) => value,
+      (error: unknown) => (error instanceof Error ? error : new Error(String(error))),
+    )
+    if (finished instanceof Providers.LockedError || finished instanceof McpOAuth.OAuthError)
+      return Html.respond(
+        Html.message("Sign-in not finished", `<p class="muted">${Html.escape(finished.message)}</p>${back}`),
+        { status: 400 },
+      )
+    if (finished instanceof Error) throw finished
+    return redirect(`/?connector=${encodeURIComponent(finished)}`)
   }
 
   async function saveProvider(request: Request, user: string) {
@@ -631,7 +695,7 @@ export async function start(options: Options) {
   }
 
   /**
-   * Sends an instance's configuration: its user's providers, no connectors yet (step 7), and the version of its
+   * Sends an instance's configuration: its user's providers and connectors (to reach through the relay), and the version of its
    * user's effective skills, followed by the skills themselves when the agent does not have that version. A token is
    * issued, replacing the previous one, only when the agent does not hold the current one.
    */
@@ -650,7 +714,11 @@ export async function start(options: Options) {
             .summaries(instance.user_id)
             .map((provider) => ({ id: provider.id, name: provider.name })),
         },
-        mcp: [],
+        mcp: connectors.summaries(instance.user_id).map((connector) => ({
+          id: connector.id,
+          name: connector.name,
+          url: `${origin}/mcp/${connector.id}`,
+        })),
         skills: { version },
       }),
     )

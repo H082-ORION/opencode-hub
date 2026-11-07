@@ -11,7 +11,7 @@ Core, Protocol and Server are not modified. Everything lives in `packages/relay`
 
 ```
 browser ──https──> Caddy ──http──> opencode hub (127.0.0.1:4800)
-                                     │  hub.example.com          dashboard, login, enrollment, LLM proxy
+                                     │  hub.example.com          dashboard, login, enrollment, LLM and MCP proxy
                                      │  <machine>.hub.example.com  reverse proxy to that machine
                                      ▼
                               WebSocket tunnel (outbound from the machine)
@@ -35,7 +35,7 @@ browser ──https──> Caddy ──http──> opencode hub (127.0.0.1:4800)
 | --------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------- |
 | A user (browser)                  | login and password through OPAQUE (the hub never sees the password) -> `opencode_hub` session cookie of that user (host-only, HttpOnly, SameSite=Lax, Secure when the hub URL is https, 30 days, in memory) | hub, on the hub host and on every machine host; the account must exist and be active, and own the machine, on every request |
 | A machine's tunnel                | `tunnel token`, issued at enrollment, sent as `Authorization: Bearer` on the WebSocket upgrade                                                                                                              | hub `/hub/agent/connect`                                                                                                    |
-| An instance's LLM calls           | `instance token`, issued by the hub in INSTANCE, used as the provider API key by that instance only; it stands for one user on one machine                                                                  | hub `/llm/<provider>/...`, which also checks that the user may still open the machine                                       |
+| An instance's LLM and MCP calls   | `instance token`, issued by the hub in INSTANCE, used as the provider API key and the MCP bearer by that instance only; it stands for one user on one machine                                               | hub `/llm/<provider>/...` and `/mcp/<connector>/...`, which also check that the user may still open the machine             |
 | The hub reaching the local server | the local service password (Basic `opencode:<password>`)                                                                                                                                                    | injected by the **agent**, never known to the hub                                                                           |
 
 Tokens are 32 random bytes base64url, stored hashed (sha256) in the hub DB. Revoking a machine deletes its tunnel token
@@ -66,7 +66,7 @@ Stream 0 is the control stream. Streams are opened only by the hub; ids are allo
 | 0x11 | READY    | hub -> agent (stream 0) | JSON `{ machine: { id, name }, owner: "user" \| "org", instances: iid[] }`: every instance the machine still has                                                                                                                           |
 | 0x13 | PING     | hub -> agent (stream 0) | empty, every 25 s                                                                                                                                                                                                                          |
 | 0x14 | PONG     | agent -> hub (stream 0) | empty                                                                                                                                                                                                                                      |
-| 0x15 | INSTANCE | hub -> agent (stream 0) | JSON `{ iid, token?, llm: { baseURL, providers: [{ id, name }] }, mcp: [], skills: { version } }`: an instance's configuration (its user's providers, the version of its user's effective skills)                                          |
+| 0x15 | INSTANCE | hub -> agent (stream 0) | JSON `{ iid, token?, llm: { baseURL, providers: [{ id, name }] }, mcp: [{ id, name, url }], skills: { version } }`: an instance's configuration (its user's providers and connectors, the version of its user's effective skills)          |
 | 0x16 | SKILLS   | hub -> agent (stream 0) | JSON `{ iid, version, skills: [{ name, files: [{ path, content }] }] }`: every effective skill of the instance's user, sent after INSTANCE when the agent lacks this version                                                               |
 | 0x17 | DROP     | hub -> agent (stream 0) | JSON `{ iid }`: stop the instance and delete it                                                                                                                                                                                            |
 
@@ -82,7 +82,7 @@ Rules:
 - Instances (`specs/multi-users.md`, "Instances"): an iid is 16 to 64 base64url characters (the agent names a folder
   after it; anything else fails to decode). The hub creates a user's instance at their first request to the machine
   (a personal machine's owner instance at connection), and sends INSTANCE before the first OPEN for it on a
-  connection, then again whenever that user's providers change. `token` is present only when the hub issued a new
+  connection, then again whenever that user's providers or connectors change. `token` is present only when the hub issued a new
   one, which replaces the previous hash: the agent announces in HELLO the tokens it still holds, and the hub omits
   `token` for an instance whose hash matches. The agent keeps instance tokens in memory and in each instance's own
   configuration only, never in `agent.json`. When a user loses access (removed from the organization, disabled,
@@ -105,7 +105,7 @@ Rules:
 
 ## Hub
 
-`opencode hub [--hostname 127.0.0.1] [--port 4800] [--url http://localhost:4800] [--data <dir>]`
+`opencode hub [--hostname 127.0.0.1] [--port 4800] [--url http://localhost:4800] [--data <dir>] [--mcp-private-network]`
 
 - `--url` is the public base URL (`https://hub.example.com` in production). Its host is the `domain` used for routing.
 - Accounts (see `specs/multi-users.md`, step 1): users are created only from single-use invitations (32 random bytes,
@@ -144,22 +144,34 @@ Rules:
   different keys. Every `providers` route (list, add, `DELETE providers/<id>`, `chatgpt/begin|complete`) acts on the
   signed-in user's providers. Adding a provider or signing in with ChatGPT needs the user key in memory, otherwise
   `423 { error, locked: true }`; removing one does not. The `presets` catalog is shared.
+- Connectors (step 7): each user's remote MCP servers, keyed `(user_id, id)` like providers (see "MCP proxy").
+  `connectors` lists them (`{ id, name, url, auth, headers: names only, connected, server: "hub-<id>" }`), `POST
+connectors { name, url, id?, auth?: "headers" | "oauth", headers?: [{ name, value }], clientID?, clientSecret?,
+scope? }` adds one (409 for an id already used or beyond 50), `POST connectors/<id> { name?, url?, headers?,
+clientID?, clientSecret?, scope? }` changes one (headers left out are kept; a new URL or client drops OAuth tokens),
+  `DELETE connectors/<id>` removes one, `POST connectors/<id>/oauth/begin` starts an OAuth sign-in. Adding, changing and
+  signing in need the user key in memory (423 otherwise); removing does not. The id is lowercase words joined by
+  dashes (48 characters at most), derived from the name when left out. A change is pushed to the user's instances in
+  INSTANCE.
 - User key: the browser draws a 32-byte key at registration and stores it wrapped (AES-256-GCM under a key derived from
   the OPAQUE export key) with an HMAC check value. At sign-in the browser unwraps it and sends it; the hub checks it
   against the stored check and keeps it in memory until it stops, the user locks it or the account is disabled or
   reset. It seals the user's secrets (below); the administrators' user list shows `waiting` for a user whose key is
-  locked while they have a saved provider and at least one instance, i.e. instances that get 423.
+  locked while they have a saved provider or connector and at least one instance, i.e. instances that get 423.
 - Sealed secrets (`hub/secrets.ts`): an API key, or a ChatGPT OAuth credential as JSON, is stored as unpadded base64url
   of `1 | nonce (12 bytes) | ciphertext + tag`, AES-256-GCM under the user key, with additional data
   `"opencode-hub/v1|provider|" + provider id + "|" + user id`, so a secret cannot move to another row or user. Only
-  `hub/providers.ts` opens them, in memory, per request; nothing logs a secret or a user key.
+  `hub/providers.ts` opens them, in memory, per request; nothing logs a secret or a user key. A connector's headers
+  (JSON `[name, value][]`) or OAuth state (JSON: the client entered or registered, then the tokens) are sealed the same
+  way with `"opencode-hub/v1|connector|" + connector id + "|" + user id`; only `hub/connectors.ts` opens them.
 - Storage: `bun:sqlite` file `<data>/hub.db` with tables `user` (id, login, role, registration_record, wrapped_key,
   key_check, created_at, updated_at, disabled_at), `invitation` (id, code_hash, role, created_by, user_id for a reset,
   created_at, expires_at, used_at), `invitation_org` (invitation_id, org_id: the organizations a new account joins),
   `org` (id, name unique without case, created_at), `membership` (org_id, user_id, created_at), `machine` (id, name,
   tunnel_token_hash, owner_user_id, owner_org_id, enrolled_by, created_at, last_seen_at; a table from protocol 1 is
   rebuilt without its `llm_token_hash`), `instance` (id: the iid, machine_id, user_id, token_hash null until first
-  sent, created_at, token_issued_at; unique `(machine_id, user_id)`), `provider` (user_id, id, name, base_url, auth `key` or
+  sent, created_at, token_issued_at; unique `(machine_id, user_id)`), `connector` (user_id, id, name, url, auth `headers` or `oauth`, header_names in clear, headers and oauth sealed,
+  connected_at, created_at, updated_at; primary key `(user_id, id)`), `provider` (user_id, id, name, base_url, auth `key` or
   `chatgpt`, api_key and oauth sealed, created_at, updated_at; primary key `(user_id, id)`), `skill` (id, owner_kind
   `user` or `org`, owner_id, name, description, files as JSON `[{ path, content }]` in clear, created_at, updated_at;
   unique `(owner_kind, owner_id, name)`; an organization's go with it),
@@ -168,7 +180,7 @@ Rules:
   Sessions, unlocked user keys, OPAQUE attempts, enrollment codes and handoff tickets live in memory.
   The connection runs with `secure_delete` on, so deleted rows are zeroed. A `provider` table without `user_id` (the
   shared, clear-text one of earlier versions) is dropped at start without being read, then checkpointed out of the
-  WAL: those providers have to be entered again by each user. An administrator reset deletes the user's providers.
+  WAL: those providers have to be entered again by each user. An administrator reset deletes the user's providers and connectors.
 - Routes on the hub host:
   - The dashboard is a second entry of the web app (`packages/app/hub.html`, `packages/app/src/hub/`) built with
     `@opencode/ui`. The CLI passes the embedded app assets to `Hub.start({ ui })`; every non-API GET on the hub host
@@ -181,7 +193,8 @@ Rules:
     personal then grouped by organization, each with `org` and `canRevoke`), `machines/code { org? }` (a code tied to
     the signed-in user, and to one of their organizations), `DELETE machines/<id>` (see Organizations),
     `admin/machines` (administrators: every machine with its owner or organization), `providers`, `DELETE providers/<id>`, `presets` (provider catalog),
-    `providers/chatgpt/begin`, `providers/chatgpt/complete`, `skills` (GET: `{ own, inherited, version }`, each skill
+    `providers/chatgpt/begin`, `providers/chatgpt/complete`, `connectors`, `connectors/<id>` (POST, DELETE),
+    `connectors/<id>/oauth/begin`, `skills` (GET: `{ own, inherited, version }`, each skill
     with `hiddenBy`, the organization whose skill of the same name wins; POST `{ name, files }` creates),
     `skills/<id>` (POST replaces, DELETE), and for administrators `orgs/<id>/skills` (GET, POST) and
     `orgs/<id>/skills/<skill>` (POST, DELETE); members get 403 there and read their organizations' skills through
@@ -192,6 +205,8 @@ Rules:
     meanwhile, or left that organization, is refused (403).
   - `GET /hub/agent/connect` WebSocket upgrade for the tunnel.
   - `ANY /llm/<provider>/<rest>`: LLM proxy (below).
+  - `ANY /mcp/<connector>/<rest>`: MCP proxy (below); `GET /hub/oauth/callback`: where an authorization server sends
+    the browser back after a connector's OAuth sign-in.
   - `GET /hub/tls-allowed?domain=` -> 200 for the hub host and existing machine hosts, else 404.
   - `GET /hub/health` -> 200.
 - Routes on `<m>.<domain>`: `/auth/hub-session` (ticket consumption); everything else requires the cookie of the
@@ -227,6 +242,62 @@ Rules:
   of a locked user is 404); unknown provider of that user -> 404; a secret that does not open -> 500.
 - Responses (including SSE) are streamed back unchanged except hop-by-hop headers.
 
+## MCP proxy
+
+- A connector belongs to one user: a remote MCP server (`url`, HTTP "streamable" or SSE) with either headers to inject
+  (`headers`, e.g. an API key) or an OAuth sign-in run by the hub (`oauth`). Only remote servers go through the hub: a
+  local one (`type: "local"`, a command) stays configured on the machine.
+- The instance reaches it as the remote MCP server `hub-<id>` (prefix so it never replaces a server configured on the
+  machine) at `<hub>/mcp/<id>`, with `Authorization: Bearer <instance token>` and opencode's own OAuth off
+  (`oauth: false`).
+- `<hub>/mcp/<id>/<rest>` -> `<url>/<rest>` (dot segments resolved, so it cannot climb above the connector's path),
+  with the request's query string appended to the URL's. Answers, in this order: no valid instance token in
+  `Authorization: Bearer`, or a machine that no longer exists -> 401; the user may no longer open the machine -> 403
+  (as the LLM proxy); unknown connector of that user -> 404; the user's key not in memory -> 423 with the LLM proxy's
+  message; secrets that do not open -> 500; an `oauth` connector not signed in, or whose sign-in expired without a
+  refresh token -> 409 (the user signs in again from the dashboard); a destination the network guard refuses, a
+  redirect elsewhere, or an unreachable server -> 502.
+- Headers: the instance's `Authorization`, cookies, `Host`, `Origin`, `Referer`, forwarding and hop-by-hop headers are
+  dropped; the connector's headers are set (they win over the instance's), or `Authorization: Bearer <access token>`
+  for OAuth. Everything else passes, the MCP session (`Mcp-Session-Id`, `MCP-Protocol-Version`, `Last-Event-ID`)
+  included, both ways. Request bodies are read whole (MCP messages are small, and an OAuth retry needs them); answers,
+  SSE included, are streamed without buffering, minus hop-by-hop headers and `Set-Cookie`. Closing the instance's
+  request aborts the request to the server.
+- Redirects are never followed. One that stays under the connector's URL comes back as the same status with a
+  `Location` on the hub (`<hub>/mcp/<id>/...`), so the instance follows it through the proxy; any other is 502.
+- Network guard (`hub/egress.ts`), on every request the hub sends for a connector (the MCP requests, and OAuth
+  discovery, registration and token requests), checked when a connector is saved and again before each request, on
+  every address its name resolves to:
+  - always refused: the hub's own host name and every machine host under it, the hub's port on any loopback, unspecified
+    or local interface address, link-local addresses (`169.254.0.0/16`, `fe80::/10`: cloud metadata services), the
+    metadata addresses outside them (`100.100.100.200`, `fd00:ec2::254`), unspecified, multicast, broadcast, reserved,
+    documentation ranges, and IPv6 ranges that embed an IPv4 address (NAT64, 6to4, Teredo); URLs
+    with a user name or password;
+  - private addresses (loopback, RFC 1918, CGNAT `100.64.0.0/10`, `198.18.0.0/15`, `fc00::/7`, `::1`): refused unless
+    the hub runs with `--mcp-private-network` (`Hub.start({ mcp: { privateNetworks: true } })`), for connectors on the
+    hub's own network;
+  - plain `http://` only to private addresses (so only with that flag): a public connector is HTTPS, since the hub
+    sends it the user's secrets;
+  - the request then goes to the address that was checked (the `Host` header and, for HTTPS, the certificate check and
+    SNI keep the name), so a name that resolves elsewhere between the check and the connection (DNS rebinding) cannot
+    redirect it.
+- OAuth (`hub/mcp-oauth.ts`), following the MCP authorization specification: the hub sends an unauthenticated
+  `initialize` and reads `resource_metadata` from the 401 `WWW-Authenticate` challenge, else tries
+  `/.well-known/oauth-protected-resource<path>` then `/.well-known/oauth-protected-resource` (RFC 9728; the metadata's
+  `resource` must be on the connector's origin; without any, the server's origin is its own authorization server).
+  Then the authorization server's metadata (RFC 8414 `oauth-authorization-server`, else OpenID Connect discovery, with
+  the path insertion rules), whose `issuer` must match and which must list `S256` PKCE. The client is the one the user
+  entered (with its secret, sent as HTTP Basic unless the server only lists `client_secret_post`), else one the hub
+  registers (RFC 7591, a public client with `token_endpoint_auth_method: "none"`); without a registration endpoint the
+  user must enter a client id. The dashboard sends the browser to the authorization URL (`response_type=code`, PKCE
+  S256, `state`, `resource` = the protected resource (RFC 8707), `scope` = the one entered or the resource's
+  `scopes_supported`), which comes back to `GET /hub/oauth/callback`. The attempt is in memory, 10 minutes, single use,
+  bound to the user who started it and to the connector's URL then; another user's session (or none) gets the same
+  answer as an expired one. An `iss` parameter must name the issuer (RFC 9207). The tokens are sealed under the user
+  key; then the browser returns to `/?connector=<id>`. The proxy refreshes the access token when it expires within a
+  minute, or once when the server answers 401, with the refresh token (rotated or kept), and seals the result again
+  under the key the connector was opened with; concurrent requests share one refresh.
+
 ## Agent
 
 - `opencode agent join <hub-url> --code <code> [--name <name>]`: enrolls and stores
@@ -237,7 +308,9 @@ Rules:
   - **Personal machine**: its only instance, the owner's, is the background service (same mechanism as `opencode
 service start`), so the owner's existing sessions stay visible. INSTANCE is applied to the service's saved
     environment (`OPENCODE_HUB_INSTANCE`, `OPENCODE_HUB_LLM_TOKEN`, and `OPENCODE_CONFIG_CONTENT` that points every
-    provider at `<hub>/llm/<id>` with the token as API key), and the service restarts only when that environment
+    provider at `<hub>/llm/<id>` with the token as API key, and declares every connector as
+    `mcp.servers["hub-<id>"]`, a remote server at `<hub>/mcp/<id>` whose `Authorization` header reads the token
+    from `{env:OPENCODE_HUB_LLM_TOKEN}`, with `oauth: false`), and the service restarts only when that environment
     actually changes. At start the agent reads the instance and token back from there to announce them in HELLO.
     DROP removes those three entries (the account's own data stays). SKILLS goes into the account's own skills folder
     (`<global config>/skills/hub-<name>/`, e.g. `~/.config/opencode/skills/hub-*`), next to the skills already there;
@@ -264,7 +337,7 @@ service start`), so the owner's existing sessions stay visible. INSTANCE is appl
 ## Library API (`@opencode/relay`)
 
 ```ts
-Hub.start(options: { hostname?: string; port?: number; url: string; data: string })
+Hub.start(options: { hostname?: string; port?: number; url: string; data: string; mcp?: { privateNetworks?: boolean } })
   -> Promise<{ url: string; port: number; userCount(): number; invite(role): { url, expiresAt };
        createEnrollmentCode(userID, orgID?): { code, expiresAt }; stop(): Promise<void> }>
 Hub.invite(input: { data: string; role: "admin" | "user"; orgs?: string[] /* names */ }) -> { url: string; expiresAt: number }
