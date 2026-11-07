@@ -97,7 +97,7 @@ const Handlers = Runtime.handlers(Commands, {
   },
   hub: {
     $: () => import("./commands/handlers/hub/start"),
-    password: () => import("./commands/handlers/hub/password"),
+    invite: () => import("./commands/handlers/hub/invite"),
   },
   agent: {
     join: () => import("./commands/handlers/agent/join"),

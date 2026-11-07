@@ -142,7 +142,8 @@ export function AddMachineDialog(props: { fail: Fail }) {
   )
 }
 
-function CommandLine(props: { command: string }) {
+/** A one-line command or link with a copy button. */
+export function CommandLine(props: { command: string }) {
   return (
     <div class="hub-command">
       <code dir="ltr">{props.command}</code>

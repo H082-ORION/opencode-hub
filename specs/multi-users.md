@@ -280,6 +280,31 @@ Chacune est une PR qui fonctionne seule, avec ses tests.
    utilisateur, rôle administrateur, `opencode hub invite`, pages `/register` et `/login`, administration des
    utilisateurs, droits `0700`/`0600`, `install.sh` adapté. La clé `UK` est déjà créée et enveloppée, mais encore
    inutilisée. Suppression du mot de passe unique.
+   **Faite** (2026-11-07). Écarts :
+   - KSF : `@serenity-kit/opaque` 1.1.0 n'a pas d'option `rfc9106-low-memory` ; `memory-constrained` est Argon2id
+     64 Mio, 3 passes, 4 voies (RFC 9106 §4), vérifié par un enregistrement en paramètres explicites
+     `{ memory: 65536, iterations: 3, parallelism: 4 }` qui se connecte avec `memory-constrained`.
+   - `register/start` et `login/start` renvoient aussi `userID` (l'`aad` de la clé enveloppée contient l'id, que le
+     navigateur ne connaît pas encore), et `register/start` le `login` normalisé. La clé enveloppée commence par un
+     octet de version (`1 | nonce | chiffré + étiquette`, 61 octets).
+   - `register/finish` reçoit aussi `userKey.key` : le hub vérifie le `check` et garde la clé en mémoire dès
+     l'inscription.
+   - Route en plus `register/invite { invite }` → `{ role, login }`, pour que la page d'une réinitialisation affiche
+     le login du compte.
+   - Changement de mot de passe : `account/password/start|finish` prouvent l'ancien mot de passe par une connexion
+     OPAQUE dans le même échange (le navigateur en a besoin pour obtenir `UK` et la ré-envelopper).
+   - Réinitialisation : le mot de passe et la clé sont effacés dès la création du lien (l'ancien mot de passe cesse
+     aussitôt de marcher), sessions fermées, clé retirée de la mémoire ; un lien de réinitialisation précédent est
+     supprimé. Un compte désactivé se réactive (`users/<id>/enable`).
+   - Un échec de connexion se compte dès `login/start` (un mauvais mot de passe échoue dans le navigateur, qui
+     n'appelle pas `login/finish`) ; un succès remet les compteurs à zéro.
+   - Premier démarrage sans compte : le lien n'est affiché que dans un terminal ; sous systemd, le hub affiche la
+     commande `opencode hub invite --admin`, pour qu'aucun lien valide n'aille dans le journal. `install.sh` crée
+     l'invitation à la première installation.
+   - CSP du tableau de bord : `'wasm-unsafe-eval'` pour le WebAssembly d'OPAQUE.
+   - Tableau de bord : Compte, Utilisateurs et Invitations en cours sont des sections de la page existante, pas des
+     onglets (pas de nouvelle navigation à styler).
+   - Pas encore fait : organisations dans l'invitation (étape 4), journal d'audit.
 2. **Machines par utilisateur** : propriétaire des machines, code d'enrôlement lié à son auteur, liste et accès filtrés
    (fail-closed, tickets compris), révocation selon les droits.
 3. **Clés d'API chiffrées** : déverrouillage de `UK` à la connexion, fournisseurs par utilisateur chiffrés, relais LLM

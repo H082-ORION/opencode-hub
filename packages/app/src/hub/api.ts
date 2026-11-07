@@ -9,6 +9,40 @@ export type HubPreset = { id: string; name: string; baseURL: string; doc?: strin
 
 export type EnrollmentCode = { code: string; expiresAt: number; command: string }
 
+export type HubRole = "admin" | "user"
+
+export type HubSession = {
+  authenticated: true
+  user: { id: string; login: string; role: HubRole }
+  /** Whether the hub holds this user's key in memory. */
+  unlocked: boolean
+}
+
+export type HubUser = {
+  id: string
+  login: string
+  role: HubRole
+  createdAt: number
+  disabled: boolean
+  /** Reset by an administrator, waiting for its reset invitation to be used. */
+  pending: boolean
+  unlocked: boolean
+  self: boolean
+}
+
+export type HubInvitation = {
+  id: string
+  role: HubRole
+  createdAt: number
+  expiresAt: number
+  createdBy: string | null
+  /** The login a reset invitation re-registers. */
+  reset: string | null
+}
+
+/** A newly issued invitation; its link is shown once. */
+export type IssuedInvitation = { id: string; url: string; expiresAt: number }
+
 /** A failed hub request; `status` is 0 when the hub could not be reached. */
 export class HubError extends Error {
   constructor(
@@ -48,11 +82,22 @@ export async function request<T>(route: string, init: { method?: string; body?: 
   throw new HubError(message, response.status)
 }
 
+/** The account flows of `@opencode/relay/account` send their requests through this. */
+export const post = <T>(route: string, body: unknown) => request<T>(route, { method: "POST", body })
+
 export const hubApi = {
-  session: () => request<{ authenticated: boolean }>("session"),
-  login: (password: string, next: string | undefined) =>
-    request<{ redirect: string }>("login", { method: "POST", body: { password, next } }),
+  session: () => request<HubSession>("session"),
   logout: () => request<object>("logout", { method: "POST" }),
+  lock: () => request<{ unlocked: false }>("account/lock", { method: "POST" }),
+  invitationFor: (invite: string) => post<{ role: HubRole; login: string | null }>("register/invite", { invite }),
+  users: () => request<HubUser[]>("users"),
+  invitations: () => request<HubInvitation[]>("invitations"),
+  invite: (body: { role: HubRole; days: number }) => post<IssuedInvitation>("invitations", body),
+  revokeInvitation: (id: string) => request<void>(`invitations/${encodeURIComponent(id)}`, { method: "DELETE" }),
+  disable: (id: string) => post<object>(`users/${encodeURIComponent(id)}/disable`, {}),
+  enable: (id: string) => post<object>(`users/${encodeURIComponent(id)}/enable`, {}),
+  setRole: (id: string, role: HubRole) => post<object>(`users/${encodeURIComponent(id)}/role`, { role }),
+  reset: (id: string) => post<IssuedInvitation>(`users/${encodeURIComponent(id)}/reset`, {}),
   machines: () => request<HubMachine[]>("machines"),
   createCode: () => request<EnrollmentCode>("machines/code", { method: "POST" }),
   revoke: (id: string) => request<void>(`machines/${encodeURIComponent(id)}`, { method: "DELETE" }),

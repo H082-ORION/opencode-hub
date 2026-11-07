@@ -353,14 +353,14 @@ MODE=installer
 PURGER=0
 
 DATA_DIR="/var/lib/opencode-hub"
-ENV_FILE="/etc/opencode-hub.env"
+# Mot de passe unique des anciennes versions du hub : plus créé, retiré s'il reste.
+ANCIEN_ENV_FILE="/etc/opencode-hub.env"
 UNIT_HUB="/etc/systemd/system/opencode-hub.service"
 UNIT_CLIENT="/etc/systemd/system/opencode-agent.service"
 CADDYFILE="/etc/caddy/Caddyfile"
 BIN_CIBLE="/usr/local/bin/opencode"
 # Marque reconnue par script/hub/uninstall.sh : la garder identique.
 MARQUE="# Managed by opencode script/hub/install.sh"
-MOT_DE_PASSE_GENERE=""
 
 aide() {
   t "Installe Caddy, le hub et/ou le client opencode-hub, avec un service systemd à démarrage automatique." \
@@ -592,7 +592,7 @@ desinstaller() {
   local present_caddy=0 present_hub=0 present_client=0 i u sauvegarde
   [[ -f "$CADDYFILE" ]] && grep -qF "$MARQUE" "$CADDYFILE" && present_caddy=1
   command -v caddy >/dev/null && present_caddy=1
-  [[ -f "$UNIT_HUB" || -f "$ENV_FILE" ]] && present_hub=1
+  [[ -f "$UNIT_HUB" || -f "$ANCIEN_ENV_FILE" ]] && present_hub=1
   [[ -f "$UNIT_CLIENT" ]] && present_client=1
 
   if ((!INSTALLER_CADDY && !INSTALLER_HUB && !INSTALLER_CLIENT)); then
@@ -618,7 +618,7 @@ desinstaller() {
   fi
   if ((INSTALLER_HUB)); then
     if ((PURGER)) || oui_non "$(t "Supprimer aussi les données du hub ($DATA_DIR) ?" "Also delete the hub data ($DATA_DIR)?")" n; then effacer_donnees=1; fi
-    recap+=("${bold}Hub${reset}     $(t "service opencode-hub et $ENV_FILE retirés" "opencode-hub service and $ENV_FILE removed")$( ((effacer_donnees)) && echo ", ${red}$(t "données effacées" "data deleted")${reset}" || true)")
+    recap+=("${bold}Hub${reset}     $(t "service opencode-hub retiré" "opencode-hub service removed")$( ((effacer_donnees)) && echo ", ${red}$(t "données effacées" "data deleted")${reset}" || true)")
   fi
   if ((INSTALLER_CADDY)); then
     if command -v caddy >/dev/null && { ((PURGER)) || oui_non "$(t "Désinstaller aussi le paquet Caddy ?" "Also uninstall the Caddy package?")" n; }; then retirer_caddy=1; fi
@@ -639,7 +639,7 @@ desinstaller() {
     oui_non "$(t "Lancer la désinstallation ?" "Start the uninstall?")" n || die "$(t "abandon : rien n'a été modifié." "aborted: nothing was changed.")"
   fi
   if ((effacer_donnees)); then
-    confirmer_grave "$(t "Les données du hub ($DATA_DIR : machines, fournisseurs, réglages) seront effacées." "The hub data ($DATA_DIR: machines, providers, settings) will be deleted.")" \
+    confirmer_grave "$(t "Les données du hub ($DATA_DIR : comptes, machines, fournisseurs, réglages) seront effacées." "The hub data ($DATA_DIR: accounts, machines, providers, settings) will be deleted.")" \
       "$(t "SUPPRIMER" "DELETE")" || die "$(t "abandon : rien n'a été modifié." "aborted: nothing was changed.")"
   fi
 
@@ -663,10 +663,11 @@ desinstaller() {
     etape "Hub"
     u="$(cle_unite "$UNIT_HUB" User)"
     systemctl disable --now opencode-hub >/dev/null 2>&1 || true
-    rm -f "$UNIT_HUB" "$ENV_FILE"
+    # Le fichier d'environnement ne vient que d'une ancienne installation ; il est retiré s'il reste.
+    rm -f "$UNIT_HUB" "$ANCIEN_ENV_FILE"
     systemctl daemon-reload
     systemctl reset-failed opencode-hub >/dev/null 2>&1 || true
-    ok "$(t "Service opencode-hub et $ENV_FILE retirés" "opencode-hub service and $ENV_FILE removed")"
+    ok "$(t "Service opencode-hub retiré" "opencode-hub service removed")"
     if ((effacer_donnees)); then
       rm -rf "$DATA_DIR"
       ok "$(t "Données effacées" "Data deleted")${DP}$DATA_DIR"
@@ -1018,6 +1019,13 @@ fi
 
 # ------------------------------------------------------------------ Hub
 
+# inviter_admin — crée une invitation administrateur sous l'utilisateur du hub, avec l'environnement de son service.
+inviter_admin() {
+  runuser -u "$HUB_UTILISATEUR" -- env HOME="$DATA_DIR" XDG_DATA_HOME="$DATA_DIR/.local/share" \
+    XDG_CONFIG_HOME="$DATA_DIR/.config" XDG_CACHE_HOME="$DATA_DIR/.cache" XDG_STATE_HOME="$DATA_DIR/.local/state" \
+    "$OPENCODE_BIN" hub invite --admin --data "$DATA_DIR"
+}
+
 attendre_hub() {
   local _
   command -v curl >/dev/null || return 0
@@ -1037,18 +1045,16 @@ if ((INSTALLER_HUB)); then
       useradd --system --home-dir "$DATA_DIR" --create-home --shell /usr/sbin/nologin "$HUB_UTILISATEUR"
       ok "$(t "Utilisateur système créé" "System user created")${DP}$HUB_UTILISATEUR"
     fi
-    install -d -m 0750 -o "$HUB_UTILISATEUR" -g "$HUB_UTILISATEUR" "$DATA_DIR"
+    # Comptes, enregistrements OPAQUE et clé du serveur : lisibles par l'utilisateur du hub seul.
+    install -d -m 0700 -o "$HUB_UTILISATEUR" -g "$HUB_UTILISATEUR" "$DATA_DIR"
     runuser -u "$HUB_UTILISATEUR" -- test -x "$OPENCODE_BIN" || die "$(t "$HUB_UTILISATEUR ne peut pas exécuter $OPENCODE_BIN." "$HUB_UTILISATEUR cannot execute $OPENCODE_BIN.")"
-
-    if [[ -f "$ENV_FILE" ]]; then
-      ok "$(t "$ENV_FILE conservé (mot de passe inchangé)" "$ENV_FILE kept (password unchanged)")"
-    else
-      MOT_DE_PASSE_GENERE="$(openssl rand -base64 24 2>/dev/null || head -c 24 /dev/urandom | base64)"
-      (umask 077; printf 'OPENCODE_HUB_PASSWORD=%s\n' "$MOT_DE_PASSE_GENERE" >"$ENV_FILE")
-      ok "$(t "Mot de passe du hub créé dans" "Hub password created in") $ENV_FILE"
+    # Sans base, le hub n'a encore aucun compte : une invitation administrateur suivra son démarrage.
+    premiere_installation=0
+    [[ -f "$DATA_DIR/hub.db" ]] || premiere_installation=1
+    if [[ -f "$ANCIEN_ENV_FILE" ]]; then
+      rm -f "$ANCIEN_ENV_FILE"
+      ok "$(t "Ancien mot de passe du hub retiré ($ANCIEN_ENV_FILE) : les comptes le remplacent" "Old hub password removed ($ANCIEN_ENV_FILE): accounts replace it")"
     fi
-    chown root:root "$ENV_FILE"
-    chmod 0600 "$ENV_FILE"
 
     cat >"$UNIT_HUB" <<EOF
 $MARQUE
@@ -1062,7 +1068,6 @@ Wants=network-online.target
 Type=simple
 User=$HUB_UTILISATEUR
 Group=$HUB_UTILISATEUR
-EnvironmentFile=-$ENV_FILE
 Environment=HOME=$DATA_DIR
 Environment=XDG_DATA_HOME=$DATA_DIR/.local/share
 Environment=XDG_CONFIG_HOME=$DATA_DIR/.config
@@ -1092,20 +1097,32 @@ EOF
     systemctl daemon-reload
     systemctl enable opencode-hub >/dev/null 2>&1
     systemctl restart opencode-hub
+    hub_pret=0
     if suivre "$(t "Démarrage du hub" "Starting the hub")" attendre_hub; then
       ok "$(t "Hub en marche, démarrage automatique activé" "Hub running, start at boot enabled")"
+      hub_pret=1
     else
       warn "$(t "le hub ne répond pas encore sur 127.0.0.1:$PORT" "the hub does not answer on 127.0.0.1:$PORT yet")${DP}journalctl -u opencode-hub -e"
     fi
-    if [[ -n "$MOT_DE_PASSE_GENERE" ]]; then
-      echo
-      cadre "$yellow" "$(t "Mot de passe du hub" "Hub password")" "" "${bold}$MOT_DE_PASSE_GENERE${reset}" "" \
-        "$(t "Affiché une seule fois. Il reste dans $ENV_FILE (OPENCODE_HUB_PASSWORD)." "Shown only once. It stays in $ENV_FILE (OPENCODE_HUB_PASSWORD).")"
+    # Le premier compte se crée par une invitation : à la première installation, ou sur demande quand le hub a déjà
+    # ses comptes (un lien de plus ne sert qu'à un administrateur qui a perdu l'accès).
+    if ((hub_pret)) && { ((premiere_installation)) || oui_non "$(t "Créer une invitation administrateur ?" "Create an administrator invitation?")" n; }; then
+      if sortie="$(inviter_admin 2>&1)" && lien="$(grep -oE 'https?://[^[:space:]]+/register\?invite=[^[:space:]]+' <<<"$sortie" | tail -n1)" && [[ -n "$lien" ]]; then
+        echo
+        cadre "$yellow" "$(t "Invitation administrateur" "Administrator invitation")" "" "${bold}$lien${reset}" "" \
+          "$(t "Lien à usage unique, valable 7 jours : il crée un compte administrateur." "One-time link, valid for 7 days: it creates an administrator account.")" \
+          "$(t "Affiché une seule fois ; ne le transmettre qu'à la personne concernée." "Shown only once; give it only to the person it is for.")"
+      else
+        warn "$(t "invitation impossible à créer" "could not create the invitation")${DP}$sortie"
+      fi
+    elif ((!hub_pret)); then
+      info "$(t "Une fois le hub démarré, créer le premier compte avec" "Once the hub runs, create the first account with")"
+      echo "  sudo -u $HUB_UTILISATEUR env HOME=$DATA_DIR $OPENCODE_BIN hub invite --admin --data $DATA_DIR"
     fi
   else
     info "$(t "Sans service : lancer le hub à la main avec" "Without a service: start the hub by hand with")"
     echo "  $OPENCODE_BIN hub --hostname $HUB_HOTE --port $PORT --url $HUB_URL"
-    info "${dim}$(t "Le mot de passe est affiché au premier démarrage." "The password is shown on the first start.")${reset}"
+    info "${dim}$(t "Sans compte, il affiche au premier démarrage le lien qui crée l'administrateur." "Without accounts, its first start prints the link that creates the administrator.")${reset}"
   fi
 fi
 
@@ -1184,7 +1201,7 @@ fi
 ((INSTALLER_HUB && SERVICE_HUB)) && fin+=("$(pad "$(t "Journal du hub" "Hub logs")" 16) ${dim}journalctl -u opencode-hub -f${reset}")
 ((INSTALLER_CADDY)) && fin+=("$(pad "$(t "Journal Caddy" "Caddy logs")" 16) ${dim}journalctl -u caddy -f${reset}")
 ((INSTALLER_CLIENT && SERVICE_CLIENT)) && fin+=("$(pad "$(t "Journal agent" "Agent logs")" 16) ${dim}journalctl -u opencode-agent -f${reset}")
-((INSTALLER_HUB && SERVICE_HUB)) && fin+=("$(pad "$(t "Mot de passe" "Password")" 16) ${dim}$ENV_FILE${reset}")
+((INSTALLER_HUB && SERVICE_HUB)) && fin+=("$(pad "Invitation" 16) ${dim}sudo -u $HUB_UTILISATEUR env HOME=$DATA_DIR $OPENCODE_BIN hub invite --admin --data $DATA_DIR${reset}")
 fin+=("$(pad "$(t "État" "Status")" 16) ${dim}./install.sh --status${reset}")
 if ((INSTALLER_HUB && !INSTALLER_CLIENT)); then
   fin+=("" "$(t "Relier une machine : sur celle-ci," "Connect a machine: on that machine, run")")

@@ -1,34 +1,44 @@
 import { Loader } from "@opencode/ui/loader"
 import { createSignal, Match, onMount, Switch } from "solid-js"
-import { hubApi } from "./api"
+import { hubApi, type HubSession } from "./api"
 import { Dashboard } from "./dashboard"
 import { Login } from "./login"
+import { Register } from "./register"
 
-type Session = "checking" | "signed-out" | "signed-in"
+type Session = { status: "checking" } | { status: "signed-out" } | { status: "signed-in"; session: HubSession }
 
 export function Hub() {
-  const [session, setSession] = createSignal<Session>("checking")
+  // An invitation link opens the registration page whether or not someone is signed in on this browser.
+  if (location.pathname === "/register") return <Register />
+
+  const [session, setSession] = createSignal<Session>({ status: "checking" })
 
   onMount(() => {
     // Any failure, including a hub that cannot be reached, shows the sign-in form, which reports its own errors.
     void hubApi.session().then(
-      () => setSession("signed-in"),
-      () => setSession("signed-out"),
+      (current) => setSession({ status: "signed-in", session: current }),
+      () => setSession({ status: "signed-out" }),
     )
   })
 
+  const signedIn = () => {
+    const current = session()
+
+    return current.status === "signed-in" ? current.session : undefined
+  }
+
   return (
     <Switch>
-      <Match when={session() === "checking"}>
+      <Match when={session().status === "checking"}>
         <div class="hub-center">
           <Loader class="size-4 text-v2-icon-icon-muted" />
         </div>
       </Match>
-      <Match when={session() === "signed-out"}>
+      <Match when={session().status === "signed-out"}>
         <Login />
       </Match>
-      <Match when={session() === "signed-in"}>
-        <Dashboard onSignedOut={() => setSession("signed-out")} />
+      <Match when={signedIn()}>
+        {(current) => <Dashboard session={current()} onSignedOut={() => setSession({ status: "signed-out" })} />}
       </Match>
     </Switch>
   )

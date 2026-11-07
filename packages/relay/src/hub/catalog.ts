@@ -1,4 +1,5 @@
 import { Option, Schema } from "effect"
+import { chmod } from "node:fs/promises"
 import path from "node:path"
 
 export * as Catalog from "./catalog.js"
@@ -73,7 +74,9 @@ export function create(input: { data: string; fetch?: typeof fetch; source?: str
         const entries = parse(await response.json())
         if (entries.length === 0) throw new Error("catalog has no usable providers")
         state.cached = { fetchedAt: now(), entries }
-        await Bun.write(file, JSON.stringify(state.cached))
+        await Bun.write(file, JSON.stringify(state.cached), { mode: 0o600 })
+        // The mode above only applies when the file is created; an older cache keeps its own.
+        await chmod(file, 0o600)
         return entries
       })
       .catch(() => state.cached?.entries ?? FALLBACK)

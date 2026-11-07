@@ -11,10 +11,11 @@ BINARY=""
 PORT="4800"
 SERVICE_USER="opencode"
 DATA_DIR="/var/lib/opencode-hub"
-ENV_FILE="/etc/opencode-hub.env"
+# Held the single hub password of earlier versions; no longer created, removed when found.
+OLD_ENV_FILE="/etc/opencode-hub.env"
 UNIT_FILE="/etc/systemd/system/opencode-hub.service"
 CADDYFILE="/etc/caddy/Caddyfile"
-GENERATED_PASSWORD=""
+INVITATION=""
 
 usage() {
   cat <<EOF
@@ -149,7 +150,11 @@ else
   log "Creating system user $SERVICE_USER"
   useradd --system --home-dir "$DATA_DIR" --create-home --shell /usr/sbin/nologin "$SERVICE_USER"
 fi
-install -d -m 0750 -o "$SERVICE_USER" -g "$SERVICE_USER" "$DATA_DIR"
+# Accounts, OPAQUE records and the OPAQUE server key: readable by the hub user only.
+install -d -m 0700 -o "$SERVICE_USER" -g "$SERVICE_USER" "$DATA_DIR"
+# Without a database the hub has no account yet; an administrator invitation follows its start.
+FIRST_INSTALL=""
+[[ -f "$DATA_DIR/hub.db" ]] || FIRST_INSTALL=1
 
 if [[ -n "$BINARY" ]]; then
   log "Installing $BINARY to /usr/local/bin/opencode"
@@ -210,20 +215,12 @@ else
 fi
 caddy validate --adapter caddyfile --config "$CADDYFILE" >/dev/null
 
-# --- Hub password and systemd unit ---------------------------------------------------------------------------------
+# --- Systemd unit --------------------------------------------------------------------------------------------------
 
-if [[ -f "$ENV_FILE" ]]; then
-  log "$ENV_FILE exists; keeping it"
-else
-  GENERATED_PASSWORD="$(openssl rand -base64 24 2>/dev/null || head -c 24 /dev/urandom | base64)"
-  (
-    umask 077
-    printf 'OPENCODE_HUB_PASSWORD=%s\n' "$GENERATED_PASSWORD" >"$ENV_FILE"
-  )
-  log "Created $ENV_FILE"
+if [[ -f "$OLD_ENV_FILE" ]]; then
+  rm -f "$OLD_ENV_FILE"
+  log "Removed $OLD_ENV_FILE: accounts replace the old hub password"
 fi
-chown root:root "$ENV_FILE"
-chmod 0600 "$ENV_FILE"
 
 log "Writing $UNIT_FILE"
 cat >"$UNIT_FILE" <<EOF
@@ -238,7 +235,6 @@ Wants=network-online.target
 Type=simple
 User=$SERVICE_USER
 Group=$SERVICE_USER
-EnvironmentFile=-$ENV_FILE
 Environment=HOME=$DATA_DIR
 Environment=XDG_DATA_HOME=$DATA_DIR/.local/share
 Environment=XDG_CONFIG_HOME=$DATA_DIR/.config
@@ -296,6 +292,15 @@ for _ in $(seq 1 20); do
 done
 [[ -n "$healthy" ]] || warn "the hub did not answer on 127.0.0.1:$PORT yet; check: journalctl -u opencode-hub -e"
 
+# The first account comes from an invitation, created as the hub user with the service's environment.
+INVITE_COMMAND=(runuser -u "$SERVICE_USER" -- env HOME="$DATA_DIR" XDG_DATA_HOME="$DATA_DIR/.local/share"
+  XDG_CONFIG_HOME="$DATA_DIR/.config" XDG_CACHE_HOME="$DATA_DIR/.cache" XDG_STATE_HOME="$DATA_DIR/.local/state"
+  "$OPENCODE_BIN" hub invite --admin --data "$DATA_DIR")
+if [[ -n "$healthy" && -n "$FIRST_INSTALL" ]]; then
+  output="$("${INVITE_COMMAND[@]}" 2>&1)" || warn "could not create the administrator invitation: $output"
+  INVITATION="$(grep -oE 'https?://[^[:space:]]+/register\?invite=[^[:space:]]+' <<<"$output" | tail -n1 || true)"
+fi
+
 # --- Summary -------------------------------------------------------------------------------------------------------
 
 cat <<EOF
@@ -306,19 +311,19 @@ opencode hub installed.
   Machines:    https://<machine-id>.$DOMAIN
   Hub logs:    journalctl -u opencode-hub -f
   Caddy logs:  journalctl -u caddy -f
-  Password:    stored in $ENV_FILE (OPENCODE_HUB_PASSWORD)
+  Invitation:  sudo -u $SERVICE_USER env HOME=$DATA_DIR $OPENCODE_BIN hub invite --admin --data $DATA_DIR
 
 Enroll a machine: open the dashboard, click "add machine", then on the machine run
   opencode agent join https://$DOMAIN --code <code>
   opencode agent run
 EOF
 
-if [[ -n "$GENERATED_PASSWORD" ]]; then
+if [[ -n "$INVITATION" ]]; then
   cat <<EOF
 
-Generated hub password (shown only once):
+Administrator invitation (one-time link, valid for 7 days, shown only once):
 
-  $GENERATED_PASSWORD
+  $INVITATION
 
 EOF
 fi

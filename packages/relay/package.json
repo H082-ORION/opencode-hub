@@ -21,6 +21,7 @@
     "test": "bun test --only-failures"
   },
   "dependencies": {
+    "@serenity-kit/opaque": "1.1.0",
     "effect": "catalog:",
     "jose": "6.0.11"
   },
