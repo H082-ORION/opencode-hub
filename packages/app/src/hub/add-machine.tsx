@@ -103,9 +103,14 @@ export function AddMachineDialog(props: { fail: Fail }) {
             {(code) => (
               <div class="hub-stack">
                 <div class="hub-code-block" data-expired={remaining() === 0 ? "" : undefined}>
-                  <span class="hub-code" aria-label={copy.add.code}>
-                    {code.code}
-                  </span>
+                  <div class="hub-code-row">
+                    <span class="hub-code" aria-label={copy.add.code}>
+                      {code.code}
+                    </span>
+                    <Show when={remaining() > 0}>
+                      <CopyButton text={code.code} />
+                    </Show>
+                  </div>
                   <span class="hub-code-expiry" role="status">
                     {remaining() === 0 ? copy.add.expired : copy.add.expiresIn(countdown())}
                   </span>
@@ -138,18 +143,24 @@ export function AddMachineDialog(props: { fail: Fail }) {
 }
 
 function CommandLine(props: { command: string }) {
-  const feedback = createCopyFeedback()
-
   return (
     <div class="hub-command">
       <code dir="ltr">{props.command}</code>
-      <IconButton
-        variant="ghost-muted"
-        size="small"
-        icon={<Icon name={feedback.copied() ? "check" : "outline-copy"} />}
-        aria-label={feedback.copied() ? copy.copied : copy.copy}
-        onClick={() => feedback.copy(props.command)}
-      />
+      <CopyButton text={props.command} />
     </div>
+  )
+}
+
+function CopyButton(props: { text: string }) {
+  const feedback = createCopyFeedback()
+
+  return (
+    <IconButton
+      variant="ghost-muted"
+      size="small"
+      icon={<Icon name={feedback.copied() ? "check" : "outline-copy"} />}
+      aria-label={feedback.copied() ? copy.copied : copy.copy}
+      onClick={() => feedback.copy(props.text)}
+    />
   )
 }
