@@ -14,6 +14,10 @@
   <img src="docs/hub/dashboard.png" alt="Hub dashboard: connected machines and LLM providers" width="860">
 </p>
 
+> [!IMPORTANT]
+> **Independent project.** opencode-hub is not built by the OpenCode team and is not affiliated with them in any way.
+> It is maintained separately; for questions or issues about the hub, use this repository, not the OpenCode project.
+
 > [!WARNING]
 > **Work in progress.** The hub works end to end locally, but has not been proven in production yet. The interfaces,
 > the protocol and the data format may still change.
@@ -162,7 +166,8 @@ Without `--code`, the code shows up neither in the process list nor in the shell
 
 ## OpenCode
 
-Everything else is [OpenCode](https://github.com/anomalyco/opencode), developed by its team. The original README is
+Everything else is [OpenCode](https://github.com/anomalyco/opencode), developed by its team. opencode-hub is not
+built by the OpenCode team and is not affiliated with them in any way. The original README is
 kept in [`README.opencode.md`](README.opencode.md). This fork follows the upstream `dev` branch; the hub is developed on
 the `remote-machines` branch.
 
