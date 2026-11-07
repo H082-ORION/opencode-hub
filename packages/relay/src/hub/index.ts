@@ -48,6 +48,8 @@ const SESSION_PATH = "/auth/hub-session"
 const PING_INTERVAL = 25_000
 const KEEPALIVE_INTERVAL = 25_000
 const HELLO_TIMEOUT = 10_000
+/** The skills version of an instance without skills (they arrive at step 6): the digest of an empty list. */
+const NO_SKILLS = createHash("sha256").update("[]").digest("hex")
 const LABEL = /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/
 const PROVIDER_ID = /^[a-zA-Z0-9][a-zA-Z0-9._-]{0,63}$/
 /** The provider changes, all of which seal a secret under the user's key. */
@@ -146,17 +148,18 @@ export async function start(options: Options) {
       listeners.forEach((listener) => sessions.includes(listener.session) && listener.close())
       recheckStreams()
     },
-    // A reset deletes the user's providers: their machines stop listing them.
-    reset: (user) => pushConfig(user),
-    // A disabled enroller's organization machines lose its providers; enabled again, they get them back.
-    updated: (user) => pushConfig(user),
+    // A reset or disabled account loses its instances; enabled again (or given adopted machines), its personal
+    // machines get one back.
+    reset: () => syncInstances(),
+    updated: () => syncInstances(),
   })
   const orgs = Orgs.create({
     store,
-    changed(users) {
-      // A removed member's open streams to the organization's machines close now, not at their next request.
+    changed() {
+      // A removed member's open streams to the organization's machines close now, not at their next request, and
+      // their instances there are deleted.
       recheckStreams()
-      users.forEach(pushConfig)
+      syncInstances()
       notifyMachines()
     },
   })
@@ -198,8 +201,7 @@ export async function start(options: Options) {
     if (pathname === "/hub/tls-allowed") return tlsAllowed(url)
     if (pathname === "/hub/agent/enroll") return enroll(request, server)
     if (pathname === "/hub/agent/connect") return connect(request, server)
-    if (pathname.startsWith("/llm/"))
-      return Llm.proxy(request, url, { store, providers, activeUser: accounts.activeUser, chatgpt })
+    if (pathname.startsWith("/llm/")) return Llm.proxy(request, url, { store, providers, allowed: mayOpen, chatgpt })
     if (pathname.startsWith("/hub/api/")) return api(request, pathname.slice("/hub/api/".length), server)
     const current = accounts.current(request)
     if (pathname === "/hub/handoff") {
@@ -255,8 +257,12 @@ export async function start(options: Options) {
       if (!target || (user.role !== "admin" && !canOpen(user, target))) return json(404, { error: "Unknown machine." })
       if (!canRevoke(user, target))
         return json(403, { error: "Only the member who enrolled this machine or an administrator can revoke it." })
+      const instances = store.instancesOf(id)
       if (!store.deleteMachine(id)) return json(404, { error: "Unknown machine." })
-      tunnels.get(id)?.ws.close(4403, "machine revoked")
+      // The agent deletes its instances before it stops for good.
+      const tunnel = tunnels.get(id)
+      instances.forEach((instance) => tunnel?.send(Protocol.encodeJson(Protocol.Type.DROP, 0, { iid: instance.id })))
+      tunnel?.ws.close(4403, "machine revoked")
       tunnels.delete(id)
       notifyMachines()
       return new Response(null, { status: 204 })
@@ -401,6 +407,12 @@ export async function start(options: Options) {
     return machine.owner_user_id === null && store.isMember(machine.owner_org_id, user.id)
   }
 
+  /** Whether a user id names an active account that may open the machine. */
+  function mayOpen(id: string, machine: Store.Machine) {
+    const user = accounts.activeUser(id)
+    return user !== undefined && canOpen(user, machine)
+  }
+
   /** Administrators revoke any machine; owners their own, and members the organization machines they enrolled. */
   function canRevoke(user: Store.User, machine: Store.Machine) {
     if (user.role === "admin") return true
@@ -489,8 +501,10 @@ export async function start(options: Options) {
     const cookies = Auth.stripCookie(cookie)
     if (cookies) headers.push(["cookie", cookies])
     const path = `${url.pathname}${url.search}`
-    if (upgrade) return tunnel.websocket(request, server, path, headers, current.session)
-    return tunnel.http(request, path, headers, current.session)
+    // Each user reaches their own instance of the machine, created at their first request.
+    const instance = openInstance(tunnel, machine, current.user.id)
+    if (upgrade) return tunnel.websocket(request, server, instance, path, headers, current.session)
+    return tunnel.http(request, instance, path, headers, current.session)
   }
 
   function session(url: URL, label: string) {
@@ -567,12 +581,27 @@ export async function start(options: Options) {
     tunnels.set(machine.id, tunnel)
     store.touchMachine(machine.id)
     notifyMachines()
+    // The agent keeps the tokens it still holds, as long as they are the current ones.
+    const held = new Map((greeting.instances ?? []).map((entry) => [entry.iid, entry.hash]))
+    store
+      .instancesOf(machine.id)
+      .filter((instance) => instance.token_hash !== null && held.get(instance.id) === instance.token_hash)
+      .forEach((instance) => tunnel.held.add(instance.id))
+    // A personal machine's owner instance is the machine's own opencode service, configured even before it is opened.
+    const owner = machine.owner_org_id === null ? machine.owner_user_id : null
+    if (owner !== null && mayOpen(owner, machine)) store.ensureInstance(machine.id, owner)
+    const instances = store.instancesOf(machine.id)
     tunnel.send(
       Protocol.encodeJson(Protocol.Type.READY, 0, {
         machine: { id: machine.id, name: machine.name },
-        llm: llmConfig(machine),
+        owner: machine.owner_org_id === null ? "user" : "org",
+        instances: instances.map((instance) => instance.id),
       }),
     )
+    // Configurations may have changed while the machine was offline.
+    instances
+      .filter((instance) => instance.user_id === owner || tunnel.held.has(instance.id))
+      .forEach((instance) => sendInstance(tunnel, instance))
     pings.set(
       tunnel,
       setInterval(() => tunnel.send(Protocol.encode(Protocol.Type.PING, 0)), options.pingInterval ?? PING_INTERVAL),
@@ -580,32 +609,65 @@ export async function start(options: Options) {
   }
 
   /**
-   * The providers a machine may call: its key holder's (see `Llm.keyHolder`). An organization machine whose enroller
-   * left or was disabled, and an ownerless machine, get none.
+   * The user's instance on a machine they may open, created at their first request. Its configuration and a new
+   * token go to the agent first, unless it already holds them on this connection.
    */
-  function llmConfig(machine: Store.Machine): Protocol.LlmConfig {
-    const holder = Llm.keyHolder(machine, { store, activeUser: accounts.activeUser })
-    return {
-      baseURL: `${origin}/llm`,
-      providers:
-        holder.kind === "user"
-          ? providers.summaries(holder.user).map((provider) => ({ id: provider.id, name: provider.name }))
-          : [],
-    }
+  function openInstance(tunnel: Tunnel.Instance, machine: Store.Machine, user: string) {
+    const instance = store.ensureInstance(machine.id, user)
+    if (!tunnel.held.has(instance.id)) sendInstance(tunnel, instance)
+    return instance.id
   }
 
   /**
-   * Sends the current provider list to the connected machines whose keys are, or were, a user's: their personal
-   * machines and the organization machines they enrolled. Nobody else's machines hear about it.
+   * Sends an instance's configuration: its user's providers, no connectors and no skills yet (steps 6 and 7). A token
+   * is issued, replacing the previous one, only when the agent does not hold the current one.
    */
+  function sendInstance(tunnel: Tunnel.Instance, instance: Store.InstanceRow) {
+    const token = tunnel.held.has(instance.id) ? undefined : store.issueInstanceToken(instance.id)
+    tunnel.held.add(instance.id)
+    tunnel.send(
+      Protocol.encodeJson(Protocol.Type.INSTANCE, 0, {
+        iid: instance.id,
+        token,
+        llm: {
+          baseURL: `${origin}/llm`,
+          providers: providers
+            .summaries(instance.user_id)
+            .map((provider) => ({ id: provider.id, name: provider.name })),
+        },
+        mcp: [],
+        skills: { version: NO_SKILLS },
+      }),
+    )
+  }
+
+  /** Sends the new configuration of a user's instances to the connected machines that run them. */
   function pushConfig(user: string) {
+    tunnels.forEach((tunnel) =>
+      store
+        .instancesOf(tunnel.machine.id)
+        .filter((instance) => instance.user_id === user && tunnel.held.has(instance.id))
+        .forEach((instance) => sendInstance(tunnel, instance)),
+    )
+  }
+
+  /**
+   * Brings instances in line with who may open what: deletes those whose user lost access (their tokens die with
+   * them) and tells their agents to drop them, then gives connected personal machines their owner's instance if they
+   * lack it (an account enabled again, machines adopted by an administrator).
+   */
+  function syncInstances() {
+    store.pruneInstances().forEach((instance) => {
+      const tunnel = tunnels.get(instance.machine_id)
+      if (!tunnel) return
+      tunnel.held.delete(instance.id)
+      tunnel.send(Protocol.encodeJson(Protocol.Type.DROP, 0, { iid: instance.id }))
+    })
     tunnels.forEach((tunnel) => {
-      // The stored row, not the one captured at HELLO: its owner may have been set since (adoption).
       const machine = store.machine(tunnel.machine.id)
-      if (!machine) return
-      const personal = machine.owner_org_id === null && machine.owner_user_id === user
-      const enrolled = machine.owner_org_id !== null && machine.enrolled_by === user
-      if (personal || enrolled) tunnel.send(Protocol.encodeJson(Protocol.Type.CONFIG, 0, llmConfig(machine)))
+      const owner = machine?.owner_org_id === null ? machine.owner_user_id : null
+      if (!machine || owner === null || !mayOpen(owner, machine) || store.instance(machine.id, owner)) return
+      sendInstance(tunnel, store.ensureInstance(machine.id, owner))
     })
   }
 

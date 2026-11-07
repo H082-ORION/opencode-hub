@@ -55,9 +55,11 @@ export function create(ws: ServerWebSocket<SocketData>, machine: Machine) {
     machine,
     ws,
     send,
+    /** The instances whose current token the agent holds on this connection, so INSTANCE can omit it. */
+    held: new Set<string>(),
 
-    /** Proxies one HTTP request for a browser session; `path` includes the query string. */
-    http(request: Request, path: string, headers: [string, string][], session: string) {
+    /** Proxies one HTTP request for a browser session to an instance; `path` includes the query string. */
+    http(request: Request, instance: string, path: string, headers: [string, string][], session: string) {
       const id = state.next++
       const head = Promise.withResolvers<Head | undefined>()
       const body = new ReadableStream<Uint8Array>({
@@ -68,7 +70,9 @@ export function create(ws: ServerWebSocket<SocketData>, machine: Machine) {
           reset(id, "client went away")
         },
       })
-      send(Protocol.encodeJson(Protocol.Type.OPEN, id, { kind: "http", method: request.method, path, headers }))
+      send(
+        Protocol.encodeJson(Protocol.Type.OPEN, id, { kind: "http", instance, method: request.method, path, headers }),
+      )
       request.signal.addEventListener("abort", () => reset(id, "client went away"), { once: true })
       pump(request.body, id).catch((error: unknown) => reset(id, String(error)))
       return head.promise.then((response) => {
@@ -82,6 +86,7 @@ export function create(ws: ServerWebSocket<SocketData>, machine: Machine) {
     async websocket(
       request: Request,
       server: Server<SocketData>,
+      instance: string,
       path: string,
       headers: [string, string][],
       session: string,
@@ -94,7 +99,7 @@ export function create(ws: ServerWebSocket<SocketData>, machine: Machine) {
         .split(",")
         .map((protocol) => protocol.trim())
         .filter(Boolean)
-      send(Protocol.encodeJson(Protocol.Type.OPEN, id, { kind: "ws", path, headers, protocols }))
+      send(Protocol.encodeJson(Protocol.Type.OPEN, id, { kind: "ws", instance, path, headers, protocols }))
       const response = await head.promise
       if (!response || response.status !== 101) {
         streams.delete(id)

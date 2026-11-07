@@ -14,9 +14,11 @@ export default Runtime.handler(
     }
     process.stdout.write(
       [
-        `hub      ${enrollment.url}`,
-        `machine  ${enrollment.machine.name} (${enrollment.machine.id})`,
-        `file     ${yield* RelayAgent.file()}`,
+        `hub       ${enrollment.url}`,
+        `machine   ${enrollment.machine.name} (${enrollment.machine.id})`,
+        `file      ${yield* RelayAgent.file()}`,
+        // An organization machine keeps each member's instance here; instance tokens live only in memory.
+        `instances ${yield* RelayAgent.instancesRoot()}`,
       ].join(EOL) + EOL,
     )
   }),

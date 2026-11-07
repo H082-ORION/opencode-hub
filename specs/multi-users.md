@@ -398,6 +398,56 @@ Chacune est une PR qui fonctionne seule, avec ses tests.
      affichent « Joins … ». « All machines » indique « Organization <nom> ».
 5. **Instances par utilisateur** : protocole 2 du tunnel, instances à la demande dans l'agent, jeton par instance,
    relais LLM par instance, suppression des instances au retrait d'un membre.
+   **Faite** (2026-11-07). Écarts et précisions :
+   - Table `instance` (`id` = iid de 128 bits en base64url, `machine_id`, `user_id`, `token_hash`, `created_at`,
+     `token_issued_at`, unique `(machine_id, user_id)`). Le jeton n'est pas émis à la création : il l'est quand le
+     hub envoie INSTANCE à un agent qui ne détient pas le jeton courant, et il **remplace** le précédent. La colonne
+     `machine.llm_token_hash` disparaît (table reconstruite sur une base existante, SQLite ne sachant pas supprimer
+     une colonne `UNIQUE`) ; l'enrôlement ne rend plus de `llmToken`.
+   - Ajout au protocole : HELLO porte `instances: [{ iid, hash }]`, les jetons que l'agent détient encore (SHA-256
+     hexadécimal) ; INSTANCE n'a `token` que lorsque le hub en émet un nouveau. Sans cela, le hub ne pourrait pas
+     savoir si l'agent a encore le jeton après une reconnexion, et devrait en émettre un à chaque fois : la machine
+     personnelle redémarrerait son service à chaque coupure réseau. Un hash qui ne correspond pas (trame perdue)
+     vaut « pas de jeton » : le hub en émet un nouveau.
+   - READY porte aussi `instances` (les iid encore valides) : c'est le mécanisme des retraits faits hors ligne.
+     L'agent oublie les instances absentes de la liste et supprime leurs dossiers, y compris ceux laissés sur disque
+     par une exécution précédente.
+   - Machine personnelle : l'instance du propriétaire est créée dès la connexion de l'agent (pas à la première
+     ouverture) et INSTANCE suit READY, pour que le service habituel, aussi utilisé localement, ait ses fournisseurs
+     comme avant. Son environnement enregistré gagne `OPENCODE_HUB_INSTANCE` (l'iid), que l'agent relit au démarrage
+     avec le jeton pour les annoncer dans HELLO ; il ne redémarre le service que si l'environnement change. DROP n'y
+     retire que ces trois variables : le dossier de l'instance est celui du compte, qui n'est **jamais** supprimé.
+   - Machine d'organisation : chaque instance est `opencode serve --stdio --hostname 127.0.0.1 --port 0`, enfant de
+     l'agent, avec un mot de passe aléatoire à chaque démarrage et ses `XDG_*` sous
+     `<données globales>/hub-instances/<iid>/` (`0700`). Le mode `--stdio` fait de stdin un bail : l'instance s'arrête
+     quand l'agent ferme stdin ou meurt, sans processus orphelin. L'environnement hérité de l'agent est filtré
+     (`XDG_*`, `OPENCODE_CONFIG*`, mots de passe et jeton de l'agent). Le dossier de travail est celui de l'agent (un
+     checkout source en a besoin pour le `bunfig.toml` de la CLI) ; le service personnel, lui, se place dans le
+     dossier personnel. Un changement de configuration arrête l'instance, qui redémarre à la requête suivante.
+   - Retrait d'accès : une seule règle, `pruneInstances`, supprime toute instance dont l'utilisateur ne pourrait plus
+     ouvrir la machine (mêmes conditions que l'accès : compte actif avec mot de passe, propriétaire ou membre). Elle
+     tourne après un retrait ou ajout de membre, une désactivation, une réactivation, un changement de rôle (adoption)
+     et une réinitialisation, puis DROP part vers les agents connectés. Une réactivation recrée l'instance du
+     propriétaire d'une machine personnelle connectée (nouveau jeton, clé verrouillée : 423). La révocation d'une
+     machine envoie DROP pour chaque instance avant de fermer le tunnel en 4403.
+   - Réinitialisation : comme le demandait la consigne de l'étape, elle supprime aussi les instances (sur une
+     machine d'organisation, les sessions du membre sont perdues ; sur sa machine personnelle, seule la configuration
+     du hub est retirée). La section « Réinitialisation » disait « machines conservées » : elles le sont.
+   - Relais LLM : 401 (jeton inconnu, jetons de deux instances, machine disparue) ; 403 « This account no longer has
+     access to this machine. » si l'utilisateur ne peut plus ouvrir la machine, contrôlé à chaque appel en plus de la
+     suppression de l'instance (fail-closed) ; puis 404 / 423 / 500 comme à l'étape 3. Un propriétaire désactivé
+     reçoit donc 401 (instance supprimée), et non plus 423 comme à l'étape 3. La règle provisoire de l'étape 4 (clés
+     de `enrolled_by`, `ENROLLER_GONE`) est supprimée.
+   - Indicateur `waiting` : utilisateur à clé verrouillée qui a un fournisseur **et** au moins une instance.
+   - `mcp: []` et `skills: { version }` (empreinte SHA-256 de la liste vide) dans INSTANCE ; SKILLS est défini et
+     décodé mais jamais envoyé.
+   - Agent : `agent.json` ne contient plus que `{ url, machine, tunnelToken }` ; un ancien fichier se charge et perd
+     son `llmToken` à la première lecture. `agent status` affiche le dossier des instances ; `agent leave` retire la
+     configuration du hub de l'environnement du service.
+   - Tableau de bord : seul le texte des sections d'organisation change (chaque membre a sa propre instance, ses
+     fournisseurs et ses sessions).
+   - Non fait : arrêt des instances inactives (hors périmètre) ; à la révocation d'une machine personnelle, l'agent
+     s'arrête avant d'avoir retiré la configuration du hub du service (le jeton, supprimé sur le hub, ne sert plus).
 6. **Skills** : skills personnels et d'organisation, héritage, distribution SKILLS, rechargement de l'instance.
 7. **Connecteurs MCP** : connecteurs par utilisateur à secrets chiffrés, relais `/mcp/`, configuration des instances,
    puis OAuth géré par le hub.

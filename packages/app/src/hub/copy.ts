@@ -142,7 +142,7 @@ export const copy = {
     revoked: (name: string) => `${name} was revoked`,
     revokeFailed: "Could not revoke the machine",
     orgDescription: (name: string) =>
-      `Machines of ${name}. Every member can open them; each one uses the providers of the member who added it.`,
+      `Machines of ${name}. Every member can open them, each in their own opencode instance with their own providers and sessions.`,
   },
   allMachines: {
     title: "All machines",
