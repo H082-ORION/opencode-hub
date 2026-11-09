@@ -1,11 +1,14 @@
 import type { Server, ServerWebSocket } from "bun"
 import { createHash } from "node:crypto"
+import path from "node:path"
 import { Option, Schema } from "effect"
 import { Protocol } from "../protocol.js"
 import { Skills } from "../skills.js"
 import { Accounts, json } from "./accounts.js"
 import { Auth } from "./auth.js"
 import { Catalog } from "./catalog.js"
+import { Chat } from "./chat.js"
+import { ChatTools } from "./chat-tools.js"
 import { ChatGPT } from "./chatgpt.js"
 import { Cloud } from "./cloud.js"
 import { Connectors } from "./connectors.js"
@@ -43,6 +46,8 @@ export type Options = {
   version?: string
   /** Where connectors may point (see `Egress`): by default public HTTPS servers only. */
   mcp?: Egress.Options
+  /** How to start the opencode server behind the hub's chat. Without it the hub has no chat. */
+  chat?: { command: readonly string[]; cwd?: string; fetch?: typeof fetch }
 }
 
 /** A browser following `/hub/api/events`; it only ever hears about its user's machines. */
@@ -191,6 +196,21 @@ export async function start(options: Options) {
     },
   })
 
+  const listen = options.hostname && !["0.0.0.0", "::"].includes(options.hostname) ? options.hostname : "127.0.0.1"
+  const chat: Chat.Instance | undefined =
+    options.chat &&
+    Chat.create({
+      store,
+      root: path.join(options.data, "chat"),
+      command: options.chat.command,
+      cwd: options.chat.cwd,
+      // Over the loopback, so a hub behind a public name does not need to reach itself through it.
+      llm: `http://${listen}:${server.port}/llm`,
+      tools: `http://${listen}:${server.port}${ChatTools.PATH}`,
+    })
+  const chatTools: ChatTools.Instance | undefined =
+    chat && ChatTools.create({ owner: chat.owner, skills, fetch: options.chat?.fetch })
+
   const cloud = Cloud.create({
     store,
     auth,
@@ -215,6 +235,7 @@ export async function start(options: Options) {
     createEnrollmentCode: (user: string, org?: string) => auth.createCode(user, org),
     async stop() {
       pings.forEach((timer) => clearInterval(timer))
+      await chat?.stop()
       cloud.stop()
       listeners.forEach((listener) => listener.close())
       tunnels.forEach((tunnel) => tunnel.ws.close(1001, "hub stopping"))
@@ -230,6 +251,8 @@ export async function start(options: Options) {
     if (host.endsWith(`.${domain}`)) return machineRoute(request, url, server, host.slice(0, -domain.length - 1))
     // Direct requests such as Caddy's on-demand TLS check reach the hub by IP address.
     if (url.pathname === "/hub/health" || url.pathname === "/hub/tls-allowed") return hubRoute(request, url, server)
+    // The chat instances call these over the loopback; every request still needs an instance token.
+    if (url.pathname.startsWith("/llm/") || url.pathname === ChatTools.PATH) return hubRoute(request, url, server)
     return redirect(`${origin}${url.pathname}${url.search}`)
   }
 
@@ -241,7 +264,9 @@ export async function start(options: Options) {
     if (pathname === "/hub/agent/connect") return connect(request, server)
     if (pathname === "/hub/host/enroll") return cloud.enroll(request, clientAddress(request, server))
     if (pathname === "/hub/host/connect") return connectHost(request, server)
-    if (pathname.startsWith("/llm/")) return Llm.proxy(request, url, { store, providers, allowed: mayOpen, chatgpt })
+    if (pathname.startsWith("/llm/"))
+      return Llm.proxy(request, url, { store, providers, allowed: mayOpen, chatgpt, chatOwner: chat?.owner })
+    if (pathname === ChatTools.PATH && chatTools) return chatTools.handle(request)
     if (pathname.startsWith("/mcp/"))
       return Mcp.proxy(request, url, { store, connectors, oauth, egress, allowed: mayOpen, origin })
     if (pathname === McpOAuth.CALLBACK_PATH) return oauthCallback(request, url)
@@ -274,6 +299,8 @@ export async function start(options: Options) {
     const current = accounts.current(request)
     if (!current) return json(401, { error: "Sign in to the hub first." })
     const user = current.user
+    const chatted = await chat?.handle(request, route, current)
+    if (chatted) return chatted
     // Before `orgs`, which owns every other `orgs/…` route.
     const skill = await skills.handle(request, route, current)
     if (skill) return skill

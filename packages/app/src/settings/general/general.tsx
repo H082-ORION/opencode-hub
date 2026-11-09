@@ -199,7 +199,7 @@ const TimelineWidthSetting = () => {
   )
 }
 
-const LanguageSetting = () => {
+export const LanguageSetting = () => {
   const language = useLanguage()
 
   const options = createMemo(() =>

@@ -18,6 +18,8 @@ export type Deps = {
   /** Whether a user may still open a machine: the account is active, and owns it or belongs to its organization. */
   allowed: (user: string, machine: Store.Machine) => boolean
   chatgpt?: ChatGPT
+  /** The user a hub chat instance's token belongs to. */
+  chatOwner?: (token: string) => string | undefined
 }
 
 /**
@@ -55,17 +57,19 @@ export async function proxy(request: Request, url: URL, deps: Deps) {
     { token: query.get("key"), apply: (key: string) => query.set("key", key), clear: () => query.delete("key") },
   ].flatMap((slot) => {
     const instance = slot.token ? deps.store.instanceByToken(slot.token) : undefined
-    return instance ? [{ ...slot, instance }] : []
+    const chat = slot.token ? deps.chatOwner?.(slot.token) : undefined
+    return instance || chat ? [{ ...slot, instance, chat }] : []
   })
-  const instances = new Set(slots.map((slot) => slot.instance.id))
+  const instances = new Set(slots.map((slot) => slot.instance?.id ?? `chat:${slot.chat}`))
   // Tokens of two instances in one request could pick either user's keys: refused.
   if (instances.size !== 1) return json(401, "invalid llm token")
   const instance = slots[0]!.instance
-  const machine = deps.store.machine(instance.machine_id)
-  if (!machine) return json(401, "invalid llm token")
+  // A chat instance runs on the hub itself: it has no machine to lose access to.
+  const machine = instance && deps.store.machine(instance.machine_id)
+  if (instance && !machine) return json(401, "invalid llm token")
   // Checked on every call, besides the instance being deleted when access ends: fail closed.
-  if (!deps.allowed(instance.user_id, machine)) return json(403, NO_ACCESS)
-  const owner = instance.user_id
+  if (instance && machine && !deps.allowed(instance.user_id, machine)) return json(403, NO_ACCESS)
+  const owner = instance?.user_id ?? slots[0]!.chat!
   const opened = await deps.providers.open(owner, match[1])
   if (opened.kind === "unknown") return json(404, "unknown provider")
   if (opened.kind === "locked") return json(423, Providers.LOCKED)

@@ -34,11 +34,12 @@ export const MCP_PREFIX = "hub-"
  * shell is never sent to the hub. The MCP servers read the token from the environment too (`{env:...}`), and have
  * opencode's own OAuth off: the hub holds their credentials.
  */
-export function hubEnv(instance: Instance): Record<string, string> {
+export function hubEnv(instance: Instance, extra: Readonly<Record<string, unknown>> = {}): Record<string, string> {
   const base = instance.llm.baseURL.replace(/\/+$/, "")
   const providers = instance.llm.providers
   const connectors = instance.mcp
   const config = {
+    ...extra,
     ...(providers.length === 0
       ? {}
       : {
@@ -109,8 +110,11 @@ export function create(input: {
    * bunfig.toml from there).
    */
   cwd?: string
+  /** Configuration every instance gets besides its providers and connectors. */
+  config?: Readonly<Record<string, unknown>>
   log?: (message: string) => void
 }) {
+  const envKey = (instance: Instance) => JSON.stringify(hubEnv(instance, input.config))
   const configs = new Map<string, Instance>()
   const running = new Map<string, Promise<Running>>()
   // Drops in progress, so stopping the agent waits for their folders to be deleted.
@@ -188,6 +192,9 @@ export function create(input: {
     /** Whether an instance's server is running, for tests and status. */
     running: (iid: string) => running.has(iid),
 
+    /** Stops one instance, keeping its folder; the next `local` starts it again. */
+    halt: (iid: string) => stop(iid),
+
     /** Stops every running instance, keeping their folders, once the drops in progress are done. */
     async stop() {
       await Promise.all([...dropping, ...Array.from(running.keys(), stop)])
@@ -227,7 +234,7 @@ export function create(input: {
         XDG_STATE_HOME: dirs.XDG_STATE_HOME,
         XDG_CACHE_HOME: dirs.XDG_CACHE_HOME,
         OPENCODE_PASSWORD: password,
-        ...hubEnv(instance),
+        ...hubEnv(instance, input.config),
       },
       // The server treats EOF on stdin as the end of its lease: it stops when the agent closes it or dies.
       stdio: ["pipe", "pipe", "pipe"],
@@ -275,10 +282,6 @@ function readyURL(child: ChildProcess, exited: Promise<void>) {
   void exited.then(() => ready.reject(new Error("exited before it was ready")))
   const timer = setTimeout(() => ready.reject(new Error("timed out")), START_TIMEOUT)
   return ready.promise.finally(() => clearTimeout(timer))
-}
-
-function envKey(instance: Instance) {
-  return JSON.stringify(hubEnv(instance))
 }
 
 function requireIID(iid: string) {

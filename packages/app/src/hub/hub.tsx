@@ -1,6 +1,7 @@
 import { Loader } from "@opencode/ui/loader"
 import { createSignal, Match, onMount, Switch } from "solid-js"
 import { hubApi, type HubSession } from "./api"
+import { Chat } from "./chat"
 import { Dashboard } from "./dashboard"
 import { Login } from "./login"
 import { Register } from "./register"
@@ -38,7 +39,12 @@ export function Hub() {
         <Login />
       </Match>
       <Match when={signedIn()}>
-        {(current) => <Dashboard session={current()} onSignedOut={() => setSession({ status: "signed-out" })} />}
+        {(current) => {
+          const signedOut = () => setSession({ status: "signed-out" })
+          if (/^\/settings(?:\/|$)/.test(location.pathname))
+            return <Dashboard session={current()} onSignedOut={signedOut} />
+          return <Chat session={current()} onSignedOut={signedOut} />
+        }}
       </Match>
     </Switch>
   )

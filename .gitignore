@@ -39,3 +39,5 @@ tsconfig.tsbuildinfo
 
 # Legal drafts pending review are kept outside the repository; never copy them in.
 legal-drafts-private/
+# Script personnel : installe le dernier build sur ce PC
+/install-local.sh

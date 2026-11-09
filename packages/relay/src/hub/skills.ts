@@ -27,6 +27,24 @@ export function create(input: {
 
   return {
     effective,
+    overview,
+
+    /**
+     * Saves a user's own skill under its name, as the hub's chat tools do: an existing one is replaced only when `replace`
+     * says so.
+     */
+    saveOwn(user: string, skill: Skills.Skill, replace: boolean): Refusal | { skill?: Presented } {
+      const owner = { kind: "user" as const, id: user }
+      const existing = store.skills(owner).find((row) => row.name === skill.name)
+      if (existing && !replace) return { error: "A skill with this name already exists.", status: 409 }
+      return write(owner, skill, existing?.id)
+    },
+
+    /** A user's own skill by name, with its files. */
+    own(user: string, name: string) {
+      const row = store.skills({ kind: "user", id: user }).find((candidate) => candidate.name === name)
+      return row ? present(row)[0] : undefined
+    },
 
     /** Handles `skills…` and `orgs/<id>/skills…` under `/hub/api/`; undefined for any other route. */
     async handle(request: Request, route: string, current: Current) {
@@ -106,9 +124,14 @@ export function create(input: {
   async function save(request: Request, owner: Store.SkillOwner, id?: string) {
     const body = Option.getOrUndefined(decodeSkill(await request.text()))
     if (!body) return json(400, { error: "Expected { name, files: [{ path, content }] }." })
-    const skill = { name: body.name.trim(), files: body.files }
+    const result = write(owner, { name: body.name.trim(), files: body.files }, id)
+    if ("error" in result) return json(result.status, { error: result.error })
+    return json(200, { skill: result.skill })
+  }
+
+  function write(owner: Store.SkillOwner, skill: Skills.Skill, id?: string): Refusal | { skill?: Presented } {
     const checked = Skills.check(skill)
-    if ("error" in checked) return json(400, { error: checked.error })
+    if ("error" in checked) return { error: checked.error, status: 400 }
     const saved = store.saveSkill({
       owner,
       id,
@@ -120,7 +143,7 @@ export function create(input: {
     if (saved.status !== "ok") return refused(saved.status)
     input.changed()
     const row = store.skill(saved.id)
-    return json(200, { skill: row ? present(row)[0] : undefined })
+    return { skill: row ? present(row)[0] : undefined }
   }
 
   function remove(owner: Store.SkillOwner, id: string) {
@@ -131,6 +154,9 @@ export function create(input: {
 }
 
 export type Instance = ReturnType<typeof create>
+
+type Refusal = { error: string; status: number }
+type Presented = ReturnType<typeof present>[number]
 
 /** A stored skill as the dashboard shows it; a row whose files do not decode is left out (fail closed). */
 function present(row: Store.SkillRow) {
@@ -148,10 +174,10 @@ function present(row: Store.SkillRow) {
   ]
 }
 
-function refused(status: "taken" | "limit" | "unknown") {
-  if (status === "unknown") return json(404, { error: "Unknown skill." })
-  if (status === "taken") return json(409, { error: "A skill with this name already exists." })
-  return json(409, { error: `At most ${Skills.MAX_PER_OWNER} skills per owner.` })
+function refused(status: "taken" | "limit" | "unknown"): Refusal {
+  if (status === "unknown") return { error: "Unknown skill.", status: 404 }
+  if (status === "taken") return { error: "A skill with this name already exists.", status: 409 }
+  return { error: `At most ${Skills.MAX_PER_OWNER} skills per owner.`, status: 409 }
 }
 
 function filesOf(row: Store.SkillRow) {

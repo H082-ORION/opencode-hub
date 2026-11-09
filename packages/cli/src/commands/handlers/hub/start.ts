@@ -6,6 +6,7 @@ import { Global } from "@opencode/util/global"
 import { Commands } from "../../commands"
 import { Runtime } from "../../../framework/runtime"
 import { load } from "../../../app-assets"
+import { selfCommand } from "../../../util/process"
 import { OPENCODE_VERSION } from "../../../version"
 
 export default Runtime.handler(
@@ -22,6 +23,7 @@ export default Runtime.handler(
       },
     }))
     const data = Option.getOrElse(input.data, () => path.join(global.data, "hub"))
+    const self = selfCommand()
     const hub = yield* Effect.acquireRelease(
       Effect.tryPromise(() =>
         Hub.start({
@@ -32,6 +34,8 @@ export default Runtime.handler(
           ui: Option.getOrUndefined(ui),
           version: OPENCODE_VERSION,
           mcp: { privateNetworks: input.mcpPrivateNetwork },
+          // A source checkout runs through Bun, which reads the CLI's bunfig.toml from the working directory.
+          chat: { command: [...self, "serve"], cwd: self.length > 1 ? process.cwd() : undefined },
         }),
       ),
       (hub) => Effect.promise(() => hub.stop()),
