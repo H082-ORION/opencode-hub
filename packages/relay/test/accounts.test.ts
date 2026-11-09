@@ -114,10 +114,14 @@ describe("sign-in", () => {
   test("a wrong password fails in the browser and throttles the client address", async () => {
     const headers = address()
     expect(await login(ADMIN.login, "wrong", headers)).toBeUndefined()
-    const throttled = await browser(state.hub.url, headers)
-      .request("login/start", { method: "POST", body: { login: "admin", startLoginRequest: startRequest() } })
-      .then((response) => response.status)
-    expect(throttled).toBe(429)
+    const attempt = () =>
+      browser(state.hub.url, headers)
+        .request("login/start", { method: "POST", body: { login: "admin", startLoginRequest: startRequest() } })
+        .then((response) => response.status)
+    // The delay starts at `login/start`, and the browser's key stretching can outlast its first second: this attempt
+    // has no stretching, so the next one lands inside the delay whether or not the first has run out.
+    await attempt()
+    expect(await attempt()).toBe(429)
   })
 
   test("an unknown login gets an answer of the same shape, stable from one attempt to the next", async () => {
@@ -203,7 +207,8 @@ describe("account", () => {
     expect(await login("changer", "old-password", address())).toBeUndefined()
     // The hub only accepts the key whose check it stored at registration, so this proves the key did not change.
     expect(await login("changer", "new-password", address())).toEqual({ redirect: "/" })
-  })
+    // Registration, two password changes and two sign-ins each run Argon2, over a second apiece on a laptop.
+  }, { timeout: 30_000 })
 })
 
 describe("administration", () => {
