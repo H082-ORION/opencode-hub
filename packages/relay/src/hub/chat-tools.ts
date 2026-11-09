@@ -20,8 +20,13 @@ const Request_ = Schema.Struct({
 })
 const decodeRequest = Schema.decodeUnknownOption(Schema.fromJsonString(Request_))
 const decodeCall = Schema.decodeUnknownOption(
-  Schema.Struct({ name: Schema.String, arguments: Schema.optional(Schema.Unknown) }),
+  Schema.Struct({
+    name: Schema.String,
+    arguments: Schema.optional(Schema.Unknown),
+    _meta: Schema.optional(Schema.Record(Schema.String, Schema.Unknown)),
+  }),
 )
+const decodeTask = Schema.decodeUnknownOption(Schema.Struct({ prompt: Schema.String }))
 const decodeName = Schema.decodeUnknownOption(Schema.Struct({ name: Schema.String }))
 const decodeSave = Schema.decodeUnknownOption(
   Schema.Struct({
@@ -34,7 +39,20 @@ const decodeInstall = Schema.decodeUnknownOption(
   Schema.Struct({ url: Schema.String, replace: Schema.optional(Schema.Boolean) }),
 )
 
+/** Where the engine names the session calling a tool. */
+const SESSION_META = "ai.opencode/sessionID"
+
 const TOOLS = [
+  {
+    name: "machine_task",
+    description:
+      "Hand a request to the coding agent on the machine and project attached to this conversation, and wait for its final message. It works in its own session: pass the whole request and any context it needs.",
+    inputSchema: {
+      type: "object",
+      properties: { prompt: { type: "string", description: "The complete request for the agent on the machine." } },
+      required: ["prompt"],
+    },
+  },
   {
     name: "skills_list",
     description: "List the user's skills on the hub: their own and those inherited from their organizations.",
@@ -93,6 +111,8 @@ const TOOLS = [
 export function create(input: {
   owner: (token: string) => string | undefined
   skills: HubSkills.Instance
+  /** Runs a request on the machine attached to a chat session and resolves to its final message. */
+  runTask: (input: { user: string; session: string; prompt: string; signal: AbortSignal }) => Promise<string>
   fetch?: typeof fetch
 }) {
   return {
@@ -117,12 +137,23 @@ export function create(input: {
       if (message.method !== "tools/call") return rpcError(id, -32601, "Unknown method.")
       const call = Option.getOrUndefined(decodeCall(message.params))
       if (!call) return rpcError(id, -32602, "Expected { name, arguments }.")
-      const result = await run(user, call.name, call.arguments).catch((error: unknown) => failure(describe(error)))
+      const context = { session: call._meta?.[SESSION_META], signal: request.signal }
+      const result = await run(user, call.name, call.arguments, context).catch((error: unknown) =>
+        failure(describe(error)),
+      )
       return rpcResult(id, result)
     },
   }
 
-  async function run(user: string, name: string, args: unknown) {
+  async function run(user: string, name: string, args: unknown, context: { session: unknown; signal: AbortSignal }) {
+    if (name === "machine_task") {
+      const parsed = Option.getOrUndefined(decodeTask(args))
+      if (!parsed) return failure("Expected { prompt }.")
+      if (typeof context.session !== "string") return failure("This tool needs a chat session.")
+      return text(
+        await input.runTask({ user, session: context.session, prompt: parsed.prompt, signal: context.signal }),
+      )
+    }
     if (name === "skills_list") return list(user)
     if (name === "skill_read") {
       const parsed = Option.getOrUndefined(decodeName(args))

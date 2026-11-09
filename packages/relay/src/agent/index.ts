@@ -1,8 +1,13 @@
 import { createHash } from "node:crypto"
+import { mkdir } from "node:fs/promises"
+import path from "node:path"
 import { Option, Schema } from "effect"
 import { HOP_BY_HOP, withoutDecodedHeaders } from "../headers.js"
 import { Protocol } from "../protocol.js"
 import pkg from "../../package.json" with { type: "json" }
+
+const MKDIR_PATH = "/__hub/mkdir"
+const decodeMkdir = Schema.decodeUnknownOption(Schema.fromJsonString(Schema.Struct({ path: Schema.String })))
 
 export * as Agent from "./index.js"
 
@@ -345,6 +350,7 @@ export function connect(input: ConnectInput) {
         })
       : undefined
     streams.set(id, stream)
+    if (open.method === "POST" && open.path === MKDIR_PATH) return makeDirectory(id, body, send)
     const request = async () => {
       const local = await resolveLocal(open.instance)
       return fetch(`${local.url.replace(/\/+$/, "")}${open.path}`, {
@@ -392,6 +398,37 @@ export function connect(input: ConnectInput) {
       if (!streams.has(id)) return
       send(Protocol.encode(Protocol.Type.DATA, id, chunk))
     }
+  }
+
+  /** Creates a folder for the hub's project picker, which opencode's own API has no call for. */
+  async function makeDirectory(
+    id: number,
+    body: ReadableStream<Uint8Array> | undefined,
+    send: (data: Uint8Array<ArrayBuffer>) => void,
+  ) {
+    const target = Option.getOrUndefined(decodeMkdir(await new Response(body).text()))
+    const failure =
+      target === undefined || !path.isAbsolute(target.path) || target.path.includes("\0")
+        ? "Expected an absolute path."
+        : await mkdir(target.path).then(
+            () => undefined,
+            (error: unknown) => (error instanceof Error ? error.message : String(error)),
+          )
+    if (!streams.delete(id)) return
+    send(
+      Protocol.encodeJson(Protocol.Type.RESPONSE, id, {
+        status: failure === undefined ? 200 : 400,
+        headers: [["content-type", "application/json"]],
+      }),
+    )
+    send(
+      Protocol.encodeText(
+        Protocol.Type.DATA,
+        id,
+        JSON.stringify(failure === undefined ? { ok: true } : { error: failure }),
+      ),
+    )
+    send(Protocol.encode(Protocol.Type.END, id))
   }
 
   async function websocket(id: number, open: Protocol.OpenWs, send: (data: Uint8Array<ArrayBuffer>) => void) {

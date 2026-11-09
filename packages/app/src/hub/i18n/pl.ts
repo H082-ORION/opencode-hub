@@ -29,6 +29,23 @@ export default {
     modelsEmpty: "Żaden model nie pasuje. Dodaj dostawcę, aby zobaczyć tutaj jego modele.",
     modelsVisible: "Pokaż w czacie",
   },
+  attach: {
+    title: "Dołącz",
+    machine: "Maszyna",
+    cloud: "Cloud",
+    soon: "Wkrótce",
+    noMachines: "Brak sparowanych maszyn",
+    dialogTitle: (name: string) => `Otwórz projekt na ${name}`,
+    dialogDescription: "Wybierz projekt na tej maszynie lub otwórz folder.",
+    newProject: "Nowy projekt",
+    newFolder: "Nowy folder",
+    folderName: "Nazwa folderu",
+    create: "Utwórz",
+    open: "Otwórz ten folder",
+    parent: "Folder nadrzędny",
+    noFolders: "Brak folderów",
+    detach: "Usuń maszynę",
+  },
   chat: {
     sessions: "Sesje",
     newSession: "Nowa sesja",
@@ -45,8 +62,7 @@ export default {
     locked:
       "Twoje klucze są zablokowane, więc modele nie mogą odpowiadać. Wyloguj się i zaloguj ponownie, aby je odblokować.",
     emptyTitle: "Zadaj dowolne pytanie",
-    emptyDescription:
-      "Ten czat tylko odpowiada na pytania. Aby pracować nad kodem, otwórz jedną ze swoich maszyn w ustawieniach.",
+    emptyDescription: "Zadaj pytanie lub dołącz jedną ze swoich maszyn przyciskiem +, aby pracować nad projektem.",
     noProviders: "Nie ma jeszcze dostępnego modelu. Najpierw dodaj dostawcę.",
     openSettings: "Otwórz ustawienia",
     placeholder: "Zadaj pytanie",

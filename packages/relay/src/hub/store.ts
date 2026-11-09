@@ -194,6 +194,16 @@ export type Invitation = {
 export type InvitationSummary = Invitation & { created_by_login: string | null; user_login: string | null }
 
 /** Provider fields that are safe to show in the UI and to send to machines: no key, no tokens. */
+export type ChatTarget = {
+  user_id: string
+  session_id: string
+  machine_id: string
+  directory: string
+  remote_session: string | null
+  announced: number
+  updated_at: number
+}
+
 export type ProviderSummary = Pick<ProviderRow, "id" | "name" | "base_url" | "auth">
 
 // Labels that would collide with infrastructure names or look like the hub itself.
@@ -376,6 +386,18 @@ export function open(dir: string) {
     machine_id TEXT UNIQUE,
     created_at INTEGER NOT NULL,
     updated_at INTEGER NOT NULL
+  )`)
+
+  // The machine and folder a user's chat session sends its tasks to, and the session it runs them in there.
+  db.run(`CREATE TABLE IF NOT EXISTS chat_target (
+    user_id TEXT NOT NULL,
+    session_id TEXT NOT NULL,
+    machine_id TEXT NOT NULL,
+    directory TEXT NOT NULL,
+    remote_session TEXT,
+    announced INTEGER NOT NULL DEFAULT 0,
+    updated_at INTEGER NOT NULL,
+    PRIMARY KEY (user_id, session_id)
   )`)
 
   const machineColumns = "id, name, owner_user_id, owner_org_id, enrolled_by, created_at, last_seen_at"
@@ -596,6 +618,29 @@ export function open(dir: string) {
       })(),
     touchCloudHost: (id: string) => db.run("UPDATE cloud_host SET last_seen_at = ? WHERE id = ?", [Date.now(), id]),
     cloudInstances: () => queries.cloudInstances.all(),
+
+    /** Where a user's chat session sends its tasks, if it has a machine attached. */
+    chatTarget: (user: string, session: string) =>
+      db
+        .query<ChatTarget, [string, string]>("SELECT * FROM chat_target WHERE user_id = ? AND session_id = ?")
+        .get(user, session) ?? undefined,
+    /** Attaches a machine and folder to a chat session; a different target starts over in a new remote session. */
+    setChatTarget(user: string, session: string, machine: string, directory: string) {
+      db.run(
+        `INSERT INTO chat_target (user_id, session_id, machine_id, directory, remote_session, announced, updated_at)
+         VALUES (?, ?, ?, ?, NULL, 0, ?)
+         ON CONFLICT (user_id, session_id) DO UPDATE SET machine_id = excluded.machine_id,
+           directory = excluded.directory, remote_session = NULL, announced = 0, updated_at = excluded.updated_at
+         WHERE machine_id <> excluded.machine_id OR directory <> excluded.directory`,
+        [user, session, machine, directory, Date.now()],
+      )
+    },
+    setChatRemoteSession: (user: string, session: string, remote: string | null) =>
+      db.run("UPDATE chat_target SET remote_session = ? WHERE user_id = ? AND session_id = ?", [remote, user, session]),
+    setChatAnnounced: (user: string, session: string) =>
+      db.run("UPDATE chat_target SET announced = 1 WHERE user_id = ? AND session_id = ?", [user, session]),
+    deleteChatTarget: (user: string, session: string) =>
+      db.run("DELETE FROM chat_target WHERE user_id = ? AND session_id = ?", [user, session]),
     cloudInstance: (id: string) => queries.cloudInstance.get(id) ?? undefined,
     cloudInstancesOf: (user: string) => queries.cloudInstancesOf.all(user),
     cloudInstancesOn: (host: string) => queries.cloudInstancesOn.all(host),

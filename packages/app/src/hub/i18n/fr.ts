@@ -29,6 +29,23 @@ export default {
     modelsEmpty: "Aucun modèle ne correspond. Ajoutez un fournisseur pour voir ses modèles ici.",
     modelsVisible: "Afficher dans le chat",
   },
+  attach: {
+    title: "Joindre",
+    machine: "Machine",
+    cloud: "Cloud",
+    soon: "Bientôt",
+    noMachines: "Aucune machine associée pour l'instant",
+    dialogTitle: (name: string) => `Ouvrir un projet sur ${name}`,
+    dialogDescription: "Choisissez un projet sur cette machine ou ouvrez un dossier.",
+    newProject: "Nouveau projet",
+    newFolder: "Nouveau dossier",
+    folderName: "Nom du dossier",
+    create: "Créer",
+    open: "Ouvrir ce dossier",
+    parent: "Dossier parent",
+    noFolders: "Aucun dossier ici",
+    detach: "Retirer la machine",
+  },
   chat: {
     sessions: "Sessions",
     newSession: "Nouvelle session",
@@ -45,8 +62,7 @@ export default {
     locked:
       "Vos clés sont verrouillées, les modèles ne peuvent donc pas répondre. Déconnectez-vous puis reconnectez-vous pour les déverrouiller.",
     emptyTitle: "Posez n’importe quelle question",
-    emptyDescription:
-      "Ce chat répond uniquement aux questions. Pour travailler sur du code, ouvrez l’une de vos machines depuis les paramètres.",
+    emptyDescription: "Posez une question, ou associez l'une de vos machines avec le bouton + pour travailler sur un projet.",
     noProviders: "Aucun modèle n’est disponible pour le moment. Ajoutez d’abord un fournisseur.",
     openSettings: "Ouvrir les paramètres",
     placeholder: "Posez une question",

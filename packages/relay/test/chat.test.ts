@@ -197,6 +197,7 @@ describe("the chat's tools", () => {
       result: { tools: { name: string }[] }
     }
     expect(body.result.tools.map((tool) => tool.name)).toEqual([
+      "machine_task",
       "skills_list",
       "skill_read",
       "skill_save",

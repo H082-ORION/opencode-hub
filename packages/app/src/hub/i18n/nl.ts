@@ -29,6 +29,23 @@ export default {
     modelsEmpty: "Geen model gevonden. Voeg een provider toe om de modellen ervan hier te zien.",
     modelsVisible: "Tonen in de chat",
   },
+  attach: {
+    title: "Koppelen",
+    machine: "Machine",
+    cloud: "Cloud",
+    soon: "Binnenkort",
+    noMachines: "Nog geen gekoppelde machine",
+    dialogTitle: (name: string) => `Een project openen op ${name}`,
+    dialogDescription: "Kies een project op deze machine of open een map.",
+    newProject: "Nieuw project",
+    newFolder: "Nieuwe map",
+    folderName: "Mapnaam",
+    create: "Maken",
+    open: "Deze map openen",
+    parent: "Bovenliggende map",
+    noFolders: "Geen mappen hier",
+    detach: "Machine verwijderen",
+  },
   chat: {
     sessions: "Sessies",
     newSession: "Nieuwe sessie",
@@ -45,8 +62,7 @@ export default {
     locked:
       "Uw sleutels zijn vergrendeld, dus modellen kunnen niet antwoorden. Log uit en weer in om ze te ontgrendelen.",
     emptyTitle: "Stel een vraag",
-    emptyDescription:
-      "Deze chat beantwoordt alleen vragen. Open een van uw machines via de instellingen om aan code te werken.",
+    emptyDescription: "Stel een vraag of koppel een van je machines met de knop + om aan een project te werken.",
     noProviders: "Er is nog geen model beschikbaar. Voeg eerst een provider toe.",
     openSettings: "Instellingen openen",
     placeholder: "Stel een vraag",

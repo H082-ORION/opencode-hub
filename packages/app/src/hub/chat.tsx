@@ -14,7 +14,8 @@ import { showToast } from "@opencode/ui/toast"
 import { SessionID } from "@opencode/schema/session-id"
 import { createGlobalEmitter } from "@solid-primitives/event-bus"
 import { createEffect, createMemo, createResource, createSignal, For, on, onCleanup, onMount, Show } from "solid-js"
-import { errorText, hubApi, HubError, type HubSession } from "./api"
+import { errorText, hubApi, HubError, type HubChatTarget, type HubSession } from "./api"
+import { AttachMenu, projectName } from "./chat-machine"
 import { copy } from "./copy"
 import { modelKey, readHiddenModels } from "./models"
 
@@ -23,6 +24,8 @@ type EventMap = { [Type in OpenCodeEvent["type"]]: Extract<OpenCodeEvent, { type
 const MODEL_KEY = "hub.chat.model"
 const SIDEBAR_KEY = "hub.chat.sidebar"
 const STICK_DISTANCE = 80
+const MACHINES_REFRESH = 15_000
+const MODELS_RETRY = 1500
 
 const sessionFromPath = () => /^\/s\/([^/]+)$/.exec(location.pathname)?.[1]
 
@@ -89,12 +92,19 @@ function ChatScreen(props: { session: HubSession; onSignedOut: () => void }) {
   onCleanup(() => window.removeEventListener("popstate", onPopState))
 
   const [models, { refetch: refetchModels }] = createResource(() =>
-    api.model.list({}).then((response) => {
-      const hidden = readHiddenModels()
-      return response.data.filter(
-        (model) => (model.type === undefined || model.type === "chat") && !hidden.has(modelKey(model)),
-      )
-    }),
+    api.model.list({}).then(
+      (response) => {
+        const hidden = readHiddenModels()
+        return response.data.filter(
+          (model) => (model.type === undefined || model.type === "chat") && !hidden.has(modelKey(model)),
+        )
+      },
+      // The engine restarts when the user's providers change, so one failed read is expected: read them again.
+      () => {
+        setTimeout(() => void refetchModels(), MODELS_RETRY)
+        return []
+      },
+    ),
   )
   // The engine lists its models once it has finished starting, and announces it.
   onCleanup(emitter.on("model.updated", () => void refetchModels()))
@@ -150,6 +160,34 @@ function ChatScreen(props: { session: HubSession; onSignedOut: () => void }) {
       void api.session.switchModel({ sessionID: id, model: { id: next.id, providerID: next.providerID } }).catch(fail)
   }
 
+  const [target, setTarget] = createSignal<HubChatTarget>()
+  const [machines, { refetch: refetchMachines }] = createResource(() => hubApi.machines().catch(() => []))
+  // The badge's light follows the machine, which can disconnect at any time.
+  const machinesTimer = setInterval(() => void refetchMachines(), MACHINES_REFRESH)
+  onCleanup(() => clearInterval(machinesTimer))
+  const targetOnline = () => {
+    const current = target()
+    return current !== undefined && (machines()?.find((machine) => machine.id === current.machine)?.online ?? false)
+  }
+  createEffect(
+    on(active, (id) => {
+      if (!id) return setTarget(undefined)
+      void hubApi.chatTarget(id).then((response) => {
+        if (active() === id) setTarget(response.target ?? undefined)
+      }, fail)
+    }),
+  )
+  const attach = (next: HubChatTarget) => {
+    setTarget(next)
+    const id = active()
+    if (id) void hubApi.setChatTarget(id, next).catch(fail)
+  }
+  const detach = () => {
+    setTarget(undefined)
+    const id = active()
+    if (id) void hubApi.clearChatTarget(id).catch(fail)
+  }
+
   const send = async () => {
     const text = draft().trim()
     const chosen = model()
@@ -169,6 +207,8 @@ function ChatScreen(props: { session: HubSession; onSignedOut: () => void }) {
           },
         )
       if (!created) return
+      const attached = target()
+      if (attached) await hubApi.setChatTarget(id, attached).catch(fail)
       open(id)
     }
     await data.session.prompt({ sessionID: id, text }).catch((error: unknown) => {
@@ -372,19 +412,39 @@ function ChatScreen(props: { session: HubSession; onSignedOut: () => void }) {
               void send()
             }}
           >
-            <textarea
-              rows={1}
-              value={draft()}
-              placeholder={copy.chat.placeholder}
-              aria-label={copy.chat.placeholder}
-              onInput={(event) => setDraft(event.currentTarget.value)}
-              onKeyDown={(event) => {
-                if (event.key !== "Enter" || event.shiftKey || event.isComposing) return
-                event.preventDefault()
-                void send()
-              }}
-            />
+            <div class="hub-chat-input">
+              <Show when={target()}>
+                {(current) => (
+                  <div class="hub-chat-badges">
+                    <span class="hub-chat-badge">
+                      <span class="hub-status" data-online={targetOnline() ? "" : undefined} aria-hidden="true" />
+                      <span class="hub-chat-badge-text">{current().machineName}</span>
+                    </span>
+                    <span class="hub-chat-badge" title={current().directory}>
+                      <Icon name="folder" size="small" />
+                      <span class="hub-chat-badge-text">{projectName(current().directory)}</span>
+                      <button type="button" aria-label={copy.attach.detach} onClick={detach}>
+                        <Icon name="close" size="small" />
+                      </button>
+                    </span>
+                  </div>
+                )}
+              </Show>
+              <textarea
+                rows={1}
+                value={draft()}
+                placeholder={copy.chat.placeholder}
+                aria-label={copy.chat.placeholder}
+                onInput={(event) => setDraft(event.currentTarget.value)}
+                onKeyDown={(event) => {
+                  if (event.key !== "Enter" || event.shiftKey || event.isComposing) return
+                  event.preventDefault()
+                  void send()
+                }}
+              />
+            </div>
             <div class="hub-chat-form-row">
+              <AttachMenu machines={machines() ?? []} onOpen={() => void refetchMachines()} onPick={attach} />
               <Show
                 when={(models() ?? []).length > 0}
                 fallback={

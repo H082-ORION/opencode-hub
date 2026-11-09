@@ -29,6 +29,23 @@ export default {
     modelsEmpty: "Nessun modello corrisponde. Aggiungi un provider per vederne qui i modelli.",
     modelsVisible: "Mostra nella chat",
   },
+  attach: {
+    title: "Allega",
+    machine: "Macchina",
+    cloud: "Cloud",
+    soon: "In arrivo",
+    noMachines: "Nessuna macchina associata",
+    dialogTitle: (name: string) => `Apri un progetto su ${name}`,
+    dialogDescription: "Scegli un progetto su questa macchina o apri una cartella.",
+    newProject: "Nuovo progetto",
+    newFolder: "Nuova cartella",
+    folderName: "Nome della cartella",
+    create: "Crea",
+    open: "Apri questa cartella",
+    parent: "Cartella superiore",
+    noFolders: "Nessuna cartella qui",
+    detach: "Rimuovi la macchina",
+  },
   chat: {
     sessions: "Sessioni",
     newSession: "Nuova sessione",
@@ -45,8 +62,7 @@ export default {
     locked:
       "Le tue chiavi sono bloccate, quindi i modelli non possono rispondere. Esci e accedi di nuovo per sbloccarle.",
     emptyTitle: "Chiedi pure",
-    emptyDescription:
-      "Questa chat risponde solo a domande. Per lavorare sul codice, apri una delle tue macchine dalle impostazioni.",
+    emptyDescription: "Fai una domanda oppure collega una delle tue macchine con il pulsante + per lavorare a un progetto.",
     noProviders: "Nessun modello disponibile per ora. Aggiungi prima un provider.",
     openSettings: "Apri impostazioni",
     placeholder: "Fai una domanda",

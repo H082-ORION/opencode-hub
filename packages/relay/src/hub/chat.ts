@@ -14,9 +14,12 @@ export const AGENT = "hub"
 const SYSTEM = `You are the assistant of an opencode hub. You answer the user's questions in the conversation.
 You cannot read or change files, run commands or browse the web, and the hub is not a place to write code in. When a
 request needs that, say so and suggest opening one of the user's machines from the hub.
-Your only tools manage the user's skills on the hub, which reach all of their machines: list them, read one, create or
+Your tools manage the user's skills on the hub, which reach all of their machines: list them, read one, create or
 update one, and install them from a GitHub repository. A skill changes how agents behave on those machines: before
-installing from a repository, make sure the user asked for that exact repository, and report what was installed.`
+installing from a repository, make sure the user asked for that exact repository, and report what was installed.
+When the conversation has a machine attached, machine_task hands a request to the coding agent running on it, which can
+read and change that project. Pass the whole request, and any context it needs, since that agent sees nothing else
+from this conversation. It returns that agent's final message: summarize it for the user or relay it.`
 
 const IDLE_AFTER = 15 * 60 * 1000
 const SWEEP_EVERY = 60 * 1000
@@ -27,8 +30,11 @@ const RULES = [
   { action: "*", resource: "*", effect: "deny" },
   { action: OWN_TOOLS, resource: "*", effect: "allow" },
 ]
+/** How long a task on a machine may run before the engine stops waiting for it. */
+const TASK_TIMEOUT = 6 * 60 * 60 * 1000
+
 /** Tool and integration access is shut twice over, but for the hub's own tools; only the hub's providers may answer. */
-export const CONFIG = {
+export const config = (tools: string) => ({
   permissions: RULES,
   policies: [
     ...["tool.use", "mcp.use", "skill.use", "plugin.use", "websearch.use", "integration.connect"].map((action) => ({
@@ -43,8 +49,19 @@ export const CONFIG = {
     { action: "provider.use", resource: "opencode", effect: "deny" },
   ],
   agents: { [AGENT]: { mode: "primary", system: SYSTEM, permissions: RULES } },
+  mcp: {
+    servers: {
+      "hub-tools": {
+        type: "remote",
+        url: tools,
+        headers: { Authorization: `Bearer {env:${Instances.TOKEN}}` },
+        oauth: false,
+        timeout: { execution: TASK_TIMEOUT },
+      },
+    },
+  },
   snapshots: false,
-}
+})
 
 const Model = Schema.Struct({
   id: Schema.String,
@@ -73,11 +90,15 @@ const decodeList = Schema.decodeUnknownOption(
 const decodeDefault = Schema.decodeUnknownOption(
   Schema.fromJsonString(Schema.Struct({ data: Schema.NullOr(Schema.Struct({ providerID: Schema.String })) })),
 )
+const decodeSession = Schema.decodeUnknownOption(
+  Schema.fromJsonString(Schema.Struct({ data: Schema.Struct({ model: Schema.optional(Model) }) })),
+)
 const decodeActive = Schema.decodeUnknownOption(
   Schema.fromJsonString(Schema.Struct({ data: Schema.Record(Schema.String, Schema.Unknown) })),
 )
 
 const SESSION = "[A-Za-z0-9_-]+"
+const SESSION_ID = new RegExp(`^${SESSION}$`)
 const MESSAGES = new RegExp(`^api/session/${SESSION}/message(?:/${SESSION})?$`)
 const READS = new RegExp(`^api/(?:location|project|vcs|session(?:/active|/${SESSION}(?:/inbox|/form)?)?)$`)
 const ONE = new RegExp(`^api/session/(${SESSION})$`)
@@ -101,6 +122,8 @@ export function create(input: {
   llm: string
   /** The hub's chat tools, as the instances reach them. */
   tools: string
+  /** What to tell a session's model before a prompt, once, when its target has changed. */
+  note?: (user: string, session: string) => string | undefined
   log?: (message: string) => void
 }) {
   Store.secureDirectory(input.root)
@@ -118,7 +141,7 @@ export function create(input: {
       HOME: workspace,
       OPENCODE_DISABLE_AUTOUPDATE: "1",
     },
-    config: CONFIG,
+    config: config(input.tools),
     log: input.log,
   })
   const iidOf = (user: string) => createHash("sha256").update(`chat|${user}`).digest("base64url").slice(0, 32)
@@ -142,6 +165,13 @@ export function create(input: {
     async handle(request: Request, route: string, current: Current) {
       if (!route.startsWith("chat/")) return undefined
       return dispatch(request, route.slice("chat/".length), current.user.id)
+    },
+
+    /** The model a user's chat session uses, for the tasks it starts on machines. */
+    async sessionModel(user: string, session: string) {
+      if (!SESSION_ID.test(session)) return undefined
+      const response = await forward(await instance(user), "GET", `api/session/${session}`, "")
+      return response.ok ? Option.getOrUndefined(decodeSession(await response.text()))?.data.model : undefined
     },
 
     async stop() {
@@ -193,6 +223,9 @@ export function create(input: {
     if (method === "POST" && PROMPT.test(route)) {
       const payload = Option.getOrUndefined(decodePrompt(body ?? ""))
       if (!payload) return json(400, { error: "Expected { text }." })
+      const note = input.note?.(user, route.split("/")[2]!)
+      if (note)
+        await forward(await local(), method, route.replace(/prompt$/, "synthetic"), "", { text: note, resume: false })
       return forward(await local(), method, route, "", payload)
     }
     if (method === "POST" && INTERRUPT.test(route)) return forward(await local(), method, route, "", {})
@@ -225,7 +258,7 @@ export function create(input: {
         baseURL: input.llm,
         providers: input.store.providerSummaries(user).map((provider) => ({ id: provider.id, name: provider.name })),
       },
-      mcp: [{ id: "tools", name: "Hub", url: input.tools }],
+      mcp: [],
       skills: { version: "" },
     })
     return manager.local(iid)

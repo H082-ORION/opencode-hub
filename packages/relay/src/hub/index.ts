@@ -8,6 +8,7 @@ import { Accounts, json } from "./accounts.js"
 import { Auth } from "./auth.js"
 import { Catalog } from "./catalog.js"
 import { Chat } from "./chat.js"
+import { ChatMachines } from "./chat-machines.js"
 import { ChatTools } from "./chat-tools.js"
 import { ChatGPT } from "./chatgpt.js"
 import { Cloud } from "./cloud.js"
@@ -207,9 +208,16 @@ export async function start(options: Options) {
       // Over the loopback, so a hub behind a public name does not need to reach itself through it.
       llm: `http://${listen}:${server.port}/llm`,
       tools: `http://${listen}:${server.port}${ChatTools.PATH}`,
+      note: (user, session) => chatMachines.note(user, session),
     })
+  const chatMachines: ChatMachines.Instance = ChatMachines.create({
+    store,
+    request: machineRequest,
+    online: (machine) => tunnels.has(machine),
+    model: (user, session) => chat?.sessionModel(user, session) ?? Promise.resolve(undefined),
+  })
   const chatTools: ChatTools.Instance | undefined =
-    chat && ChatTools.create({ owner: chat.owner, skills, fetch: options.chat?.fetch })
+    chat && ChatTools.create({ owner: chat.owner, skills, runTask: chatMachines.run, fetch: options.chat?.fetch })
 
   const cloud = Cloud.create({
     store,
@@ -301,6 +309,8 @@ export async function start(options: Options) {
     const user = current.user
     const chatted = await chat?.handle(request, route, current)
     if (chatted) return chatted
+    const attached = chat && (await chatMachines.handle(request, route, current))
+    if (attached) return attached
     // Before `orgs`, which owns every other `orgs/…` route.
     const skill = await skills.handle(request, route, current)
     if (skill) return skill
@@ -765,6 +775,38 @@ export async function start(options: Options) {
    * The user's instance on a machine they may open, created at their first request. Its configuration and a new
    * token go to the agent first, unless it already holds them on this connection.
    */
+  /**
+   * An HTTP request from the hub itself to a user's instance on a machine, checked like one from their browser. There
+   * is no browser session behind it, so a stream cut when access changes is simply not retried.
+   */
+  async function machineRequest(input: {
+    user: string
+    machine: string
+    method: string
+    path: string
+    body?: unknown
+    signal?: AbortSignal
+  }) {
+    const machine = store.machine(input.machine)
+    if (!machine || !mayOpen(input.user, machine)) return json(404, { error: "Unknown machine." })
+    const tunnel = tunnels.get(machine.id)
+    if (!tunnel) return json(503, { error: "This machine is not connected to the hub." })
+    const instance = openInstance(tunnel, machine, input.user)
+    const headers: [string, string][] = input.body === undefined ? [] : [["content-type", "application/json"]]
+    return tunnel.http(
+      new Request("http://hub.invalid/", {
+        method: input.method,
+        headers,
+        body: input.body === undefined ? undefined : JSON.stringify(input.body),
+        signal: input.signal,
+      }),
+      instance,
+      input.path,
+      headers,
+      `hub:${input.user}`,
+    )
+  }
+
   function openInstance(tunnel: Tunnel.Instance, machine: Store.Machine, user: string) {
     const instance = store.ensureInstance(machine.id, user)
     if (!tunnel.held.has(instance.id)) sendInstance(tunnel, instance)

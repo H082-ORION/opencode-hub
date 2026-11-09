@@ -930,8 +930,146 @@
 }
 
 .hub-chat-model {
-  flex: 0 1 240px;
+  flex: 0 1 auto;
+  width: auto;
   min-width: 0;
+  max-width: min(200px, 60%);
+}
+
+.hub-chat-input {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 8px;
+
+  textarea {
+    flex: 1 1 160px;
+    width: auto;
+  }
+}
+
+.hub-chat-badges {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  min-width: 0;
+}
+
+.hub-chat-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  max-width: 220px;
+  padding: 2px 8px;
+  border-radius: 6px;
+  background: var(--v2-background-bg-base);
+  color: var(--v2-text-text-base);
+
+  button {
+    display: inline-flex;
+    padding: 0;
+    border: 0;
+    background: transparent;
+    color: var(--v2-text-text-muted);
+    cursor: pointer;
+  }
+}
+
+.hub-chat-badge-text {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.hub-chat-machines {
+  min-width: 200px;
+  max-width: calc(100vw - 32px);
+}
+
+.hub-chat-machine-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.hub-chat-machine-state {
+  margin-inline-start: auto;
+  padding-inline-start: 16px;
+  color: var(--v2-text-text-faint);
+}
+
+.hub-chat-picker-list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  max-height: 320px;
+  overflow-y: auto;
+}
+
+.hub-chat-picker-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 6px 8px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--v2-text-text-base);
+  text-align: start;
+  cursor: pointer;
+
+  &:hover,
+  &:focus-visible {
+    background: var(--v2-background-bg-layer-1);
+  }
+}
+
+.hub-chat-picker-text {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.hub-chat-picker-path,
+.hub-chat-picker-current {
+  overflow: hidden;
+  color: var(--v2-text-text-muted);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.hub-chat-picker-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+
+  [data-component="button-v2"] {
+    flex: none;
+    white-space: nowrap;
+  }
+}
+
+.hub-chat-picker-new {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+
+  > :first-child {
+    flex: 1;
+  }
+}
+
+.hub-chat-picker-empty {
+  padding: 8px;
+  color: var(--v2-text-text-faint);
+}
+
+.hub-chat-picker-error {
+  color: var(--v2-text-text-critical, var(--v2-text-text-muted));
 }
 
 @media (max-width: 768px) {

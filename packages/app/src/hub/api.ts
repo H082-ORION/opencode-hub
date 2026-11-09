@@ -244,7 +244,31 @@ export async function request<T>(route: string, init: { method?: string; body?: 
 /** The account flows of `@opencode/relay/account` send their requests through this. */
 export const post = <T>(route: string, body: unknown) => request<T>(route, { method: "POST", body })
 
+/** The machine and project a chat session sends its tasks to. */
+export type HubChatTarget = { machine: string; machineName: string; directory: string; online: boolean }
+export type HubChatProject = { id: string; name: string; directory: string }
+export type HubChatDirectories = { directory: string; parent: string | null; directories: string[] }
+
 export const hubApi = {
+  chatProjects: (machine: string) => request<HubChatProject[]>(`chat-machines/${encodeURIComponent(machine)}/projects`),
+  chatDirectories: (machine: string, path?: string) =>
+    request<HubChatDirectories>(
+      `chat-machines/${encodeURIComponent(machine)}/directories${path === undefined ? "" : `?path=${encodeURIComponent(path)}`}`,
+    ),
+  createChatDirectory: (machine: string, parent: string, name: string) =>
+    request<{ directory: string }>(`chat-machines/${encodeURIComponent(machine)}/directories`, {
+      method: "POST",
+      body: { parent, name },
+    }),
+  chatTarget: (session: string) =>
+    request<{ target: HubChatTarget | null }>(`chat-targets/${encodeURIComponent(session)}`),
+  setChatTarget: (session: string, target: Pick<HubChatTarget, "machine" | "directory">) =>
+    request<object>(`chat-targets/${encodeURIComponent(session)}`, {
+      method: "PUT",
+      body: { machine: target.machine, directory: target.directory },
+    }),
+  clearChatTarget: (session: string) =>
+    request<void>(`chat-targets/${encodeURIComponent(session)}`, { method: "DELETE" }),
   session: () => request<HubSession>("session"),
   logout: () => request<object>("logout", { method: "POST" }),
   lock: () => request<{ unlocked: false }>("account/lock", { method: "POST" }),
