@@ -10,7 +10,7 @@ import { createSolidTransformPlugin } from "@opentui/solid/bun-plugin"
 import type { BunPlugin } from "bun"
 import pkg from "../package.json"
 import { discoverPluginRuntimeSpecifiers, pluginRuntimeLoaderCode } from "@opencode/plugin/runtime-modules"
-import { buildAppArchive } from "./app-assets"
+import { buildAppArchive, stage } from "./app-assets"
 import { verifyArtifact, verifySimulationGraph } from "./verify-artifact"
 import { resolveOpencodePty } from "./opencode-pty"
 import { NativeArch } from "../../../script/native-arch"
@@ -168,7 +168,7 @@ export default { path: file, version: ${JSON.stringify(opencodePty.version)}, sh
   const target = targetName(item)
   const name = target.replace(binary, "cli")
   const executablePath = await compileExecutable(item)
-  console.log(`building ${name}`)
+  const built = stage(`building ${name}`)
   const result = await Bun.build({
     entrypoints: ["./src/index.ts", "./src/photon-worker.ts"],
     tsconfig: "./tsconfig.json",
@@ -222,6 +222,8 @@ export default { path: file, version: ${JSON.stringify(opencodePty.version)}, sh
     for (const log of result.logs) console.error(log)
     process.exit(1)
   }
+  built()
+  const verified = stage(`verifying ${name}`)
   verifySimulationGraph(simulationInputs)
   await NativeArch.verify(path.join(outdir, name, "bin", item.os === "win32" ? `${binary}.exe` : binary), item.arch)
 
@@ -241,6 +243,7 @@ export default { path: file, version: ${JSON.stringify(opencodePty.version)}, sh
     ),
   )
   await verifyArtifact(path.join(outdir, name))
+  verified()
 }
 
 async function compileExecutable(item: (typeof allTargets)[number]) {

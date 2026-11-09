@@ -9,7 +9,7 @@
 #   ./build.sh --target linux-x64 # binaire pour une autre plateforme / for another platform (linux-arm64, darwin-arm64, ...)
 #   ./build.sh --ui-only          # seulement packages/app/dist / only packages/app/dist
 #   ./build.sh --skip-tests
-#   ./build.sh --lang en          # langue des messages / message language (fr par défaut, ou OPENCODE_HUB_LANG)
+#   ./build.sh --lang en         # langue des messages / message language (fr par défaut, ou OPENCODE_HUB_LANG)
 set -euo pipefail
 
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -50,6 +50,28 @@ t() { if [ "$lang" = en ]; then printf '%s' "$2"; else printf '%s' "$1"; fi; }
 step() { printf '\n\033[1m==> %s\033[0m\n' "$1"; }
 fail() { echo "$1" >&2; exit 1; }
 
+# limite SECONDES commande… — arrête une commande bloquée au bout du délai (0 : aucune limite), avec un message clair.
+# `timeout` place la commande dans son propre groupe de processus, hors d'atteinte du terminal : il tourne en
+# arrière-plan et le piège lui transmet Ctrl+C. Sans `timeout` (macOS), la commande tourne sans limite.
+limite() {
+  local secondes="$1" debut=$SECONDS rc=0 pid
+  shift
+  if ! command -v timeout >/dev/null 2>&1; then
+    "$@"
+    return
+  fi
+  timeout --kill-after=30 "$secondes" "$@" &
+  pid=$!
+  trap 'kill -TERM "$pid" 2>/dev/null || true' INT TERM
+  wait "$pid" || rc=$?
+  trap - INT TERM
+  # 137 est aussi le code d'un processus tué par le système (mémoire) : seule la durée distingue le délai dépassé.
+  if ((rc == 124 || (rc == 137 && secondes > 0 && SECONDS - debut >= secondes))); then
+    echo "$(t "Délai de $secondes s dépassé, commande arrêtée : $*" "Timed out after $secondes s, command stopped: $*")" >&2
+  fi
+  return "$rc"
+}
+
 if [ "$aide" = 1 ]; then
   if [ "$lang" = en ]; then
     cat <<'EOF'
@@ -61,6 +83,9 @@ dependencies, the web UI (main app and hub dashboard), the relay/agent tests, an
   ./build.sh --ui-only          # only rebuild packages/app/dist, for `bun run dev hub` / `bun run dev agent run`
   ./build.sh --skip-tests
   ./build.sh --lang fr|en       # message language (or OPENCODE_HUB_LANG; French by default)
+
+  OPENCODE_BUILD_TIMEOUT=3600   # maximum duration of each step in seconds, 0 for no limit
+  OPENCODE_BROTLI_QUALITY=6     # web UI compression, 0 to 11: 11 is slower and about 11% smaller
 EOF
   else
     cat <<'EOF'
@@ -72,6 +97,9 @@ dépendances, interface web (application et tableau de bord du hub), tests du re
   ./build.sh --ui-only          # seulement packages/app/dist, pour `bun run dev hub` / `bun run dev agent run`
   ./build.sh --skip-tests
   ./build.sh --lang fr|en       # langue des messages (ou OPENCODE_HUB_LANG ; français par défaut)
+
+  OPENCODE_BUILD_TIMEOUT=3600   # durée maximale de chaque étape en secondes, 0 pour aucune limite
+  OPENCODE_BROTLI_QUALITY=6     # compression de l'interface web, de 0 à 11 : 11 est plus lent et environ 11 % plus léger
 EOF
   fi
   exit 0
@@ -85,18 +113,23 @@ expected="$(sed -n 's/.*"packageManager": "bun@\([^"]*\)".*/\1/p' package.json)"
 actual="$(bun --version)"
 [ "$expected" = "$actual" ] || echo "$(t "attention : ce dépôt attend bun $expected, trouvé $actual" "warning: this repo expects bun $expected, found $actual")" >&2
 
+delai="${OPENCODE_BUILD_TIMEOUT:-3600}"
+[[ "$delai" =~ ^[0-9]+$ ]] || fail "$(t "OPENCODE_BUILD_TIMEOUT : nombre de secondes attendu (reçu : $delai)" "OPENCODE_BUILD_TIMEOUT: expected a number of seconds (got: $delai)")"
+# La qualité maximale de Brotli ajoute plusieurs minutes pour une archive à peine plus légère dans un binaire de 260 Mo.
+export OPENCODE_BROTLI_QUALITY="${OPENCODE_BROTLI_QUALITY:-6}"
+
 step "$(t "Installation des dépendances" "Installing dependencies")"
-bun install
+limite "$delai" bun install
 
 if [ "$tests" = 1 ]; then
   step "$(t "Tests du hub et de l'agent" "Testing the hub and agent")"
-  (cd packages/relay && bun test)
-  (cd packages/cli && bun test --timeout 30000 test/relay-agent.test.ts)
+  (cd packages/relay && limite "$delai" bun test)
+  (cd packages/cli && limite "$delai" bun test --timeout 30000 test/relay-agent.test.ts)
 fi
 
 if [ "$ui_only" = 1 ]; then
   step "$(t "Construction de l'interface web" "Building the web UI")"
-  (cd packages/app && VITE_OPENCODE_SERVER_MODE=origin bun run build)
+  (cd packages/app && limite "$delai" env VITE_OPENCODE_SERVER_MODE=origin bun run build)
   [ -f packages/app/dist/hub.html ] || fail "$(t "packages/app/dist/hub.html est absent" "packages/app/dist/hub.html is missing")"
   step "$(t "Terminé" "Done")"
   t "Interface web construite dans packages/app/dist." "Web UI built in packages/app/dist."; echo
@@ -109,12 +142,12 @@ fi
 # The CLI build also builds the web UI (packages/app/dist) and embeds it in the binary.
 step "$(t "Construction du binaire opencode" "Building the opencode binary")${target:+ $(t "pour" "for") $target}"
 if [ -n "$target" ]; then
-  (cd packages/cli && OPENCODE_TARGET="$target" bun run build)
+  (cd packages/cli && limite "$delai" env OPENCODE_TARGET="$target" bun run build)
   name="cli-$target"
 else
   # `bun install` a déjà récupéré les paquets natifs de cette plateforme ; sans --skip-install, la construction
   # téléchargerait ceux de toutes les plateformes (utile seulement en compilation croisée), ce qui domine sa durée.
-  (cd packages/cli && bun run build --single --skip-install)
+  (cd packages/cli && limite "$delai" bun run build --single --skip-install)
   name="$(ls packages/cli/dist | head -n 1)"
 fi
 [ -f packages/app/dist/hub.html ] || fail "$(t "packages/app/dist/hub.html est absent" "packages/app/dist/hub.html is missing")"
@@ -122,9 +155,14 @@ fi
 binary="$(find "packages/cli/dist/$name/bin" -maxdepth 1 -type f -name 'opencode*' | head -n 1)"
 [ -n "$binary" ] || fail "$(t "Aucun binaire dans" "No binary found in") packages/cli/dist/$name/bin"
 
+version=""
+if [ -z "$target" ]; then
+  version="$(limite 30 "$binary" --version 2>&1)" || fail "$(t "Le binaire ne démarre pas" "The binary does not start") ($binary) : $version"
+fi
+
 step "$(t "Terminé" "Done")"
 echo "$(t "Binaire" "Binary") : $root/$binary"
-[ -z "$target" ] && "$binary" --version 2>/dev/null | sed "s/^/Version : /" || true
+[ -z "$version" ] || echo "Version : $version"
 if [ "$lang" = en ]; then
   cat <<EOF
 

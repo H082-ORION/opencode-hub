@@ -483,6 +483,17 @@ en_tant_que() {
 
 version_de() { local v; v="$("$1" --version 2>/dev/null | head -n1)" || true; printf '%s\n' "${v:-$(t "version inconnue" "unknown version")}"; }
 
+# signaler_autre_opencode UTILISATEUR — prévient si `opencode` désigne pour lui un autre binaire que celui installé
+# (OpenCode officiel, par exemple, qui n'a pas les commandes du hub). Ce binaire n'est jamais lancé : il lui appartient
+# et ce script tourne en root. Le PATH testé est celui d'en_tant_que, pas celui de ses fichiers de démarrage.
+signaler_autre_opencode() {
+  local autre
+  autre="$(en_tant_que "$1" bash -c 'type -P opencode' 2>/dev/null || true)"
+  [[ -n "$autre" && "$(readlink -f "$autre")" != "$(readlink -f "$BIN_CIBLE")" ]] || return 0
+  warn "$(t "pour $1, « opencode » lance $autre et non $BIN_CIBLE : les commandes du hub (agent run, hub…) peuvent y manquer." "for $1, \"opencode\" runs $autre, not $BIN_CIBLE: it may lack the hub commands (agent run, hub…).")"
+  info "$(t "Utiliser le chemin complet ($BIN_CIBLE agent run) ou retirer l'autre binaire." "Use the full path ($BIN_CIBLE agent run) or remove the other binary.")"
+}
+
 apt_installer() {
   export DEBIAN_FRONTEND=noninteractive
   apt-get update -q
@@ -897,7 +908,11 @@ fi
 if ((INSTALLER_HUB || INSTALLER_CLIENT)); then
   etape "$(t "Binaire opencode" "opencode binary")"
   if ((CONSTRUIRE)); then
-    construire() { en_tant_que "$APPELANT" bash -c 'cd "$1" && ./build.sh --skip-tests' _ "$REPO"; }
+    construire() {
+      en_tant_que "$APPELANT" env ${OPENCODE_BUILD_TIMEOUT:+OPENCODE_BUILD_TIMEOUT="$OPENCODE_BUILD_TIMEOUT"} \
+        ${OPENCODE_BROTLI_QUALITY:+OPENCODE_BROTLI_QUALITY="$OPENCODE_BROTLI_QUALITY"} \
+        bash -c 'cd "$1" && ./build.sh --skip-tests' _ "$REPO"
+    }
     suivre "$(t "Construction d'opencode (./build.sh)" "Building opencode (./build.sh)")" construire
     BINARY="$(ls -t "$REPO"/packages/cli/dist/*/bin/opencode 2>/dev/null | head -n1 || true)"
     [[ -n "$BINARY" ]] || die "$(t "binaire introuvable après la construction" "binary not found after the build") (packages/cli/dist/*/bin/opencode)."
@@ -1190,6 +1205,8 @@ EOF
     echo "  $OPENCODE_BIN agent run"
   fi
 fi
+
+((INSTALLER_HUB || INSTALLER_CLIENT)) && signaler_autre_opencode "${CLIENT_UTILISATEUR:-$APPELANT}"
 
 # ================================================================== Résumé
 
