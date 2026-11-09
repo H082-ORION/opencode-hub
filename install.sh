@@ -8,6 +8,8 @@
 #   - Client : l'agent qui relie cette machine à un hub (opencode agent join / run).
 # Le hub et le client peuvent être installés en service systemd avec démarrage automatique.
 #
+#   curl -fsSL https://raw.githubusercontent.com/H082-ORION/opencode-hub/remote-machines/install.sh | bash
+#                                                        # tout-en-un : choix des composants, dernière version / all-in-one
 #   sudo ./install.sh                                    # menu interactif / interactive menu
 #   sudo ./install.sh --caddy --hub --domain hub.example.com --email vous@example.com --service
 #   sudo ./install.sh --client --client-url https://hub.example.com --code <code> --service
@@ -20,6 +22,21 @@
 # OPENCODE_HUB_SANS_BANNIERE=1.
 
 set -euo pipefail
+
+# `curl … | bash` : le script arrive par l'entrée standard, qui est prise par curl et dont les menus ont besoin. Il se
+# relance donc depuis une copie, avec le terminal en entrée.
+SCRIPT_URL="${OPENCODE_HUB_SCRIPT_URL:-https://raw.githubusercontent.com/H082-ORION/opencode-hub/remote-machines/install.sh}"
+if [[ ! -f "${BASH_SOURCE[0]:-}" ]]; then
+  copie="$(mktemp /tmp/opencode-hub-installer.XXXXXX)"
+  if ! curl -fsSL --retry 3 --connect-timeout 20 --max-time 120 -o "$copie" "$SCRIPT_URL"; then
+    rm -f "$copie"
+    echo "✗ téléchargement impossible / download failed: $SCRIPT_URL" >&2
+    exit 1
+  fi
+  export OPENCODE_HUB_COPIE="$copie"
+  if (: </dev/tty) 2>/dev/null; then exec bash "$copie" "$@" </dev/tty; fi
+  exec bash "$copie" "$@" </dev/null
+fi
 
 ARGS_ORIGINAUX=("$@")
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -79,7 +96,13 @@ MENU_AIDE=""
 pause() { [[ "$VITESSE" == 0 ]] || sleep "$1"; }
 cacher() { if ((TTY)); then printf '\e[?25l'; fi; }
 montrer() { if ((TTY)); then printf '\e[?25h'; fi; }
-trap montrer EXIT
+DOSSIER_DL=""
+nettoyer() {
+  montrer
+  [[ -z "$DOSSIER_DL" ]] || rm -rf "$DOSSIER_DL"
+  [[ -z "${OPENCODE_HUB_COPIE:-}" ]] || rm -f "$OPENCODE_HUB_COPIE"
+}
+trap nettoyer EXIT
 trap 'montrer; echo; exit 130' INT
 
 # Saisie possible : entrée standard sur un terminal, et pas de --yes.
@@ -349,6 +372,10 @@ NOM_MACHINE=""
 CLIENT_UTILISATEUR=""
 BINARY=""
 CONSTRUIRE=0
+TELECHARGER=0
+VERSION_VOULUE=""
+DEPOT="H082-ORION/opencode-hub"
+TAG=""
 MODE=installer
 PURGER=0
 
@@ -389,6 +416,8 @@ aide() {
   aide_opt "--insecure" "$(t "accepter un hub en http:// sur une autre machine (code et jetons en clair)" "accept a plain http:// hub on another machine (code and tokens in clear text)")"
   aide_titre "$(t "Binaire et services" "Binary and services")"
   aide_opt "--binary $(t "<chemin>" "<path>")" "$(t "binaire opencode à installer dans $BIN_CIBLE" "opencode binary to install to $BIN_CIBLE")"
+  aide_opt "--download" "$(t "télécharger la dernière version depuis GitHub, pré-versions comprises" "download the latest version from GitHub, pre-releases included")"
+  aide_opt "--version $(t "<version>" "<version>")" "$(t "télécharger cette version (ex. 1.0.0-pre.3)" "download this version (e.g. 1.0.0-pre.3)")"
   aide_opt "--build" "$(t "construire le binaire depuis ce dépôt (./build.sh)" "build the binary from this repository (./build.sh)")"
   aide_opt "--service" "$(t "installer les services systemd (démarrage automatique)" "install the systemd services (start at boot)")"
   aide_opt "--no-service" "$(t "ne pas installer de service systemd" "do not install systemd services")"
@@ -429,6 +458,8 @@ while [[ $# -gt 0 ]]; do
     --client-user) valeur "$@"; CLIENT_UTILISATEUR="$2"; shift 2 ;;
     --binary) valeur "$@"; BINARY="$2"; shift 2 ;;
     --build) CONSTRUIRE=1; shift ;;
+    --download) TELECHARGER=1; shift ;;
+    --version) valeur "$@"; TELECHARGER=1; VERSION_VOULUE="${2#v}"; shift 2 ;;
     --service) SERVICE_HUB=1; SERVICE_CLIENT=1; shift ;;
     --no-service) SERVICE_HUB=0; SERVICE_CLIENT=0; shift ;;
     --lang) valeur "$@"; shift 2 ;;
@@ -479,6 +510,30 @@ en_tant_que() {
   local -a env_u=(env HOME="$h" USER="$u" LOGNAME="$u" OPENCODE_HUB_LANG="$LANGUE"
     PATH="$h/.opencode/bin:$h/.bun/bin:$h/.local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin")
   if [[ "$u" == root ]]; then "${env_u[@]}" "$@"; else runuser -u "$u" -- "${env_u[@]}" "$@"; fi
+}
+
+# Le tag de la dernière version publiée, pré-versions comprises ; vide si GitHub ne répond pas.
+derniere_version() {
+  { curl -fsSL --connect-timeout 15 --max-time 30 "https://api.github.com/repos/$DEPOT/releases?per_page=1" 2>/dev/null || true; } |
+    sed -n 's/.*"tag_name": *"\([^"]*\)".*/\1/p' | head -n1
+}
+
+# Télécharge l'archive de $TAG pour cette architecture dans $DOSSIER_DL, la vérifie et l'extrait.
+telecharger_binaire() {
+  local arch archive base
+  case "$(uname -m)" in
+    x86_64 | amd64) arch=x64 ;;
+    aarch64 | arm64) arch=arm64 ;;
+    *) echo "$(t "architecture non prise en charge" "unsupported architecture")${DP}$(uname -m)" >&2; return 1 ;;
+  esac
+  archive="opencode-linux-$arch.tar.gz"
+  base="https://github.com/$DEPOT/releases/download/$TAG"
+  curl -fsSL --retry 3 --connect-timeout 20 --max-time 1800 -o "$DOSSIER_DL/$archive" "$base/$archive"
+  curl -fsSL --retry 3 --connect-timeout 20 --max-time 60 -o "$DOSSIER_DL/SHA256SUMS" "$base/SHA256SUMS"
+  (cd "$DOSSIER_DL" && grep "  $archive\$" SHA256SUMS | sha256sum --check --status) ||
+    { echo "$(t "somme de contrôle incorrecte : archive corrompue" "checksum mismatch: corrupted archive")" >&2; return 1; }
+  tar -xzf "$DOSSIER_DL/$archive" -C "$DOSSIER_DL" opencode
+  timeout 30 "$DOSSIER_DL/opencode" --version
 }
 
 version_de() { local v; v="$("$1" --version 2>/dev/null | head -n1)" || true; printf '%s\n' "${v:-$(t "version inconnue" "unknown version")}"; }
@@ -737,7 +792,7 @@ if [[ "$MODE" == etat ]]; then afficher_etat; exit 0; fi
 if [[ $EUID -ne 0 ]]; then
   if command -v sudo >/dev/null 2>&1 && interactif &&
     oui_non "$(t "Cette opération demande les droits administrateur. Relancer avec sudo ?" "This requires administrator rights. Run again with sudo?")"; then
-    exec sudo env OPENCODE_HUB_SANS_BANNIERE=1 OPENCODE_HUB_LANG="$LANGUE" bash "$0" "${ARGS_ORIGINAUX[@]}"
+    exec sudo env OPENCODE_HUB_SANS_BANNIERE=1 OPENCODE_HUB_LANG="$LANGUE" OPENCODE_HUB_COPIE="${OPENCODE_HUB_COPIE:-}" bash "$0" "${ARGS_ORIGINAUX[@]}"
   fi
   die "$(t "lancer en administrateur" "run as administrator")${DP}sudo $0 ${ARGS_ORIGINAUX[*]}"
 fi
@@ -832,25 +887,33 @@ if ((INSTALLER_HUB || INSTALLER_CLIENT)); then
   if [[ -n "$BINARY" ]]; then
     [[ -f "$BINARY" ]] || die "$(t "--binary introuvable" "--binary not found")${DP}$BINARY"
     BINARY="$(readlink -f "$BINARY")"
-  elif ((!CONSTRUIRE)); then
+  elif ((!CONSTRUIRE && !TELECHARGER)); then
     candidats=()
     for c in "$BIN_CIBLE" "$(command -v opencode 2>/dev/null || true)" "$(dossier_de "$APPELANT")/.opencode/bin/opencode"; do
       [[ -n "$c" && -x "$c" ]] || continue
       c="$(readlink -f "$c")"
       [[ " ${candidats[*]} " == *" $c "* ]] || candidats+=("$c")
     done
-    options=()
-    for c in "${candidats[@]}"; do options+=("$(t "Utiliser" "Use") $c ${dim}($(version_de "$c"))${reset}"); done
-    [[ -x "$REPO/build.sh" ]] && options+=("$(t "Construire depuis ce dépôt" "Build from this repository") ${dim}$(t "(./build.sh, bun requis)" "(./build.sh, bun required)")${reset}")
-    options+=("$(t "Indiquer le chemin d'un binaire" "Enter the path of a binary")")
+    # Sans dépôt ni binaire, en mode automatique : il ne reste que le téléchargement.
     if ! interactif && ((${#candidats[@]} == 0)); then
-      [[ -x "$REPO/build.sh" ]] || die "$(t "aucun binaire opencode : passer --binary <chemin> ou --build." "no opencode binary: pass --binary <path> or --build.")"
-      CONSTRUIRE=1
+      if [[ -x "$REPO/build.sh" ]]; then CONSTRUIRE=1; else TELECHARGER=1; fi
     else
+      options=()
+      proposee=""
+      if interactif; then proposee="$(derniere_version)"; fi
+      [[ -z "$proposee" ]] || options+=("$(t "Télécharger la dernière version" "Download the latest version") ${dim}($proposee, GitHub)${reset}")
+      for c in "${candidats[@]}"; do options+=("$(t "Utiliser" "Use") $c ${dim}($(version_de "$c"))${reset}"); done
+      [[ -x "$REPO/build.sh" ]] && options+=("$(t "Construire depuis ce dépôt" "Build from this repository") ${dim}$(t "(./build.sh, bun requis)" "(./build.sh, bun required)")${reset}")
+      options+=("$(t "Indiquer le chemin d'un binaire" "Enter the path of a binary")")
       menu "$(t "Quel binaire opencode installer ?" "Which opencode binary should be installed?")" "${options[@]}" || die "$(t "abandon." "aborted.")"
-      if ((MENU_CHOIX < ${#candidats[@]})); then
-        BINARY="${candidats[$MENU_CHOIX]}"
-      elif [[ -x "$REPO/build.sh" ]] && ((MENU_CHOIX == ${#candidats[@]})); then
+      rang=$MENU_CHOIX
+      [[ -z "$proposee" ]] || rang=$((rang - 1))
+      if ((rang < 0)); then
+        TELECHARGER=1
+        TAG="$proposee"
+      elif ((rang < ${#candidats[@]})); then
+        BINARY="${candidats[$rang]}"
+      elif [[ -x "$REPO/build.sh" ]] && ((rang == ${#candidats[@]})); then
         CONSTRUIRE=1
       else
         demander BINARY "$(t "Chemin du binaire opencode" "Path of the opencode binary")"
@@ -858,6 +921,12 @@ if ((INSTALLER_HUB || INSTALLER_CLIENT)); then
         BINARY="$(readlink -f "$BINARY")"
       fi
     fi
+  fi
+  if ((TELECHARGER)); then
+    if [[ -n "$VERSION_VOULUE" ]]; then TAG="v$VERSION_VOULUE"; fi
+    [[ -n "$TAG" ]] || TAG="$(derniere_version)"
+    [[ -n "$TAG" ]] || die "$(t "impossible de trouver la dernière version sur GitHub." "could not find the latest version on GitHub.")"
+    ((!CONSTRUIRE)) || die "$(t "--build et --download ne vont pas ensemble." "--build and --download cannot be combined.")"
   fi
   if ((CONSTRUIRE)); then
     [[ -x "$REPO/build.sh" ]] || die "$(t "build.sh introuvable dans" "build.sh not found in") $REPO."
@@ -884,6 +953,7 @@ if ((INSTALLER_CLIENT)); then
 fi
 if ((INSTALLER_HUB || INSTALLER_CLIENT)); then
   if ((CONSTRUIRE)); then recap+=("${bold}$(t "Binaire" "Binary")${reset} $(t "construit depuis $REPO, installé dans $BIN_CIBLE" "built from $REPO, installed to $BIN_CIBLE")")
+  elif ((TELECHARGER)); then recap+=("${bold}$(t "Binaire" "Binary")${reset} $TAG ${dim}$(t "(GitHub), installé dans" "(GitHub), installed to") $BIN_CIBLE${reset}")
   else recap+=("${bold}$(t "Binaire" "Binary")${reset} $BINARY"); fi
 fi
 echo
@@ -916,6 +986,13 @@ if ((INSTALLER_HUB || INSTALLER_CLIENT)); then
     suivre "$(t "Construction d'opencode (./build.sh)" "Building opencode (./build.sh)")" construire
     BINARY="$(ls -t "$REPO"/packages/cli/dist/*/bin/opencode 2>/dev/null | head -n1 || true)"
     [[ -n "$BINARY" ]] || die "$(t "binaire introuvable après la construction" "binary not found after the build") (packages/cli/dist/*/bin/opencode)."
+  fi
+  if ((TELECHARGER)); then
+    command -v curl >/dev/null || die "$(t "curl est nécessaire pour télécharger le binaire." "curl is required to download the binary.")"
+    DOSSIER_DL="$(mktemp -d /tmp/opencode-hub-download.XXXXXX)"
+    suivre "$(t "Téléchargement d'opencode" "Downloading opencode") $TAG" telecharger_binaire ||
+      die "$(t "téléchargement impossible." "download failed.")"
+    BINARY="$DOSSIER_DL/opencode"
   fi
   if [[ "$BINARY" != "$BIN_CIBLE" ]]; then
     install -m 0755 "$BINARY" "$BIN_CIBLE.new"
@@ -1219,11 +1296,21 @@ fi
 ((INSTALLER_CADDY)) && fin+=("$(pad "$(t "Journal Caddy" "Caddy logs")" 16) ${dim}journalctl -u caddy -f${reset}")
 ((INSTALLER_CLIENT && SERVICE_CLIENT)) && fin+=("$(pad "$(t "Journal agent" "Agent logs")" 16) ${dim}journalctl -u opencode-agent -f${reset}")
 ((INSTALLER_HUB && SERVICE_HUB)) && fin+=("$(pad "Invitation" 16) ${dim}sudo -u $HUB_UTILISATEUR env HOME=$DATA_DIR $OPENCODE_BIN hub invite --admin --data $DATA_DIR${reset}")
-fin+=("$(pad "$(t "État" "Status")" 16) ${dim}./install.sh --status${reset}")
-if ((INSTALLER_HUB && !INSTALLER_CLIENT)); then
-  fin+=("" "$(t "Relier une machine : sur celle-ci," "Connect a machine: on that machine, run")")
-  fin+=("  ${dim}sudo ./install.sh --client --client-url ${HUB_URL:-<url>} --code <code>${reset}")
+# Sans dépôt, les commandes à retenir repassent par curl : trop longues pour le cadre, elles s'affichent dessous.
+if [[ -z "${OPENCODE_HUB_COPIE:-}" ]]; then
+  fin+=("$(pad "$(t "État" "Status")" 16) ${dim}./install.sh --status${reset}")
+  if ((INSTALLER_HUB && !INSTALLER_CLIENT)); then
+    fin+=("" "$(t "Relier une machine : sur celle-ci," "Connect a machine: on that machine, run")")
+    fin+=("  ${dim}sudo ./install.sh --client --client-url ${HUB_URL:-<url>} --code <code>${reset}")
+  fi
 fi
 echo
 cadre "$green" "$(t "Installation terminée" "Installation complete")" "${fin[@]}"
 echo
+if [[ -n "${OPENCODE_HUB_COPIE:-}" ]]; then
+  info "$(t "Mettre à jour ou relier une machine : relancer la même commande" "Update or connect a machine: run the same command again")"
+  echo "  curl -fsSL $SCRIPT_URL | bash"
+  info "$(t "État et désinstallation : ajouter" "Status and uninstall: add")"
+  echo "  | bash -s -- --status    | bash -s -- --uninstall"
+  echo
+fi

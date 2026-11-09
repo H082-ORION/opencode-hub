@@ -93,6 +93,13 @@ Depuis les sources sans binaire : `./build.sh --ui-only`, puis `bun run dev hub`
 
 ## Installer
 
+Sans cloner le dépôt, cette seule commande installe ou met à jour le hub, le client ou Caddy. Elle demande quoi installer
+et télécharge la dernière version publiée :
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/H082-ORION/opencode-hub/remote-machines/install.sh | bash
+```
+
 `install.sh`, à la racine du dépôt, installe et met en place les trois composants. Au lancement, un menu propose la
 langue (français ou anglais), puis les composants à cocher :
 
