@@ -82,7 +82,8 @@ beforeAll(async () => {
   state.dropped = []
   state.opened = new Map()
   state.agents = [await connect(state.box)]
-})
+  // Four sign-ups stretch four passwords: slow on a busy machine.
+}, 30_000)
 
 afterAll(async () => {
   await Promise.all(state.agents?.map((agent) => agent.close()) ?? [])
