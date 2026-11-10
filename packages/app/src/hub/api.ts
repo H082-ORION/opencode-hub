@@ -202,6 +202,33 @@ export type HubInvitation = {
 /** A newly issued invitation; its link is shown once. */
 export type IssuedInvitation = { id: string; url: string; expiresAt: number }
 
+/** A release of OpenCode Hub on GitHub; `notes` is its markdown body and `url` its GitHub page. */
+export type HubRelease = {
+  version: string
+  tag: string
+  prerelease: boolean
+  publishedAt: string
+  notes: string
+  url: string
+}
+
+/**
+ * What administrators see of the hub's own updates: `stable` and `dev` are the newest releases newer than `current`
+ * (`dev` only when also newer than `stable`), and `status` is the installer's progress.
+ */
+export type HubUpdates = {
+  current: string
+  /** The hub runs a local build rather than a release. */
+  development: boolean
+  checkedAt: number | null
+  error: string | null
+  stable: HubRelease | null
+  dev: HubRelease | null
+  releases: HubRelease[]
+  installer: { available: boolean }
+  status: { state: "idle" | "pending" | "running" | "done" | "failed"; version?: string; message?: string; at?: number }
+}
+
 /** A failed hub request; `status` is 0 when the hub could not be reached, 423 when the user's keys are locked. */
 export class HubError extends Error {
   constructor(
@@ -321,6 +348,9 @@ export const hubApi = {
   deleteConnector: (id: string) => request<void>(`connectors/${encodeURIComponent(id)}`, { method: "DELETE" }),
   /** Starts the OAuth sign-in of a connector; the browser goes to `url` and comes back to the dashboard. */
   connectorSignIn: (id: string) => post<{ url: string }>(`connectors/${encodeURIComponent(id)}/oauth/begin`, {}),
+  updates: () => request<HubUpdates>("updates"),
+  checkUpdates: () => post<HubUpdates>("updates/check", {}),
+  installUpdate: (version: string) => post<HubUpdates>("updates/install", { version }),
   chatgptBegin: () => request<{ attempt: string; url: string }>("providers/chatgpt/begin", { method: "POST" }),
   chatgptComplete: (attempt: string, callback: string) =>
     request<{ provider?: HubProvider }>("providers/chatgpt/complete", { method: "POST", body: { attempt, callback } }),

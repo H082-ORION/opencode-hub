@@ -1,10 +1,11 @@
 import { Loader } from "@opencode/ui/loader"
-import { createSignal, Match, onMount, Switch } from "solid-js"
+import { createSignal, Match, onMount, Show, Switch } from "solid-js"
 import { hubApi, type HubSession } from "./api"
 import { Chat } from "./chat"
 import { Dashboard } from "./dashboard"
 import { Login } from "./login"
 import { Register } from "./register"
+import { UpdatePrompt } from "./updates"
 
 type Session = { status: "checking" } | { status: "signed-out" } | { status: "signed-in"; session: HubSession }
 
@@ -41,9 +42,18 @@ export function Hub() {
       <Match when={signedIn()}>
         {(current) => {
           const signedOut = () => setSession({ status: "signed-out" })
-          if (/^\/settings(?:\/|$)/.test(location.pathname))
-            return <Dashboard session={current()} onSignedOut={signedOut} />
-          return <Chat session={current()} onSignedOut={signedOut} />
+          return (
+            <>
+              {/^\/settings(?:\/|$)/.test(location.pathname) ? (
+                <Dashboard session={current()} onSignedOut={signedOut} />
+              ) : (
+                <Chat session={current()} onSignedOut={signedOut} />
+              )}
+              <Show when={current().user.role === "admin"}>
+                <UpdatePrompt />
+              </Show>
+            </>
+          )
         }}
       </Match>
     </Switch>

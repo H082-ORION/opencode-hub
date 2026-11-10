@@ -388,6 +388,11 @@ ANCIEN_ENV_FILE="/etc/opencode-hub.env"
 UNIT_HUB="/etc/systemd/system/opencode-hub.service"
 UNIT_CLIENT="/etc/systemd/system/opencode-agent.service"
 CADDYFILE="/etc/caddy/Caddyfile"
+# Mises à jour depuis le tableau de bord (le hub les lit : chemins à garder alignés avec le relais).
+SCRIPT_MAJ="/usr/local/lib/opencode-hub/update.sh"
+UNIT_MAJ_SERVICE="/etc/systemd/system/opencode-hub-update.service"
+UNIT_MAJ_PATH="/etc/systemd/system/opencode-hub-update.path"
+DOSSIER_ETAT_MAJ="/var/lib/opencode-hub-update"
 BIN_CIBLE="/usr/local/bin/opencode"
 # Marque reconnue par script/hub/uninstall.sh : la garder identique.
 MARQUE="# Managed by opencode script/hub/install.sh"
@@ -625,6 +630,17 @@ afficher_etat() {
     l+=("$(ligne_etat Hub "$e" "$(auto_unite opencode-hub && echo 1 || echo 0)" "$d")")
   fi
 
+  # Outil de mise à jour du hub : l'unité .path qui attend les demandes, et le dernier résultat.
+  if [[ -f "$UNIT_MAJ_PATH" ]]; then
+    if systemctl is-active --quiet opencode-hub-update.path; then e=actif; else e=inactif; fi
+    d="$(t "attend les demandes du tableau de bord" "waits for dashboard requests")"
+    if [[ -r "$DOSSIER_ETAT_MAJ/status.json" ]]; then
+      u="$(sed -nE 's/.*"state":"([a-z]+)".*"version":"([^"]*)".*/\2 \1/p' "$DOSSIER_ETAT_MAJ/status.json")"
+      [[ -z "$u" ]] || d+=" $S_SEP $(t "dernière" "last")${DP}$u"
+    fi
+    l+=("$(ligne_etat "$(t "MàJ" "Updater")" "$e" "$(auto_unite opencode-hub-update.path && echo 1 || echo 0)" "$d")")
+  fi
+
   # Agent
   e="$(etat_unite opencode-agent)"
   if [[ "$e" == absent ]]; then
@@ -653,7 +669,7 @@ afficher_etat() {
   cadre "$gris" "$(t "État des services" "Service status")" "${l[@]}"
   [[ $EUID -eq 0 ]] || info "${dim}$(t "Lancer avec sudo pour voir aussi l'enrôlement de l'agent." "Run with sudo to also see the agent's enrollment.")${reset}"
   echo
-  info "$(t "Journaux" "Logs")${DP}${dim}journalctl -u opencode-hub -f · journalctl -u opencode-agent -f · journalctl -u caddy -f${reset}"
+  info "$(t "Journaux" "Logs")${DP}${dim}journalctl -u opencode-hub -f · journalctl -u opencode-hub-update · journalctl -u opencode-agent -f · journalctl -u caddy -f${reset}"
   echo
 }
 
@@ -661,7 +677,7 @@ desinstaller() {
   local present_caddy=0 present_hub=0 present_client=0 i u sauvegarde
   [[ -f "$CADDYFILE" ]] && grep -qF "$MARQUE" "$CADDYFILE" && present_caddy=1
   command -v caddy >/dev/null && present_caddy=1
-  [[ -f "$UNIT_HUB" || -f "$ANCIEN_ENV_FILE" ]] && present_hub=1
+  [[ -f "$UNIT_HUB" || -f "$ANCIEN_ENV_FILE" || -f "$UNIT_MAJ_PATH" ]] && present_hub=1
   [[ -f "$UNIT_CLIENT" ]] && present_client=1
 
   if ((!INSTALLER_CADDY && !INSTALLER_HUB && !INSTALLER_CLIENT)); then
@@ -731,12 +747,17 @@ desinstaller() {
   if ((INSTALLER_HUB)); then
     etape "Hub"
     u="$(cle_unite "$UNIT_HUB" User)"
+    systemctl disable --now opencode-hub-update.path >/dev/null 2>&1 || true
+    systemctl stop opencode-hub-update.service >/dev/null 2>&1 || true
     systemctl disable --now opencode-hub >/dev/null 2>&1 || true
     # Le fichier d'environnement ne vient que d'une ancienne installation ; il est retiré s'il reste.
-    rm -f "$UNIT_HUB" "$ANCIEN_ENV_FILE"
+    rm -f "$UNIT_HUB" "$ANCIEN_ENV_FILE" "$UNIT_MAJ_PATH" "$UNIT_MAJ_SERVICE" "$SCRIPT_MAJ"
+    rmdir "$(dirname "$SCRIPT_MAJ")" 2>/dev/null || true
+    rm -rf "$DOSSIER_ETAT_MAJ" "$DATA_DIR/update"
     systemctl daemon-reload
-    systemctl reset-failed opencode-hub >/dev/null 2>&1 || true
+    systemctl reset-failed opencode-hub opencode-hub-update.service opencode-hub-update.path >/dev/null 2>&1 || true
     ok "$(t "Service opencode-hub retiré" "opencode-hub service removed")"
+    ok "$(t "Outil de mise à jour retiré" "Updater removed")"
     if ((effacer_donnees)); then
       rm -rf "$DATA_DIR"
       ok "$(t "Données effacées" "Data deleted")${DP}$DATA_DIR"
@@ -776,7 +797,7 @@ desinstaller() {
 
   # Binaire
   if ((retirer_binaire)); then
-    rm -f "$BIN_CIBLE"
+    rm -f "$BIN_CIBLE" "$BIN_CIBLE.previous"
     ok "$(t "Binaire supprimé" "Binary deleted")${DP}$BIN_CIBLE"
   fi
 
@@ -1166,6 +1187,188 @@ attendre_hub() {
   return 1
 }
 
+# installer_maj — l'outil de mise à jour du hub. Le hub tourne sans privilèges et ne peut ni remplacer son binaire ni se
+# relancer : il dépose une demande dans $DATA_DIR/update/request ; une unité .path de root la voit et lance update.sh.
+installer_maj() {
+  install -d -m 0755 -o root -g root "$(dirname "$SCRIPT_MAJ")" "$DOSSIER_ETAT_MAJ"
+  # Le hub écrit dans $DATA_DIR : un lien symbolique à la place du dossier ferait changer de propriétaire sa cible.
+  if [[ -L "$DATA_DIR/update" ]]; then rm -f "$DATA_DIR/update"; fi
+  install -d -m 0750 -o "$HUB_UTILISATEUR" -g "$HUB_UTILISATEUR" "$DATA_DIR/update"
+  local nouveau
+  nouveau="$(mktemp)"
+  {
+    printf '#!/usr/bin/env bash\n%s\n' "$MARQUE"
+    printf 'DATA_DIR=%q\nUNIT_HUB=%q\nDEPOT=%q\nSTATUS_DIR=%q\n' "$DATA_DIR" "$UNIT_HUB" "$DEPOT" "$DOSSIER_ETAT_MAJ"
+    cat <<'EOF'
+# Mise à jour du hub opencode, lancée par opencode-hub-update.path quand le hub dépose une demande.
+# Updates the opencode hub; started by opencode-hub-update.path when the hub drops a request.
+#
+# The request lives in a directory the hub user owns: it is read and removed as that user, so a symlink planted there
+# gives root nothing. Only the version is taken from it, and only if it matches the release pattern. Downloads come
+# from the fixed repository above and are checked against SHA256SUMS and `opencode --version`.
+set -euo pipefail
+umask 022
+export LC_ALL=C PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+
+REQUEST="$DATA_DIR/update/request"
+STATUS="$STATUS_DIR/status.json"
+VERSION=""
+WORK=""
+BIN=""
+REPLACED=0
+FINISHED=0
+
+log() { echo "$*"; }
+
+json_string() {
+  local s="${1//\\/\\\\}"
+  s="${s//\"/\\\"}"
+  printf '"%s"' "$(printf '%s' "$s" | tr -d '\000-\037')"
+}
+
+# set_status STATE MESSAGE — atomic write, in a directory only root can write to.
+set_status() {
+  local tmp
+  tmp="$(mktemp "$STATUS_DIR/.status.XXXXXX")"
+  printf '{"state":%s,"version":%s,"message":%s,"at":%s}\n' "$(json_string "$1")" "$(json_string "$VERSION")" \
+    "$(json_string "$2")" "$(date +%s%3N)" >"$tmp"
+  chmod 0644 "$tmp"
+  mv -f "$tmp" "$STATUS"
+  log "$1: $2"
+}
+
+fail() {
+  FINISHED=1
+  set_status failed "$1"
+  exit 1
+}
+
+# Puts the previous binary back after an install that did not come up.
+rollback() {
+  [[ "$REPLACED" == 1 && -f "$BIN.previous" ]] || return 0
+  cp -p "$BIN.previous" "$BIN.new" && mv -f "$BIN.new" "$BIN" || return 1
+  REPLACED=0
+  systemctl restart opencode-hub || true
+  if systemctl is-active --quiet opencode-agent; then systemctl restart opencode-agent || true; fi
+}
+
+on_exit() {
+  local rc=$?
+  [[ -z "$WORK" ]] || rm -rf "$WORK"
+  if ((rc != 0 && !FINISHED)); then
+    FINISHED=1
+    if rollback; then set_status failed "unexpected error (code $rc), previous version kept" || true
+    else set_status failed "unexpected error (code $rc), rollback failed" || true; fi
+  fi
+}
+trap on_exit EXIT
+
+unit_key() { sed -n "s/^$1=//p" "$UNIT_HUB" | head -n1; }
+exec_option() { sed -n 's/^ExecStart=//p' "$UNIT_HUB" | head -n1 | grep -oE -- "$1 [^ ]+" | cut -d' ' -f2 || true; }
+
+hub_healthy() {
+  local port _
+  port="$(exec_option --port)"
+  for _ in $(seq 1 60); do
+    if systemctl is-active --quiet opencode-hub; then
+      [[ -n "$port" ]] || return 0
+      curl -fsS --max-time 2 "http://127.0.0.1:$port/hub/health" >/dev/null 2>&1 && return 0
+    fi
+    sleep 0.5
+  done
+  return 1
+}
+
+install -d -m 0755 "$STATUS_DIR"
+[[ -f "$UNIT_HUB" ]] || fail "hub service not installed"
+HUB_USER="$(unit_key User)"
+[[ -n "$HUB_USER" && "$HUB_USER" != root ]] || fail "hub service has no user"
+
+# Read (200 bytes at most) and remove the request as the hub user.
+request="$(runuser -u "$HUB_USER" -- head -c 200 "$REQUEST" 2>/dev/null || true)"
+runuser -u "$HUB_USER" -- rm -f "$REQUEST" 2>/dev/null || true
+if [[ -e "$REQUEST" || -L "$REQUEST" ]]; then rm -f "$REQUEST"; fi
+version="$(printf '%s' "$request" | tr -d '\n\r' | sed -nE 's/.*"version"[[:space:]]*:[[:space:]]*"v?([^"]*)".*/\1/p')"
+[[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-pre\.[0-9]+)?$ ]] || fail "invalid version requested"
+VERSION="$version"
+set_status running "downloading"
+
+BIN="$(sed -n 's/^ExecStart=//p' "$UNIT_HUB" | head -n1 | cut -d' ' -f1)"
+[[ "$BIN" == /* && -f "$BIN" ]] || fail "binary of the hub service not found"
+BIN="$(readlink -f "$BIN")"
+case "$(uname -m)" in
+  x86_64 | amd64) arch=x64 ;;
+  aarch64 | arm64) arch=arm64 ;;
+  *) fail "unsupported architecture: $(uname -m)" ;;
+esac
+archive="opencode-linux-$arch.tar.gz"
+base="https://github.com/$DEPOT/releases/download/v$VERSION"
+WORK="$(mktemp -d /var/tmp/opencode-hub-update.XXXXXX)"
+timeout 1900 curl -fsSL --retry 3 --connect-timeout 20 --max-time 1800 -o "$WORK/$archive" "$base/$archive" ||
+  fail "download failed: $archive"
+timeout 120 curl -fsSL --retry 3 --connect-timeout 20 --max-time 60 -o "$WORK/SHA256SUMS" "$base/SHA256SUMS" ||
+  fail "download failed: SHA256SUMS"
+
+set_status running "verifying"
+(cd "$WORK" && grep "  $archive\$" SHA256SUMS | sha256sum --check --status) || fail "checksum mismatch"
+mkdir "$WORK/x"
+tar -xzf "$WORK/$archive" -C "$WORK/x" opencode || fail "archive has no opencode binary"
+[[ -f "$WORK/x/opencode" && ! -L "$WORK/x/opencode" ]] || fail "archive has no opencode binary"
+chmod 0755 "$WORK/x/opencode"
+got="$(timeout 30 "$WORK/x/opencode" --version 2>/dev/null | head -n1 || true)"
+[[ "$got" == "opencode v$VERSION" ]] || fail "downloaded binary reports '${got:-nothing}', expected 'opencode v$VERSION'"
+
+set_status running "installing"
+cp -p "$BIN" "$BIN.previous.new"
+mv -f "$BIN.previous.new" "$BIN.previous"
+install -m 0755 -o root -g root "$WORK/x/opencode" "$BIN.new"
+mv -f "$BIN.new" "$BIN"
+REPLACED=1
+
+set_status running "restarting"
+agent_active=0
+systemctl is-active --quiet opencode-agent && agent_active=1
+if ! systemctl restart opencode-hub || ! hub_healthy; then
+  if rollback; then fail "the hub did not start with v$VERSION, previous version restored"; fi
+  fail "the hub did not start with v$VERSION and the rollback failed"
+fi
+if ((agent_active)); then systemctl restart opencode-agent || log "warning: opencode-agent did not restart"; fi
+REPLACED=0
+FINISHED=1
+set_status "done" "updated to v$VERSION"
+EOF
+  } >"$nouveau"
+  install -m 0755 -o root -g root "$nouveau" "$SCRIPT_MAJ"
+  rm -f "$nouveau"
+
+  cat >"$UNIT_MAJ_SERVICE" <<EOF
+$MARQUE
+[Unit]
+Description=opencode hub update
+Documentation=https://github.com/$DEPOT
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=$SCRIPT_MAJ
+TimeoutStartSec=40min
+PrivateTmp=true
+EOF
+  cat >"$UNIT_MAJ_PATH" <<EOF
+$MARQUE
+[Unit]
+Description=opencode hub update requests
+
+[Path]
+PathExists=$DATA_DIR/update/request
+Unit=opencode-hub-update.service
+
+[Install]
+WantedBy=paths.target
+EOF
+}
+
 if ((INSTALLER_HUB)); then
   etape "Hub"
   if ((SERVICE_HUB)); then
@@ -1224,8 +1427,12 @@ LockPersonality=true
 WantedBy=multi-user.target
 EOF
     ok "$(t "Service écrit" "Service written")${DP}$UNIT_HUB"
+    installer_maj
+    ok "$(t "Mises à jour depuis le tableau de bord activées" "Updates from the dashboard enabled")${DP}$UNIT_MAJ_PATH"
     systemctl daemon-reload
     systemctl enable opencode-hub >/dev/null 2>&1
+    systemctl enable opencode-hub-update.path >/dev/null 2>&1
+    systemctl restart opencode-hub-update.path
     systemctl restart opencode-hub
     hub_pret=0
     if suivre "$(t "Démarrage du hub" "Starting the hub")" attendre_hub; then

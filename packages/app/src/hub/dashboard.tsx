@@ -18,6 +18,7 @@ import { HubModels } from "./models"
 import { Organizations } from "./orgs"
 import { Providers } from "./providers"
 import { Skills } from "./skills"
+import { UpdatesSettings } from "./updates"
 import { Users } from "./users"
 
 type Item = { value: string; label: string; icon: ComponentProps<typeof Icon>["name"] }
@@ -72,6 +73,7 @@ export function Dashboard(props: { session: HubSession; onSignedOut: () => void 
           ? ([
               { value: "users", label: copy.settings.users, icon: "info" },
               { value: "organizations", label: copy.settings.organizations, icon: "folder" },
+              { value: "updates", label: copy.settings.updates, icon: "download" },
             ] satisfies Item[])
           : []),
       ],
@@ -249,6 +251,11 @@ export function Dashboard(props: { session: HubSession; onSignedOut: () => void 
             <Page value="organizations">
               <div class="hub-content">
                 <Organizations fail={fail} />
+              </div>
+            </Page>
+            <Page value="updates">
+              <div class="hub-content">
+                <UpdatesSettings fail={fail} />
               </div>
             </Page>
           </Show>

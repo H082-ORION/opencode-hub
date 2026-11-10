@@ -48,6 +48,19 @@ the database) are `0600`. An install from before accounts had `/etc/opencode-hub
 
 ## Update
 
+With the hub service installed by the root `install.sh`, administrators can update the hub from the dashboard
+(Settings, Updates). The hub runs unprivileged, so it only drops a request in `/var/lib/opencode-hub/update/request`
+(`{"version":"1.0.0"}`); the root unit `opencode-hub-update.path` notices it and runs
+`/usr/local/lib/opencode-hub/update.sh` through `opencode-hub-update.service`. The script reads and removes the request
+as the hub user, accepts only a release version (`X.Y.Z` or `X.Y.Z-pre.N`), downloads it from the
+`H082-ORION/opencode-hub` releases, checks `SHA256SUMS` and `opencode --version`, replaces the binary of the hub
+service atomically (the old one stays as `opencode.previous`), restarts the hub and, if running, `opencode-agent`. If
+the hub does not come back, the previous binary is restored. Progress and result go to
+`/var/lib/opencode-hub-update/status.json` and to `journalctl -u opencode-hub-update`. `./install.sh --status` shows
+the updater and its last result; `--uninstall --hub` removes it.
+
+To update by hand instead:
+
 ```sh
 sudo install -m 0755 ./opencode /usr/local/bin/opencode
 sudo systemctl restart opencode-hub

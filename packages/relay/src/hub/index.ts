@@ -23,6 +23,7 @@ import { Providers } from "./providers.js"
 import { HubSkills } from "./skills.js"
 import { Store } from "./store.js"
 import { Tunnel } from "./tunnel.js"
+import { Updates } from "./updates.js"
 
 export * as Hub from "./index.js"
 
@@ -49,6 +50,8 @@ export type Options = {
   mcp?: Egress.Options
   /** How to start the opencode server behind the hub's chat. Without it the hub has no chat. */
   chat?: { command: readonly string[]; cwd?: string; fetch?: typeof fetch }
+  /** Where the hub's releases and its update helper are found (see `Updates`). */
+  updates?: Updates.Options
 }
 
 /** A browser following `/hub/api/events`; it only ever hears about its user's machines. */
@@ -100,6 +103,7 @@ export async function start(options: Options) {
     app: { name: "hub", version: options.version ?? "local" },
   })
   const catalog = Catalog.create({ data: options.data, ...options.catalog })
+  const updates = Updates.create({ version: options.version ?? "local", data: options.data, options: options.updates })
   const tunnels = new Map<string, Tunnel.Instance>()
   const pings = new Map<Tunnel.Instance, Timer>()
   const listeners = new Set<Listener>()
@@ -320,6 +324,8 @@ export async function start(options: Options) {
     if (connector) return connector
     const clouds = await cloud.handle(request, route, current)
     if (clouds) return clouds
+    const updated = await updates.handle(request, route, current)
+    if (updated) return updated
     const signIn = /^connectors\/([^/]+)\/oauth\/begin$/.exec(route)
     if (signIn && method === "POST") return beginOAuth(user.id, decodeURIComponent(signIn[1]))
     if (route === "machines" && method === "GET") return json(200, machineList(user.id))

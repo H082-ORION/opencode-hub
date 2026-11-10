@@ -22,6 +22,7 @@ export default {
     account: "Compte",
     users: "Utilisateurs",
     organizations: "Organisations",
+    updates: "Mises à jour",
     menu: "Pages de paramètres",
     modelsTitle: "Modèles",
     modelsDescription: "Choisissez les modèles qui apparaissent dans le chat.",
@@ -62,7 +63,8 @@ export default {
     locked:
       "Vos clés sont verrouillées, les modèles ne peuvent donc pas répondre. Déconnectez-vous puis reconnectez-vous pour les déverrouiller.",
     emptyTitle: "Posez n’importe quelle question",
-    emptyDescription: "Posez une question, ou associez l'une de vos machines avec le bouton + pour travailler sur un projet.",
+    emptyDescription:
+      "Posez une question, ou associez l'une de vos machines avec le bouton + pour travailler sur un projet.",
     noProviders: "Aucun modèle n’est disponible pour le moment. Ajoutez d’abord un fournisseur.",
     openSettings: "Ouvrir les paramètres",
     placeholder: "Posez une question",
@@ -82,8 +84,7 @@ export default {
   register: {
     title: "Créez votre compte",
     resetTitle: "Choisissez un nouveau mot de passe",
-    description:
-      "Cette invitation crée un compte sur le hub. Votre mot de passe ne quitte jamais ce navigateur.",
+    description: "Cette invitation crée un compte sur le hub. Votre mot de passe ne quitte jamais ce navigateur.",
     resetDescription: (login: string) =>
       `Ce lien réinitialise le mot de passe de ${login}. Les clés enregistrées avec l’ancien mot de passe sont perdues et doivent être saisies à nouveau.`,
     login: "Identifiant",
@@ -127,7 +128,8 @@ export default {
   },
   users: {
     title: "Utilisateurs",
-    description: "Toutes les personnes qui peuvent se connecter à ce hub. Seuls les administrateurs voient cette liste.",
+    description:
+      "Toutes les personnes qui peuvent se connecter à ce hub. Seuls les administrateurs voient cette liste.",
     invite: "Inviter un utilisateur",
     loadFailed: "Impossible de charger les utilisateurs",
     retry: "Réessayer",
@@ -182,8 +184,7 @@ export default {
   },
   machines: {
     title: "Mes machines",
-    description:
-      "Vos ordinateurs qui exécutent opencode et restent connectés à ce hub. Vous seul pouvez les ouvrir.",
+    description: "Vos ordinateurs qui exécutent opencode et restent connectés à ce hub. Vous seul pouvez les ouvrir.",
     add: "Ajouter une machine",
     open: "Ouvrir",
     revoke: "Révoquer…",
@@ -270,8 +271,7 @@ export default {
     revoked: (name: string) => `${name} a été révoqué`,
     revokeFailed: "Impossible de révoquer le serveur cloud",
     linkTitle: "Associer un serveur cloud",
-    linkDescription:
-      "Sur le serveur LXD, avec agent-hub-lxd installé et configuré (voir son README) :",
+    linkDescription: "Sur le serveur LXD, avec agent-hub-lxd installé et configuré (voir son README) :",
     step1: "Rejoignez le hub, puis saisissez ce code à usage unique lorsqu’il est demandé",
     step2: "Puis démarrez l’agent",
     codeFailed: "Impossible de créer un code",
@@ -511,6 +511,61 @@ export default {
     restart: "Recommencer",
     success: "ChatGPT est connecté",
     successDescription: "Vos machines accèdent désormais aux modèles OpenAI via votre abonnement ChatGPT.",
+  },
+  updates: {
+    title: "Mises à jour",
+    description: "Gardez ce hub sur la dernière version d’OpenCode Hub. Seuls les administrateurs voient cette page.",
+    check: "Rechercher des mises à jour",
+    checking: "Recherche…",
+    checkFailed: "Impossible de rechercher les mises à jour",
+    checkedAt: (when: string) => `Dernière vérification le ${when}`,
+    neverChecked: "Pas encore vérifié",
+    checkError: (message: string) => `La dernière vérification a échoué : ${message}`,
+    current: "Version actuelle",
+    local: "Build local",
+    localDescription: "Ce hub exécute un build local, pas une version publiée. Installer une version le remplace.",
+    upToDate: "Ce hub est à jour",
+    upToDateDescription: "Aucune version stable plus récente n’a été publiée.",
+    available: (version: string) => `La version ${version} est disponible`,
+    published: (date: string) => `Publiée le ${date}`,
+    update: "Mettre à jour",
+    install: "Installer",
+    installed: "Installée",
+    newest: "La plus récente",
+    notes: "Notes de version",
+    noNotes: "Cette version n’a pas de notes.",
+    github: "Voir sur GitHub",
+    devTitle: "Versions de développement",
+    devDescription:
+      "Préversions avec les changements les plus récents. Elles sont moins testées que les versions stables et peuvent casser.",
+    showDev: "Afficher les versions de développement",
+    devNone: "Aucune version de développement n’a été publiée.",
+    manualTitle: "Mettre à jour manuellement",
+    manualDescription:
+      "Les mises à jour automatiques ne sont pas configurées sur ce serveur. Lancez cette commande sur le serveur pour installer la dernière version ; elle configure aussi les mises à jour automatiques.",
+    pending: (version: string) => `Mise à jour vers ${version} demandée…`,
+    running: (version: string) => `Installation de ${version}…`,
+    restarting: "Le hub redémarre…",
+    progressHint: "Cette page se recharge d’elle-même dès que le hub exécute la nouvelle version.",
+    failed: (version: string) => `La mise à jour vers ${version} a échoué`,
+    failedHint:
+      "L’installateur n’a pas donné de raison. Consultez les journaux du service opencode-hub-update sur le serveur.",
+    confirmTitle: (version: string) => `Mettre à jour vers ${version} ?`,
+    confirmDescription:
+      "Le hub télécharge cette version, la vérifie, remplace son programme et redémarre. Les discussions et les machines se déconnectent un instant, puis se reconnectent.",
+    confirmDevTitle: (version: string) => `Installer la version de développement ${version} ?`,
+    confirmDevWarning:
+      "Ceci est une version de développement. Elle peut être instable, contenir des bugs ou modifier les données enregistrées d’une façon qu’une version plus ancienne ne sait pas lire. Ne l’installez que sur un hub que vous pouvez réparer.",
+    confirm: "Mettre à jour",
+    confirmDev: "Installer quand même",
+    startFailed: "Impossible de lancer la mise à jour",
+    promptTitle: (version: string) => `OpenCode Hub ${version} est disponible`,
+    promptDescription: (current: string) => `Ce hub exécute la version ${current}.`,
+    later: "Plus tard",
+    openSettings: "Ouvrir les paramètres",
+    updateNow: "Mettre à jour",
+    promptManual:
+      "Les mises à jour automatiques ne sont pas configurées sur ce serveur. Ouvrez les paramètres pour voir comment le mettre à jour.",
   },
   error: {
     unreachable: "Le hub est injoignable.",
