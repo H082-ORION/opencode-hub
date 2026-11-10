@@ -914,6 +914,9 @@ choisir_domaine_machines() {
   elif [[ "$(option_unite "$UNIT_HUB" --url)" == "https://$DOMAIN" ]]; then
     DOMAINE_MACHINES="$(option_unite "$UNIT_HUB" --machine-domain)"
   fi
+  # Une installation précédente sous le domaine du hub n'a pas fait de choix (c'était la seule possibilité) : la
+  # question est posée. Seul un domaine différent, choisi exprès, est repris sans demander.
+  [[ "$DOMAINE_MACHINES" != "$DOMAIN" ]] || DOMAINE_MACHINES=""
   if [[ -n "$DOMAINE_MACHINES" ]]; then
     info "$(t "Adresse des machines" "Machine addresses")${DP}${bold}<machine>.$DOMAINE_MACHINES${reset} ${dim}$(t "(installation précédente ; --machine-domain pour la changer)" "(previous install; --machine-domain to change it)")${reset}"
     return 0
