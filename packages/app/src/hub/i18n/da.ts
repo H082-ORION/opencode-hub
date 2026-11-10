@@ -45,6 +45,7 @@ export default {
     open: "Åbn denne mappe",
     parent: "Overordnet mappe",
     noFolders: "Ingen mapper her",
+    needsMachine: "Tilgængelig når en maskine er tilknyttet",
     detach: "Fjern maskinen",
   },
   chat: {
@@ -62,12 +63,16 @@ export default {
     failed: "Chatanmodningen mislykkedes",
     locked: "Dine nøgler er låst, så modellerne kan ikke svare. Log ud og ind igen for at låse dem op.",
     emptyTitle: "Spørg om hvad som helst",
-    emptyDescription: "Stil et spørgsmål, eller tilknyt en af dine maskiner med knappen + for at arbejde på et projekt.",
+    emptyDescription:
+      "Stil et spørgsmål, eller tilknyt en af dine maskiner med knappen + for at arbejde på et projekt.",
     noProviders: "Ingen model er tilgængelig endnu. Tilføj først en udbyder.",
     openSettings: "Åbn indstillinger",
     placeholder: "Stil et spørgsmål",
-    send: "Send",
     stop: "Stop",
+    placeholderMachine: "Spørg om hvad som helst, / for kommandoer, @ for filer, ! for shellen",
+    running: (machine: string) => `Kører på ${machine}…`,
+    runFailed: "Kørslen på maskinen mislykkedes",
+    attachRejected: "Kun billeder og PDF'er kan vedhæftes, og kun til en model, der kan læse dem.",
   },
   login: {
     title: "Log ind på hubben",
@@ -437,7 +442,8 @@ export default {
   },
   connector: {
     title: "Tilføj en forbindelse",
-    description: "En ekstern MCP-server via HTTP. Servere, der kører som en lokal kommando, forbliver konfigureret på hver maskine.",
+    description:
+      "En ekstern MCP-server via HTTP. Servere, der kører som en lokal kommando, forbliver konfigureret på hver maskine.",
     name: "Navn",
     namePlaceholder: "GitHub",
     nameHint: "Dets id, der bruges i hub-<id> på dine maskiner, dannes ud fra navnet.",
@@ -507,7 +513,8 @@ export default {
   },
   updates: {
     title: "Opdateringer",
-    description: "Hold denne hub opdateret til den nyeste udgivelse af OpenCode Hub. Kun administratorer ser denne side.",
+    description:
+      "Hold denne hub opdateret til den nyeste udgivelse af OpenCode Hub. Kun administratorer ser denne side.",
     check: "Søg efter opdateringer",
     checking: "Søger…",
     checkFailed: "Kunne ikke søge efter opdateringer",
@@ -516,7 +523,8 @@ export default {
     checkError: (message: string) => `Det seneste tjek mislykkedes: ${message}`,
     current: "Nuværende version",
     local: "Lokalt build",
-    localDescription: "Denne hub kører et lokalt build, ikke en udgivet version. Installation af en udgivelse erstatter det.",
+    localDescription:
+      "Denne hub kører et lokalt build, ikke en udgivet version. Installation af en udgivelse erstatter det.",
     upToDate: "Denne hub er opdateret",
     upToDateDescription: "Der er ikke udgivet nogen nyere stabil version.",
     available: (version: string) => `Version ${version} er tilgængelig`,
@@ -529,21 +537,26 @@ export default {
     noNotes: "Denne udgivelse har ingen noter.",
     github: "Se på GitHub",
     devTitle: "Udviklingsversioner",
-    devDescription: "Forhåndsudgivelser med de nyeste ændringer. De er testet mindre end stabile udgivelser og kan gå i stykker.",
+    devDescription:
+      "Forhåndsudgivelser med de nyeste ændringer. De er testet mindre end stabile udgivelser og kan gå i stykker.",
     showDev: "Vis udviklingsversioner",
     devNone: "Der er ikke udgivet nogen udviklingsversion.",
     manualTitle: "Opdater manuelt",
-    manualDescription: "Automatiske opdateringer er ikke sat op på denne server. Kør denne kommando på serveren for at installere den nyeste udgivelse; den sætter også automatiske opdateringer op.",
+    manualDescription:
+      "Automatiske opdateringer er ikke sat op på denne server. Kør denne kommando på serveren for at installere den nyeste udgivelse; den sætter også automatiske opdateringer op.",
     pending: (version: string) => `Opdatering til ${version} anmodet…`,
     running: (version: string) => `Installerer ${version}…`,
     restarting: "Hubben genstarter…",
     progressHint: "Siden genindlæses af sig selv, når hubben kører den nye version.",
     failed: (version: string) => `Opdateringen til ${version} mislykkedes`,
-    failedHint: "Installationsprogrammet angav ingen årsag. Tjek logfilerne for tjenesten opencode-hub-update på serveren.",
+    failedHint:
+      "Installationsprogrammet angav ingen årsag. Tjek logfilerne for tjenesten opencode-hub-update på serveren.",
     confirmTitle: (version: string) => `Opdater til ${version}?`,
-    confirmDescription: "Hubben downloader denne udgivelse, verificerer den, erstatter sit program og genstarter. Chats og maskiner afbrydes et øjeblik og forbinder derefter igen.",
+    confirmDescription:
+      "Hubben downloader denne udgivelse, verificerer den, erstatter sit program og genstarter. Chats og maskiner afbrydes et øjeblik og forbinder derefter igen.",
     confirmDevTitle: (version: string) => `Installer udviklingsversion ${version}?`,
-    confirmDevWarning: "Dette er en udviklingsversion. Den kan være ustabil, indeholde fejl eller ændre gemte data på en måde, som en ældre udgivelse ikke kan læse. Installer den kun på en hub, du kan reparere.",
+    confirmDevWarning:
+      "Dette er en udviklingsversion. Den kan være ustabil, indeholde fejl eller ændre gemte data på en måde, som en ældre udgivelse ikke kan læse. Installer den kun på en hub, du kan reparere.",
     confirm: "Opdater nu",
     confirmDev: "Installer alligevel",
     startFailed: "Kunne ikke starte opdateringen",
@@ -552,7 +565,8 @@ export default {
     later: "Senere",
     openSettings: "Åbn indstillinger",
     updateNow: "Opdater nu",
-    promptManual: "Automatiske opdateringer er ikke sat op på denne server. Åbn indstillingerne for at se, hvordan du opdaterer den.",
+    promptManual:
+      "Automatiske opdateringer er ikke sat op på denne server. Åbn indstillingerne for at se, hvordan du opdaterer den.",
   },
   error: {
     unreachable: "Hubben kunne ikke kontaktes.",

@@ -45,6 +45,7 @@ export default {
     open: "Ouvrir ce dossier",
     parent: "Dossier parent",
     noFolders: "Aucun dossier ici",
+    needsMachine: "Disponible une fois une machine associée",
     detach: "Retirer la machine",
   },
   chat: {
@@ -68,8 +69,11 @@ export default {
     noProviders: "Aucun modèle n’est disponible pour le moment. Ajoutez d’abord un fournisseur.",
     openSettings: "Ouvrir les paramètres",
     placeholder: "Posez une question",
-    send: "Envoyer",
     stop: "Arrêter",
+    placeholderMachine: "Posez une question, / pour les commandes, @ pour les fichiers, ! pour le shell",
+    running: (machine: string) => `En cours sur ${machine}…`,
+    runFailed: "L’exécution sur la machine a échoué",
+    attachRejected: "Seuls les images et les PDF peuvent être joints, et seulement pour un modèle qui sait les lire.",
   },
   login: {
     title: "Connectez-vous au hub",

@@ -275,6 +275,12 @@ export const post = <T>(route: string, body: unknown) => request<T>(route, { met
 export type HubChatTarget = { machine: string; machineName: string; directory: string; online: boolean }
 export type HubChatProject = { id: string; name: string; directory: string }
 export type HubChatDirectories = { directory: string; parent: string | null; directories: string[] }
+/** A chat session's machine and project, whether a command or shell run is going on there, and how the last one failed. */
+export type HubChatTargetState = { target: HubChatTarget | null; running?: boolean; error?: string }
+export type HubMachineCommand = { name: string; description?: string }
+
+const machineRoute = (machine: string, route: string, query: Record<string, string>) =>
+  `chat-machines/${encodeURIComponent(machine)}/${route}?${new URLSearchParams(query)}`
 
 export const hubApi = {
   chatProjects: (machine: string) => request<HubChatProject[]>(`chat-machines/${encodeURIComponent(machine)}/projects`),
@@ -287,8 +293,21 @@ export const hubApi = {
       method: "POST",
       body: { parent, name },
     }),
-  chatTarget: (session: string) =>
-    request<{ target: HubChatTarget | null }>(`chat-targets/${encodeURIComponent(session)}`),
+  chatTarget: (session: string) => request<HubChatTargetState>(`chat-targets/${encodeURIComponent(session)}`),
+  machineCommands: (machine: string, directory: string) =>
+    request<{ data: HubMachineCommand[] }>(machineRoute(machine, "commands", { directory })).then(
+      (response) => response.data,
+    ),
+  machineFiles: (machine: string, directory: string, query: string) =>
+    request<{ data: string[] }>(machineRoute(machine, "files", { directory, query })).then((response) => response.data),
+  runCommand: (session: string, name: string, args: string) =>
+    request<object>(`chat-targets/${encodeURIComponent(session)}/command`, {
+      method: "POST",
+      body: { name, arguments: args },
+    }),
+  runShell: (session: string, command: string) =>
+    request<object>(`chat-targets/${encodeURIComponent(session)}/shell`, { method: "POST", body: { command } }),
+  stopRun: (session: string) => request<void>(`chat-targets/${encodeURIComponent(session)}/run`, { method: "DELETE" }),
   setChatTarget: (session: string, target: Pick<HubChatTarget, "machine" | "directory">) =>
     request<object>(`chat-targets/${encodeURIComponent(session)}`, {
       method: "PUT",

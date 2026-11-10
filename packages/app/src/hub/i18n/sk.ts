@@ -45,6 +45,7 @@ export default {
     open: "Otvoriť tento priečinok",
     parent: "Nadradený priečinok",
     noFolders: "Žiadne priečinky",
+    needsMachine: "K dispozícii po pripojení stroja",
     detach: "Odstrániť stroj",
   },
   chat: {
@@ -66,8 +67,11 @@ export default {
     noProviders: "Zatiaľ nie je k dispozícii žiadny model. Najprv pridajte poskytovateľa.",
     openSettings: "Otvoriť nastavenia",
     placeholder: "Opýtajte sa",
-    send: "Odoslať",
     stop: "Zastaviť",
+    placeholderMachine: "Spýtajte sa na čokoľvek, / pre príkazy, @ pre súbory, ! pre shell",
+    running: (machine: string) => `Spúšťa sa na ${machine}…`,
+    runFailed: "Spustenie na stroji zlyhalo",
+    attachRejected: "Pripojiť možno len obrázky a PDF, a to len pre model, ktorý ich vie čítať.",
   },
   login: {
     title: "Prihlásenie do hubu",
@@ -181,7 +185,8 @@ export default {
   },
   machines: {
     title: "Moje stroje",
-    description: "Vaše počítače, na ktorých beží opencode a ktoré zostávajú pripojené k tomuto hubu. Otvoriť ich môžete iba vy.",
+    description:
+      "Vaše počítače, na ktorých beží opencode a ktoré zostávajú pripojené k tomuto hubu. Otvoriť ich môžete iba vy.",
     add: "Pridať stroj",
     open: "Otvoriť",
     revoke: "Zrušiť…",
@@ -234,8 +239,7 @@ export default {
     deleteConfirm: "Odstrániť",
     deleting: (name: string) => `Odstraňuje sa ${name}`,
     newTitle: "Nová cloudová inštancia",
-    newDescription:
-      "Cloudový server naklonuje pripravený stroj, spustí ho a spáruje s hubom. Trvá to niekoľko minút.",
+    newDescription: "Cloudový server naklonuje pripravený stroj, spustí ho a spáruje s hubom. Trvá to niekoľko minút.",
     name: "Názov",
     server: "Cloudový server",
     cpu: "CPU",
@@ -253,7 +257,8 @@ export default {
       "Servery LXD, ktorých agent vytvára cloudové inštancie pre všetkých používateľov tohto hubu. Tento zoznam vidia iba správcovia.",
     link: "Prepojiť server",
     empty: "Žiadne cloudové servery",
-    emptyDescription: "Prepojte server LXD so spusteným agent-hub-lxd, aby mohli používatelia vytvárať cloudové inštancie.",
+    emptyDescription:
+      "Prepojte server LXD so spusteným agent-hub-lxd, aby mohli používatelia vytvárať cloudové inštancie.",
     capacity: (cpu: string, memory: string, disk: string, instances: string) =>
       `CPU ${cpu} · RAM ${memory} · disk ${disk} · inštancií: ${instances}`,
     load: (load: string) => `Záťaž ${load}`,
@@ -437,7 +442,8 @@ export default {
   },
   connector: {
     title: "Pridanie konektora",
-    description: "Vzdialený server MCP cez HTTP. Servery, ktoré bežia ako lokálny príkaz, zostávajú nakonfigurované na každom stroji.",
+    description:
+      "Vzdialený server MCP cez HTTP. Servery, ktoré bežia ako lokálny príkaz, zostávajú nakonfigurované na každom stroji.",
     name: "Názov",
     namePlaceholder: "GitHub",
     nameHint: "Jeho id, použité v hub-<id> na vašich strojoch, sa odvodzuje z názvu.",
@@ -451,7 +457,8 @@ export default {
     oauth: "Prihlásenie OAuth",
     oauthHint: "Hub sa za vás prihlási na server a potom uchováva a obnovuje tokeny.",
     headerList: "Hlavičky na pridanie",
-    headerListHint: "Hodnoty sú zašifrované a už sa nikdy nezobrazia. Nechajte riadok prázdny pre server bez tajomstiev.",
+    headerListHint:
+      "Hodnoty sú zašifrované a už sa nikdy nezobrazia. Nechajte riadok prázdny pre server bez tajomstiev.",
     headerName: "Názov hlavičky",
     headerNamePlaceholder: "Authorization",
     headerValue: "Hodnota",
@@ -529,11 +536,13 @@ export default {
     noNotes: "Toto vydanie nemá žiadne poznámky.",
     github: "Zobraziť na GitHube",
     devTitle: "Vývojové verzie",
-    devDescription: "Predbežné vydania s najnovšími zmenami. Sú menej otestované ako stabilné vydania a môžu sa pokaziť.",
+    devDescription:
+      "Predbežné vydania s najnovšími zmenami. Sú menej otestované ako stabilné vydania a môžu sa pokaziť.",
     showDev: "Zobraziť vývojové verzie",
     devNone: "Nebola zverejnená žiadna vývojová verzia.",
     manualTitle: "Aktualizovať ručne",
-    manualDescription: "Automatické aktualizácie nie sú na tomto serveri nastavené. Spustite na serveri tento príkaz na inštaláciu najnovšieho vydania; zároveň nastaví automatické aktualizácie.",
+    manualDescription:
+      "Automatické aktualizácie nie sú na tomto serveri nastavené. Spustite na serveri tento príkaz na inštaláciu najnovšieho vydania; zároveň nastaví automatické aktualizácie.",
     pending: (version: string) => `Aktualizácia na ${version} bola vyžiadaná…`,
     running: (version: string) => `Inštaluje sa ${version}…`,
     restarting: "Hub sa reštartuje…",
@@ -541,9 +550,11 @@ export default {
     failed: (version: string) => `Aktualizácia na ${version} zlyhala`,
     failedHint: "Inštalátor neuviedol dôvod. Skontrolujte záznamy služby opencode-hub-update na serveri.",
     confirmTitle: (version: string) => `Aktualizovať na ${version}?`,
-    confirmDescription: "Hub stiahne toto vydanie, overí ho, nahradí svoj program a reštartuje sa. Konverzácie a stroje sa na chvíľu odpoja a potom sa znova pripoja.",
+    confirmDescription:
+      "Hub stiahne toto vydanie, overí ho, nahradí svoj program a reštartuje sa. Konverzácie a stroje sa na chvíľu odpoja a potom sa znova pripoja.",
     confirmDevTitle: (version: string) => `Nainštalovať vývojovú verziu ${version}?`,
-    confirmDevWarning: "Toto je vývojová verzia. Môže byť nestabilná, obsahovať chyby alebo zmeniť uložené údaje tak, že ich staršie vydanie nedokáže prečítať. Inštalujte ju iba na hub, ktorý dokážete opraviť.",
+    confirmDevWarning:
+      "Toto je vývojová verzia. Môže byť nestabilná, obsahovať chyby alebo zmeniť uložené údaje tak, že ich staršie vydanie nedokáže prečítať. Inštalujte ju iba na hub, ktorý dokážete opraviť.",
     confirm: "Aktualizovať teraz",
     confirmDev: "Napriek tomu inštalovať",
     startFailed: "Aktualizáciu sa nepodarilo spustiť",
@@ -552,7 +563,8 @@ export default {
     later: "Neskôr",
     openSettings: "Otvoriť nastavenia",
     updateNow: "Aktualizovať teraz",
-    promptManual: "Automatické aktualizácie nie sú na tomto serveri nastavené. Otvorte nastavenia a pozrite si, ako ho aktualizovať.",
+    promptManual:
+      "Automatické aktualizácie nie sú na tomto serveri nastavené. Otvorte nastavenia a pozrite si, ako ho aktualizovať.",
   },
   error: {
     unreachable: "Hub sa nepodarilo kontaktovať.",

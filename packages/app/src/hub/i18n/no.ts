@@ -45,6 +45,7 @@ export default {
     open: "Åpne denne mappen",
     parent: "Overordnet mappe",
     noFolders: "Ingen mapper her",
+    needsMachine: "Tilgjengelig når en maskin er tilknyttet",
     detach: "Fjern maskinen",
   },
   chat: {
@@ -62,12 +63,16 @@ export default {
     failed: "Chatforespørselen mislyktes",
     locked: "Nøklene dine er låst, så modellene kan ikke svare. Logg ut og inn igjen for å låse dem opp.",
     emptyTitle: "Spør om hva som helst",
-    emptyDescription: "Still et spørsmål, eller koble til en av maskinene dine med +-knappen for å jobbe med et prosjekt.",
+    emptyDescription:
+      "Still et spørsmål, eller koble til en av maskinene dine med +-knappen for å jobbe med et prosjekt.",
     noProviders: "Ingen modell er tilgjengelig ennå. Legg først til en leverandør.",
     openSettings: "Åpne innstillinger",
     placeholder: "Still et spørsmål",
-    send: "Send",
     stop: "Stopp",
+    placeholderMachine: "Spør om hva som helst, / for kommandoer, @ for filer, ! for skallet",
+    running: (machine: string) => `Kjører på ${machine} …`,
+    runFailed: "Kjøringen på maskinen mislyktes",
+    attachRejected: "Bare bilder og PDF-er kan legges ved, og bare for en modell som kan lese dem.",
   },
   login: {
     title: "Logg inn på hubben",
@@ -234,8 +239,7 @@ export default {
     deleteConfirm: "Slett",
     deleting: (name: string) => `Sletter ${name}`,
     newTitle: "Ny skyinstans",
-    newDescription:
-      "Skyserveren kloner en ferdig maskin, starter den og kobler den til hubben. Det tar noen minutter.",
+    newDescription: "Skyserveren kloner en ferdig maskin, starter den og kobler den til hubben. Det tar noen minutter.",
     name: "Navn",
     server: "Skyserver",
     cpu: "CPU",
@@ -437,7 +441,8 @@ export default {
   },
   connector: {
     title: "Legg til en kobling",
-    description: "En ekstern MCP-server over HTTP. Servere som kjører som en lokal kommando, forblir konfigurert på hver maskin.",
+    description:
+      "En ekstern MCP-server over HTTP. Servere som kjører som en lokal kommando, forblir konfigurert på hver maskin.",
     name: "Navn",
     namePlaceholder: "GitHub",
     nameHint: "ID-en, som brukes i hub-<id> på maskinene dine, lages ut fra navnet.",

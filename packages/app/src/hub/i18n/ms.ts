@@ -45,6 +45,7 @@ export default {
     open: "Buka folder ini",
     parent: "Folder induk",
     noFolders: "Tiada folder di sini",
+    needsMachine: "Tersedia selepas mesin dipautkan",
     detach: "Alih keluar mesin",
   },
   chat: {
@@ -66,8 +67,11 @@ export default {
     noProviders: "Belum ada model yang tersedia. Tambah pembekal dahulu.",
     openSettings: "Buka tetapan",
     placeholder: "Tanya soalan",
-    send: "Hantar",
     stop: "Henti",
+    placeholderMachine: "Tanya apa sahaja, / untuk arahan, @ untuk fail, ! untuk shell",
+    running: (machine: string) => `Sedang berjalan pada ${machine}…`,
+    runFailed: "Larian pada mesin gagal",
+    attachRejected: "Hanya imej dan PDF boleh dilampirkan, dan hanya untuk model yang boleh membacanya.",
   },
   login: {
     title: "Log masuk ke hub",
@@ -177,11 +181,13 @@ export default {
     failed: "Tidak dapat mencipta jemputan",
     link: "Pautan jemputan",
     resetLink: "Pautan tetapan semula",
-    linkHint: "Dipaparkan sekali sahaja. Sesiapa yang mempunyai pautan ini boleh menggunakannya, jadi hantar secara peribadi.",
+    linkHint:
+      "Dipaparkan sekali sahaja. Sesiapa yang mempunyai pautan ini boleh menggunakannya, jadi hantar secara peribadi.",
   },
   machines: {
     title: "Mesin saya",
-    description: "Komputer anda yang menjalankan opencode dan kekal bersambung ke hub ini. Hanya anda boleh membukanya.",
+    description:
+      "Komputer anda yang menjalankan opencode dan kekal bersambung ke hub ini. Hanya anda boleh membukanya.",
     add: "Tambah mesin",
     open: "Buka",
     revoke: "Batalkan…",
@@ -437,7 +443,8 @@ export default {
   },
   connector: {
     title: "Tambah penyambung",
-    description: "Pelayan MCP jauh melalui HTTP. Pelayan yang berjalan sebagai arahan tempatan kekal dikonfigurasi pada setiap mesin.",
+    description:
+      "Pelayan MCP jauh melalui HTTP. Pelayan yang berjalan sebagai arahan tempatan kekal dikonfigurasi pada setiap mesin.",
     name: "Nama",
     namePlaceholder: "GitHub",
     nameHint: "Id-nya, digunakan dalam hub-<id> pada mesin anda, dibuat daripada nama.",

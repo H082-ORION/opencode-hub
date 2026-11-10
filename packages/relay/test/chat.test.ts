@@ -134,13 +134,46 @@ describe("writes are rebuilt by the hub", () => {
     expect((await state.bob.request(`${CHAT}/session`, { method: "POST", body: { model: MODEL } })).status).toBe(403)
   })
 
-  test("a prompt carries its text and nothing else", async () => {
+  test("a prompt carries its text, its inline files and nothing else", async () => {
     const echo = await send(state.alice, `${CHAT}/session/s1/prompt`, {
       text: "Hello",
-      files: [{ uri: "file:///etc/passwd" }],
+      files: [
+        { uri: "data:image/png;base64,iVBORw0KGgo=", mime: "image/png", name: "shot.png", source: "/etc" },
+        { uri: "data:application/pdf;base64,JVBERi0=", mime: "application/pdf" },
+      ],
       skills: [{ name: "x" }],
+      agent: "build",
     })
-    expect(echo.body).toEqual({ text: "Hello" })
+    expect(echo.body).toEqual({
+      text: "Hello",
+      files: [
+        { uri: "data:image/png;base64,iVBORw0KGgo=", name: "shot.png" },
+        { uri: "data:application/pdf;base64,JVBERi0=" },
+      ],
+    })
+  })
+
+  test.each([
+    ["a file on disk", { uri: "file:///etc/passwd", mime: "image/png" }],
+    ["a web address", { uri: "https://example.com/a.png", mime: "image/png" }],
+    ["another kind of file", { uri: "data:text/html;base64,PGI+", mime: "text/html" }],
+    ["a mismatched type", { uri: "data:text/html;base64,PGI+", mime: "image/png" }],
+    ["a file over 5 MB", { uri: `data:image/png;base64,${"A".repeat(7_000_000)}`, mime: "image/png" }],
+  ])("a prompt with %s is refused", async (_, file) => {
+    const response = await state.alice.request(`${CHAT}/session/s1/prompt`, {
+      method: "POST",
+      body: { text: "Hello", files: [file] },
+    })
+    expect(response.status).toBe(400)
+  })
+
+  test("a prompt's files are limited to 20 MB in all", async () => {
+    const file = { uri: `data:image/png;base64,${"A".repeat(6_000_000)}`, mime: "image/png" }
+    const response = await state.alice.request(`${CHAT}/session/s1/prompt`, {
+      method: "POST",
+      body: { text: "Hello", files: [file, file, file, file, file] },
+    })
+    expect(response.status).toBe(400)
   })
 
   test("models are limited to the user's providers", async () => {

@@ -45,6 +45,7 @@ export default {
     open: "Odpri to mapo",
     parent: "Nadrejena mapa",
     noFolders: "Tu ni map",
+    needsMachine: "Na voljo, ko je stroj priključen",
     detach: "Odstrani stroj",
   },
   chat: {
@@ -60,14 +61,18 @@ export default {
     collapse: "Skrči stransko vrstico",
     expand: "Odpri stransko vrstico",
     failed: "Zahteva za klepet ni uspela",
-    locked: "Vaši ključi so zaklenjeni, zato modeli ne morejo odgovarjati. Odjavite se in znova prijavite, da jih odklenete.",
+    locked:
+      "Vaši ključi so zaklenjeni, zato modeli ne morejo odgovarjati. Odjavite se in znova prijavite, da jih odklenete.",
     emptyTitle: "Vprašajte karkoli",
     emptyDescription: "Postavite vprašanje ali z gumbom + priložite enega od svojih strojev za delo na projektu.",
     noProviders: "Še ni na voljo nobenega modela. Najprej dodajte ponudnika.",
     openSettings: "Odpri nastavitve",
     placeholder: "Postavite vprašanje",
-    send: "Pošlji",
     stop: "Ustavi",
+    placeholderMachine: "Vprašajte karkoli, / za ukaze, @ za datoteke, ! za lupino",
+    running: (machine: string) => `Izvajanje na ${machine}…`,
+    runFailed: "Izvajanje na stroju ni uspelo",
+    attachRejected: "Priložiti je mogoče samo slike in PDF-je, in to samo za model, ki jih zna brati.",
   },
   login: {
     title: "Prijava v hub",
@@ -234,8 +239,7 @@ export default {
     deleteConfirm: "Izbriši",
     deleting: (name: string) => `Brisanje ${name}`,
     newTitle: "Nov oblačni primerek",
-    newDescription:
-      "Oblačni strežnik klonira pripravljen stroj, ga zažene in poveže s hubom. To traja nekaj minut.",
+    newDescription: "Oblačni strežnik klonira pripravljen stroj, ga zažene in poveže s hubom. To traja nekaj minut.",
     name: "Ime",
     server: "Oblačni strežnik",
     cpu: "CPU",
@@ -253,7 +257,8 @@ export default {
       "Strežniki LXD, katerih agent ustvarja oblačne primerke za vse uporabnike tega huba. Ta seznam vidijo samo skrbniki.",
     link: "Poveži strežnik",
     empty: "Ni oblačnih strežnikov",
-    emptyDescription: "Povežite strežnik LXD, na katerem teče agent-hub-lxd, da bodo uporabniki lahko ustvarjali oblačne primerke.",
+    emptyDescription:
+      "Povežite strežnik LXD, na katerem teče agent-hub-lxd, da bodo uporabniki lahko ustvarjali oblačne primerke.",
     capacity: (cpu: string, memory: string, disk: string, instances: string) =>
       `CPU ${cpu} · RAM ${memory} · disk ${disk} · primerkov: ${instances}`,
     load: (load: string) => `Obremenitev ${load}`,
@@ -437,7 +442,8 @@ export default {
   },
   connector: {
     title: "Dodajanje povezovalnika",
-    description: "Oddaljeni strežnik MCP prek HTTP. Strežniki, ki tečejo kot lokalni ukaz, ostanejo nastavljeni na vsakem stroju.",
+    description:
+      "Oddaljeni strežnik MCP prek HTTP. Strežniki, ki tečejo kot lokalni ukaz, ostanejo nastavljeni na vsakem stroju.",
     name: "Ime",
     namePlaceholder: "GitHub",
     nameHint: "Njegov id, uporabljen v hub-<id> na vaših strojih, je izpeljan iz imena.",
@@ -451,7 +457,8 @@ export default {
     oauth: "Prijava OAuth",
     oauthHint: "Hub se namesto vas prijavi v strežnik, nato hrani in osvežuje žetone.",
     headerList: "Glave za dodajanje",
-    headerListHint: "Vrednosti so šifrirane in se nikoli več ne prikažejo. Pustite vrstico prazno za strežnik brez skrivnosti.",
+    headerListHint:
+      "Vrednosti so šifrirane in se nikoli več ne prikažejo. Pustite vrstico prazno za strežnik brez skrivnosti.",
     headerName: "Ime glave",
     headerNamePlaceholder: "Authorization",
     headerValue: "Vrednost",
@@ -529,21 +536,26 @@ export default {
     noNotes: "Ta izdaja nima opomb.",
     github: "Ogled na GitHubu",
     devTitle: "Razvojne različice",
-    devDescription: "Predizdaje z najnovejšimi spremembami. Preizkušene so manj kot stabilne izdaje in morda ne bodo delovale pravilno.",
+    devDescription:
+      "Predizdaje z najnovejšimi spremembami. Preizkušene so manj kot stabilne izdaje in morda ne bodo delovale pravilno.",
     showDev: "Prikaži razvojne različice",
     devNone: "Nobena razvojna različica ni bila objavljena.",
     manualTitle: "Ročna posodobitev",
-    manualDescription: "Samodejne posodobitve na tem strežniku niso nastavljene. Za namestitev najnovejše izdaje na strežniku zaženite ta ukaz; nastavi tudi samodejne posodobitve.",
+    manualDescription:
+      "Samodejne posodobitve na tem strežniku niso nastavljene. Za namestitev najnovejše izdaje na strežniku zaženite ta ukaz; nastavi tudi samodejne posodobitve.",
     pending: (version: string) => `Zahtevana posodobitev na ${version}…`,
     running: (version: string) => `Nameščanje ${version}…`,
     restarting: "Hub se znova zaganja…",
     progressHint: "Ta stran se sama znova naloži, ko hub zažene novo različico.",
     failed: (version: string) => `Posodobitev na ${version} ni uspela`,
-    failedHint: "Namestitveni program ni navedel razloga. Preverite dnevnike storitve opencode-hub-update na strežniku.",
+    failedHint:
+      "Namestitveni program ni navedel razloga. Preverite dnevnike storitve opencode-hub-update na strežniku.",
     confirmTitle: (version: string) => `Želite posodobiti na ${version}?`,
-    confirmDescription: "Hub prenese to izdajo, jo preveri, zamenja svoj program in se znova zažene. Klepeti in stroji se za trenutek odklopijo, nato se znova povežejo.",
+    confirmDescription:
+      "Hub prenese to izdajo, jo preveri, zamenja svoj program in se znova zažene. Klepeti in stroji se za trenutek odklopijo, nato se znova povežejo.",
     confirmDevTitle: (version: string) => `Želite namestiti razvojno različico ${version}?`,
-    confirmDevWarning: "To je razvojna različica. Lahko je nestabilna, vsebuje napake ali spremeni shranjene podatke tako, da jih starejša izdaja ne zna prebrati. Namestite jo samo na hub, ki ga znate popraviti.",
+    confirmDevWarning:
+      "To je razvojna različica. Lahko je nestabilna, vsebuje napake ali spremeni shranjene podatke tako, da jih starejša izdaja ne zna prebrati. Namestite jo samo na hub, ki ga znate popraviti.",
     confirm: "Posodobi zdaj",
     confirmDev: "Vseeno namesti",
     startFailed: "Posodobitve ni bilo mogoče zagnati",
@@ -552,7 +564,8 @@ export default {
     later: "Pozneje",
     openSettings: "Odpri nastavitve",
     updateNow: "Posodobi zdaj",
-    promptManual: "Samodejne posodobitve na tem strežniku niso nastavljene. Odprite nastavitve, da vidite, kako ga posodobiti.",
+    promptManual:
+      "Samodejne posodobitve na tem strežniku niso nastavljene. Odprite nastavitve, da vidite, kako ga posodobiti.",
   },
   error: {
     unreachable: "Huba ni bilo mogoče doseči.",

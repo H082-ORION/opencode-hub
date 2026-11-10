@@ -45,6 +45,7 @@ export default {
     open: "فتح هذا المجلد",
     parent: "المجلد الأعلى",
     noFolders: "لا توجد مجلدات هنا",
+    needsMachine: "متاح بعد إرفاق جهاز",
     detach: "إزالة الجهاز",
   },
   chat: {
@@ -66,8 +67,11 @@ export default {
     noProviders: "لا يتوفر أي نموذج بعد. أضف مزوّدًا أولًا.",
     openSettings: "فتح الإعدادات",
     placeholder: "اطرح سؤالًا",
-    send: "إرسال",
     stop: "إيقاف",
+    placeholderMachine: "اسأل أي شيء، / للأوامر، @ للملفات، ! لسطر الأوامر",
+    running: (machine: string) => `جارٍ التشغيل على ${machine}…`,
+    runFailed: "فشل التشغيل على الجهاز",
+    attachRejected: "يمكن إرفاق الصور وملفات PDF فقط، وفقط لنموذج يمكنه قراءتها.",
   },
   login: {
     title: "تسجيل الدخول إلى المحور",
@@ -193,8 +197,7 @@ export default {
     emptyDescription: "أضف جهازًا للوصول إلى opencode الخاص به من أي مكان.",
     reconnecting: "جارٍ إعادة الاتصال…",
     revokeTitle: "إلغاء الجهاز؟",
-    revokeDescription: (name: string) =>
-      `سيتم فصل ${name} وحذف رموزه. يجب أن ينضم إلى المحور مجددًا ليعود.`,
+    revokeDescription: (name: string) => `سيتم فصل ${name} وحذف رموزه. يجب أن ينضم إلى المحور مجددًا ليعود.`,
     revokeConfirm: "إلغاء",
     revoked: (name: string) => `تم إلغاء ${name}`,
     revokeFailed: "تعذّر إلغاء الجهاز",
@@ -248,8 +251,7 @@ export default {
   },
   cloudHosts: {
     title: "الخوادم السحابية",
-    description:
-      "خوادم LXD ينشئ وكيلها نُسخًا سحابية لكل مستخدمي هذا المحور. لا يرى هذه القائمة إلا المسؤولون.",
+    description: "خوادم LXD ينشئ وكيلها نُسخًا سحابية لكل مستخدمي هذا المحور. لا يرى هذه القائمة إلا المسؤولون.",
     link: "ربط خادم",
     empty: "لا توجد خوادم سحابية",
     emptyDescription: "اربط خادم LXD يشغّل agent-hub-lxd ليتمكن المستخدمون من إنشاء نُسخ سحابية.",
@@ -260,8 +262,7 @@ export default {
     instances: "كل النُّسخ السحابية",
     revoke: "إلغاء…",
     revokeTitle: "إلغاء الخادم السحابي؟",
-    revokeDescription: (name: string) =>
-      `سيتم فصل ${name} وحذف رمزه. يجب ربطه مجددًا ليعود.`,
+    revokeDescription: (name: string) => `سيتم فصل ${name} وحذف رمزه. يجب ربطه مجددًا ليعود.`,
     revokeConfirm: "إلغاء",
     revoked: (name: string) => `تم إلغاء ${name}`,
     revokeFailed: "تعذّر إلغاء الخادم السحابي",
@@ -273,8 +274,7 @@ export default {
   },
   allMachines: {
     title: "كل الأجهزة",
-    description:
-      "كل جهاز مسجَّل على هذا المحور مع مالكه. يستطيع المسؤولون إلغاء أي جهاز لكنهم يفتحون أجهزتهم فقط.",
+    description: "كل جهاز مسجَّل على هذا المحور مع مالكه. يستطيع المسؤولون إلغاء أي جهاز لكنهم يفتحون أجهزتهم فقط.",
     loadFailed: "تعذّر تحميل الأجهزة",
     retry: "إعادة المحاولة",
     empty: "لا توجد أجهزة على هذا المحور",
@@ -322,13 +322,11 @@ export default {
     save: "حفظ",
     saving: "جارٍ الحفظ…",
     deleteTitle: "حذف المؤسسة؟",
-    deleteDescription: (name: string) =>
-      `ستُحذف ${name} وعضوياتها. لا يمكن حذف مؤسسة ما زالت لديها أجهزة.`,
+    deleteDescription: (name: string) => `ستُحذف ${name} وعضوياتها. لا يمكن حذف مؤسسة ما زالت لديها أجهزة.`,
     deleteConfirm: "حذف",
     deleted: (name: string) => `تم حذف ${name}`,
     membersTitle: (name: string) => `أعضاء ${name}`,
-    membersDescription:
-      "يفتح الأعضاء أجهزة المؤسسة ويمكنهم إضافة أجهزة جديدة. إزالة عضو تقطع وصوله فورًا.",
+    membersDescription: "يفتح الأعضاء أجهزة المؤسسة ويمكنهم إضافة أجهزة جديدة. إزالة عضو تقطع وصوله فورًا.",
     noMembers: "لا يوجد أعضاء بعد",
     others: "مستخدمون آخرون",
     noOthers: "كل المستخدمين أعضاء.",
@@ -357,8 +355,7 @@ export default {
     createTitle: "مهارة جديدة",
     editTitle: "تحرير المهارة",
     viewTitle: (name: string) => `المهارة ${name}`,
-    formDescription:
-      "يكتبها المحور بصيغة SKILL.md مع الاسم والوصف في مقدمتها، وتحصل عليها أجهزتك فورًا.",
+    formDescription: "يكتبها المحور بصيغة SKILL.md مع الاسم والوصف في مقدمتها، وتحصل عليها أجهزتك فورًا.",
     name: "الاسم",
     nameHint: "أحرف صغيرة وأرقام، في كلمات تربطها شرطات.",
     descriptionLabel: "الوصف",
@@ -532,7 +529,8 @@ export default {
     showDev: "إظهار إصدارات التطوير",
     devNone: "لم يُنشر أي إصدار تطوير.",
     manualTitle: "التحديث يدويًا",
-    manualDescription: "التحديثات التلقائية غير مُعدّة على هذا الخادم. شغّل هذا الأمر على الخادم لتثبيت أحدث إصدار؛ وهو يُعدّ التحديثات التلقائية أيضًا.",
+    manualDescription:
+      "التحديثات التلقائية غير مُعدّة على هذا الخادم. شغّل هذا الأمر على الخادم لتثبيت أحدث إصدار؛ وهو يُعدّ التحديثات التلقائية أيضًا.",
     pending: (version: string) => `طُلب التحديث إلى ${version}…`,
     running: (version: string) => `جارٍ تثبيت ${version}…`,
     restarting: "يُعاد تشغيل المحور…",
@@ -540,9 +538,11 @@ export default {
     failed: (version: string) => `فشل التحديث إلى ${version}`,
     failedHint: "لم يذكر المثبّت أي سبب. راجع سجلات خدمة opencode-hub-update على الخادم.",
     confirmTitle: (version: string) => `التحديث إلى ${version}؟`,
-    confirmDescription: "ينزّل المحور هذا الإصدار ويتحقق منه ويستبدل برنامجه ثم يُعيد التشغيل. تنقطع المحادثات والأجهزة للحظة ثم تعاود الاتصال.",
+    confirmDescription:
+      "ينزّل المحور هذا الإصدار ويتحقق منه ويستبدل برنامجه ثم يُعيد التشغيل. تنقطع المحادثات والأجهزة للحظة ثم تعاود الاتصال.",
     confirmDevTitle: (version: string) => `تثبيت إصدار التطوير ${version}؟`,
-    confirmDevWarning: "هذا إصدار تطوير. قد يكون غير مستقر أو يحتوي على أخطاء أو يغيّر البيانات المحفوظة بطريقة لا يستطيع إصدار أقدم قراءتها. لا تثبّته إلا على محور يمكنك إصلاحه.",
+    confirmDevWarning:
+      "هذا إصدار تطوير. قد يكون غير مستقر أو يحتوي على أخطاء أو يغيّر البيانات المحفوظة بطريقة لا يستطيع إصدار أقدم قراءتها. لا تثبّته إلا على محور يمكنك إصلاحه.",
     confirm: "تحديث الآن",
     confirmDev: "تثبيت على أي حال",
     startFailed: "تعذّر بدء التحديث",

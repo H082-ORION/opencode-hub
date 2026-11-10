@@ -45,6 +45,7 @@ export default {
     open: "Atvērt šo mapi",
     parent: "Augšējā mape",
     noFolders: "Šeit nav mapju",
+    needsMachine: "Pieejams pēc ierīces pievienošanas",
     detach: "Noņemt ierīci",
   },
   chat: {
@@ -60,14 +61,19 @@ export default {
     collapse: "Sakļaut sānjoslu",
     expand: "Atvērt sānjoslu",
     failed: "Sarunas pieprasījums neizdevās",
-    locked: "Jūsu atslēgas ir bloķētas, tāpēc modeļi nevar atbildēt. Izrakstieties un pierakstieties vēlreiz, lai tās atbloķētu.",
+    locked:
+      "Jūsu atslēgas ir bloķētas, tāpēc modeļi nevar atbildēt. Izrakstieties un pierakstieties vēlreiz, lai tās atbloķētu.",
     emptyTitle: "Jautājiet jebko",
-    emptyDescription: "Uzdodiet jautājumu vai ar pogu + pievienojiet vienu no savām ierīcēm, lai strādātu pie projekta.",
+    emptyDescription:
+      "Uzdodiet jautājumu vai ar pogu + pievienojiet vienu no savām ierīcēm, lai strādātu pie projekta.",
     noProviders: "Vēl nav pieejams neviens modelis. Vispirms pievienojiet nodrošinātāju.",
     openSettings: "Atvērt iestatījumus",
     placeholder: "Uzdodiet jautājumu",
-    send: "Sūtīt",
     stop: "Apturēt",
+    placeholderMachine: "Jautājiet jebko, / komandām, @ failiem, ! čaulai",
+    running: (machine: string) => `Darbojas ierīcē ${machine}…`,
+    runFailed: "Izpilde ierīcē neizdevās",
+    attachRejected: "Var pievienot tikai attēlus un PDF, un tikai modelim, kas tos var nolasīt.",
   },
   login: {
     title: "Pierakstīšanās hub",
@@ -203,8 +209,7 @@ export default {
   },
   cloud: {
     title: "Mākoņa instances",
-    description:
-      "Virtuālās mašīnas šī hub mākoņa serveros ar gatavu opencode. Katra kļūst par vienu no jūsu ierīcēm.",
+    description: "Virtuālās mašīnas šī hub mākoņa serveros ar gatavu opencode. Katra kļūst par vienu no jūsu ierīcēm.",
     create: "Jauna instance",
     empty: "Mākoņa instanču vēl nav",
     emptyDescription: "Izveidojiet instanci, lai iegūtu jaunu ierīci ar opencode bez jebkādas instalēšanas.",
@@ -234,8 +239,7 @@ export default {
     deleteConfirm: "Dzēst",
     deleting: (name: string) => `Notiek dzēšana: ${name}`,
     newTitle: "Jauna mākoņa instance",
-    newDescription:
-      "Mākoņa serveris klonē gatavu ierīci, startē to un savieno pārī ar hub. Tas aizņem dažas minūtes.",
+    newDescription: "Mākoņa serveris klonē gatavu ierīci, startē to un savieno pārī ar hub. Tas aizņem dažas minūtes.",
     name: "Nosaukums",
     server: "Mākoņa serveris",
     cpu: "CPU",
@@ -253,7 +257,8 @@ export default {
       "LXD serveri, kuru aģents veido mākoņa instances visiem šī hub lietotājiem. Šo sarakstu redz tikai administratori.",
     link: "Savienot serveri",
     empty: "Nav mākoņa serveru",
-    emptyDescription: "Savienojiet LXD serveri, kurā darbojas agent-hub-lxd, lai lietotāji varētu veidot mākoņa instances.",
+    emptyDescription:
+      "Savienojiet LXD serveri, kurā darbojas agent-hub-lxd, lai lietotāji varētu veidot mākoņa instances.",
     capacity: (cpu: string, memory: string, disk: string, instances: string) =>
       `CPU ${cpu} · RAM ${memory} · disks ${disk} · instanču: ${instances}`,
     load: (load: string) => `Slodze ${load}`,
@@ -437,7 +442,8 @@ export default {
   },
   connector: {
     title: "Savienotāja pievienošana",
-    description: "Attālais MCP serveris, izmantojot HTTP. Serveri, kas darbojas kā lokāla komanda, paliek konfigurēti katrā ierīcē.",
+    description:
+      "Attālais MCP serveris, izmantojot HTTP. Serveri, kas darbojas kā lokāla komanda, paliek konfigurēti katrā ierīcē.",
     name: "Nosaukums",
     namePlaceholder: "GitHub",
     nameHint: "Tā id, ko izmanto hub-<id> jūsu ierīcēs, tiek veidots no nosaukuma.",

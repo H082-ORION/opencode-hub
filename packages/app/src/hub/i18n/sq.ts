@@ -45,6 +45,7 @@ export default {
     open: "Hap këtë dosje",
     parent: "Dosja mëmë",
     noFolders: "Asnjë dosje këtu",
+    needsMachine: "Ofrohet pasi të lidhet një makinë",
     detach: "Hiq makinën",
   },
   chat: {
@@ -62,12 +63,16 @@ export default {
     failed: "Kërkesa e bisedës dështoi",
     locked: "Çelësat tuaj janë të kyçur, ndaj modelet nuk mund të përgjigjen. Dilni dhe hyni përsëri për t'i shkyçur.",
     emptyTitle: "Pyesni çfarëdo",
-    emptyDescription: "Bëni një pyetje ose bashkëngjitni një nga makinat tuaja me butonin + për të punuar në një projekt.",
+    emptyDescription:
+      "Bëni një pyetje ose bashkëngjitni një nga makinat tuaja me butonin + për të punuar në një projekt.",
     noProviders: "Ende nuk ka asnjë model të disponueshëm. Shtoni fillimisht një ofrues.",
     openSettings: "Hap cilësimet",
     placeholder: "Bëni një pyetje",
-    send: "Dërgo",
     stop: "Ndalo",
+    placeholderMachine: "Pyet çfarëdo, / për komanda, @ për skedarë, ! për shell-in",
+    running: (machine: string) => `Po ekzekutohet në ${machine}…`,
+    runFailed: "Ekzekutimi në makinë dështoi",
+    attachRejected: "Mund të bashkëngjiten vetëm imazhe dhe PDF, dhe vetëm për një model që i lexon.",
   },
   login: {
     title: "Hyni në hub",
@@ -181,7 +186,8 @@ export default {
   },
   machines: {
     title: "Makinat e mia",
-    description: "Kompjuterët tuaj që ekzekutojnë opencode dhe qëndrojnë të lidhur me këtë hub. Vetëm ju mund t'i hapni.",
+    description:
+      "Kompjuterët tuaj që ekzekutojnë opencode dhe qëndrojnë të lidhur me këtë hub. Vetëm ju mund t'i hapni.",
     add: "Shto makinë",
     open: "Hap",
     revoke: "Anulo…",
@@ -234,8 +240,7 @@ export default {
     deleteConfirm: "Fshi",
     deleting: (name: string) => `Po fshihet ${name}`,
     newTitle: "Instancë e re cloud",
-    newDescription:
-      "Serveri cloud klonon një makinë të gatshme, e nis dhe e çifton me hub-in. Zgjat disa minuta.",
+    newDescription: "Serveri cloud klonon një makinë të gatshme, e nis dhe e çifton me hub-in. Zgjat disa minuta.",
     name: "Emri",
     server: "Serveri cloud",
     cpu: "CPU",
@@ -437,7 +442,8 @@ export default {
   },
   connector: {
     title: "Shto një lidhës",
-    description: "Një server MCP i largët përmes HTTP. Serverët që ekzekutohen si komandë lokale mbeten të konfiguruar në çdo makinë.",
+    description:
+      "Një server MCP i largët përmes HTTP. Serverët që ekzekutohen si komandë lokale mbeten të konfiguruar në çdo makinë.",
     name: "Emri",
     namePlaceholder: "GitHub",
     nameHint: "Id-ja e tij, e përdorur te hub-<id> në makinat tuaja, krijohet nga emri.",
@@ -516,7 +522,8 @@ export default {
     checkError: (message: string) => `Kontrolli i fundit dështoi: ${message}`,
     current: "Versioni aktual",
     local: "Ndërtim lokal",
-    localDescription: "Ky hub ekzekuton një ndërtim lokal, jo një version të publikuar. Instalimi i një versioni e zëvendëson.",
+    localDescription:
+      "Ky hub ekzekuton një ndërtim lokal, jo një version të publikuar. Instalimi i një versioni e zëvendëson.",
     upToDate: "Ky hub është i përditësuar",
     upToDateDescription: "Nuk është publikuar asnjë version stabël më i ri.",
     available: (version: string) => `Versioni ${version} është i disponueshëm`,
@@ -529,11 +536,13 @@ export default {
     noNotes: "Ky version nuk ka shënime.",
     github: "Shiko në GitHub",
     devTitle: "Versionet e zhvillimit",
-    devDescription: "Versione paraprake me ndryshimet më të reja. Testohen më pak se versionet stabël dhe mund të prishen.",
+    devDescription:
+      "Versione paraprake me ndryshimet më të reja. Testohen më pak se versionet stabël dhe mund të prishen.",
     showDev: "Shfaq versionet e zhvillimit",
     devNone: "Nuk është publikuar asnjë version zhvillimi.",
     manualTitle: "Përditëso manualisht",
-    manualDescription: "Përditësimet automatike nuk janë konfiguruar në këtë server. Ekzekutoni këtë komandë në server për të instaluar versionin më të ri; ajo konfiguron edhe përditësimet automatike.",
+    manualDescription:
+      "Përditësimet automatike nuk janë konfiguruar në këtë server. Ekzekutoni këtë komandë në server për të instaluar versionin më të ri; ajo konfiguron edhe përditësimet automatike.",
     pending: (version: string) => `U kërkua përditësimi në ${version}…`,
     running: (version: string) => `Po instalohet ${version}…`,
     restarting: "Hub-i po riniset…",
@@ -541,9 +550,11 @@ export default {
     failed: (version: string) => `Përditësimi në ${version} dështoi`,
     failedHint: "Instaluesi nuk dha asnjë arsye. Kontrolloni regjistrat e shërbimit opencode-hub-update në server.",
     confirmTitle: (version: string) => `Të përditësohet në ${version}?`,
-    confirmDescription: "Hub-i e shkarkon këtë version, e verifikon, zëvendëson programin e tij dhe riniset. Bisedat dhe makinat shkëputen për një çast, pastaj rilidhen.",
+    confirmDescription:
+      "Hub-i e shkarkon këtë version, e verifikon, zëvendëson programin e tij dhe riniset. Bisedat dhe makinat shkëputen për një çast, pastaj rilidhen.",
     confirmDevTitle: (version: string) => `Të instalohet versioni i zhvillimit ${version}?`,
-    confirmDevWarning: "Ky është një version zhvillimi. Mund të jetë i paqëndrueshëm, të ketë gabime ose të ndryshojë të dhënat e ruajtura në mënyra që një version më i vjetër nuk mund t'i lexojë. Instalojeni vetëm në një hub që mund ta riparoni.",
+    confirmDevWarning:
+      "Ky është një version zhvillimi. Mund të jetë i paqëndrueshëm, të ketë gabime ose të ndryshojë të dhënat e ruajtura në mënyra që një version më i vjetër nuk mund t'i lexojë. Instalojeni vetëm në një hub që mund ta riparoni.",
     confirm: "Përditëso tani",
     confirmDev: "Instaloje gjithsesi",
     startFailed: "Përditësimi nuk u nis dot",
@@ -552,7 +563,8 @@ export default {
     later: "Më vonë",
     openSettings: "Hap cilësimet",
     updateNow: "Përditëso tani",
-    promptManual: "Përditësimet automatike nuk janë konfiguruar në këtë server. Hapni cilësimet për të parë si ta përditësoni.",
+    promptManual:
+      "Përditësimet automatike nuk janë konfiguruar në këtë server. Hapni cilësimet për të parë si ta përditësoni.",
   },
   error: {
     unreachable: "Hub-i nuk u arrit dot.",

@@ -97,6 +97,10 @@ export type ComposerEditorProps = {
   queueFirstLabel?: string
   exitShellKeybind?: string[]
   suggestionBoundary?: () => HTMLElement | undefined
+  /** Entries a host adds at the end of the + menu. */
+  addMenuExtra?: JSX.Element
+  /** + menu entries shown greyed out, with `reason` as their tooltip. */
+  addMenuUnavailable?: { commands?: boolean; context?: boolean; shell?: boolean; reason: string }
 }
 
 export function ComposerEditor(props: ComposerEditorProps) {
@@ -462,6 +466,8 @@ export function ComposerEditor(props: ComposerEditorProps) {
                 onCommands={props.controller.openCommands}
                 onContext={props.controller.openContext}
                 onShell={props.controller.openShell}
+                extra={props.addMenuExtra}
+                unavailable={props.addMenuUnavailable}
               />
             </div>
           </Show>
@@ -982,8 +988,16 @@ function ComposerEditorAddMenu(props: {
   onCommands: () => void
   onContext: () => void
   onShell: () => void
+  extra?: JSX.Element
+  unavailable?: ComposerEditorProps["addMenuUnavailable"]
 }) {
   const focus = pointerFocusReturn()
+  // A disabled item takes no pointer events, so its tooltip listens on a wrapper.
+  const gate = (off: () => boolean | undefined, item: JSX.Element) => (
+    <Tooltip inactive={!off()} placement="right" value={props.unavailable?.reason}>
+      {item}
+    </Tooltip>
+  )
 
   return (
     <Tooltip
@@ -1017,15 +1031,32 @@ function ComposerEditorAddMenu(props: {
               {props.attachLabel}
             </Menu.Item>
             <Menu.Separator />
-            <Menu.Item onSelect={props.onCommands} shortcut="/">
-              {props.commandsLabel}
-            </Menu.Item>
-            <Menu.Item onSelect={props.onContext} shortcut="@">
-              {props.contextLabel}
-            </Menu.Item>
-            <Menu.Item onSelect={props.onShell} shortcut="!">
-              {props.shellLabel}
-            </Menu.Item>
+            {gate(
+              () => props.unavailable?.commands,
+              <Menu.Item onSelect={props.onCommands} shortcut="/" disabled={props.unavailable?.commands}>
+                {props.commandsLabel}
+              </Menu.Item>,
+            )}
+            {gate(
+              () => props.unavailable?.context,
+              <Menu.Item onSelect={props.onContext} shortcut="@" disabled={props.unavailable?.context}>
+                {props.contextLabel}
+              </Menu.Item>,
+            )}
+            {gate(
+              () => props.unavailable?.shell,
+              <Menu.Item onSelect={props.onShell} shortcut="!" disabled={props.unavailable?.shell}>
+                {props.shellLabel}
+              </Menu.Item>,
+            )}
+            <Show when={props.extra}>
+              {(extra) => (
+                <>
+                  <Menu.Separator />
+                  {extra()}
+                </>
+              )}
+            </Show>
           </Menu.Content>
         </Menu.Portal>
       </Menu>

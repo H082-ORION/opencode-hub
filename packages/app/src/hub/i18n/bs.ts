@@ -45,6 +45,7 @@ export default {
     open: "Otvori ovaj folder",
     parent: "Nadređeni folder",
     noFolders: "Nema foldera",
+    needsMachine: "Dostupno kad se mašina poveže",
     detach: "Ukloni mašinu",
   },
   chat: {
@@ -60,14 +61,18 @@ export default {
     collapse: "Sažmi bočnu traku",
     expand: "Otvori bočnu traku",
     failed: "Zahtjev za razgovor nije uspio",
-    locked: "Vaši ključevi su zaključani pa modeli ne mogu odgovarati. Odjavite se i ponovo prijavite da biste ih otključali.",
+    locked:
+      "Vaši ključevi su zaključani pa modeli ne mogu odgovarati. Odjavite se i ponovo prijavite da biste ih otključali.",
     emptyTitle: "Pitajte bilo šta",
     emptyDescription: "Postavite pitanje ili priložite jednu od svojih mašina dugmetom + za rad na projektu.",
     noProviders: "Još nema dostupnog modela. Prvo dodajte provajdera.",
     openSettings: "Otvori postavke",
     placeholder: "Postavite pitanje",
-    send: "Pošalji",
     stop: "Zaustavi",
+    placeholderMachine: "Pitajte bilo šta, / za naredbe, @ za datoteke, ! za shell",
+    running: (machine: string) => `Pokreće se na ${machine}…`,
+    runFailed: "Pokretanje na mašini nije uspjelo",
+    attachRejected: "Mogu se priložiti samo slike i PDF-ovi, i to samo za model koji ih čita.",
   },
   login: {
     title: "Prijava na hub",
@@ -181,7 +186,8 @@ export default {
   },
   machines: {
     title: "Moje mašine",
-    description: "Vaši računari na kojima radi opencode i koji ostaju povezani s ovim hubom. Samo ih vi možete otvoriti.",
+    description:
+      "Vaši računari na kojima radi opencode i koji ostaju povezani s ovim hubom. Samo ih vi možete otvoriti.",
     add: "Dodaj mašinu",
     open: "Otvori",
     revoke: "Opozovi…",
@@ -234,8 +240,7 @@ export default {
     deleteConfirm: "Izbriši",
     deleting: (name: string) => `Brisanje ${name}`,
     newTitle: "Nova instanca u oblaku",
-    newDescription:
-      "Server u oblaku klonira spremnu mašinu, pokreće je i uparuje s hubom. To traje nekoliko minuta.",
+    newDescription: "Server u oblaku klonira spremnu mašinu, pokreće je i uparuje s hubom. To traje nekoliko minuta.",
     name: "Naziv",
     server: "Server u oblaku",
     cpu: "CPU",
@@ -253,7 +258,8 @@ export default {
       "LXD serveri čiji agent kreira instance u oblaku za sve korisnike ovog huba. Ovaj spisak vide samo administratori.",
     link: "Poveži server",
     empty: "Nema servera u oblaku",
-    emptyDescription: "Povežite LXD server na kojem radi agent-hub-lxd da bi korisnici mogli kreirati instance u oblaku.",
+    emptyDescription:
+      "Povežite LXD server na kojem radi agent-hub-lxd da bi korisnici mogli kreirati instance u oblaku.",
     capacity: (cpu: string, memory: string, disk: string, instances: string) =>
       `CPU ${cpu} · RAM ${memory} · disk ${disk} · instanci: ${instances}`,
     load: (load: string) => `Opterećenje ${load}`,
@@ -437,7 +443,8 @@ export default {
   },
   connector: {
     title: "Dodavanje konektora",
-    description: "Udaljeni MCP server preko HTTP-a. Serveri koji rade kao lokalna naredba ostaju podešeni na svakoj mašini.",
+    description:
+      "Udaljeni MCP server preko HTTP-a. Serveri koji rade kao lokalna naredba ostaju podešeni na svakoj mašini.",
     name: "Naziv",
     namePlaceholder: "GitHub",
     nameHint: "Njegov id, koji se koristi u hub-<id> na vašim mašinama, izvodi se iz naziva.",
@@ -507,7 +514,8 @@ export default {
   },
   updates: {
     title: "Ažuriranja",
-    description: "Održavajte ovaj hub na najnovijem izdanju aplikacije OpenCode Hub. Ovu stranicu vide samo administratori.",
+    description:
+      "Održavajte ovaj hub na najnovijem izdanju aplikacije OpenCode Hub. Ovu stranicu vide samo administratori.",
     check: "Provjeri ažuriranja",
     checking: "Provjera…",
     checkFailed: "Provjera ažuriranja nije uspjela",
@@ -533,7 +541,8 @@ export default {
     showDev: "Prikaži razvojne verzije",
     devNone: "Nije objavljena nijedna razvojna verzija.",
     manualTitle: "Ručno ažuriranje",
-    manualDescription: "Automatska ažuriranja nisu postavljena na ovom serveru. Pokrenite ovu naredbu na serveru da instalirate najnovije izdanje; ona postavlja i automatska ažuriranja.",
+    manualDescription:
+      "Automatska ažuriranja nisu postavljena na ovom serveru. Pokrenite ovu naredbu na serveru da instalirate najnovije izdanje; ona postavlja i automatska ažuriranja.",
     pending: (version: string) => `Zatraženo ažuriranje na ${version}…`,
     running: (version: string) => `Instaliranje verzije ${version}…`,
     restarting: "Hub se ponovo pokreće…",
@@ -541,9 +550,11 @@ export default {
     failed: (version: string) => `Ažuriranje na ${version} nije uspjelo`,
     failedHint: "Instalacioni program nije naveo razlog. Provjerite zapisnike servisa opencode-hub-update na serveru.",
     confirmTitle: (version: string) => `Ažurirati na ${version}?`,
-    confirmDescription: "Hub preuzima ovo izdanje, provjerava ga, zamjenjuje svoj program i ponovo se pokreće. Razgovori i mašine se na trenutak prekidaju, a zatim se ponovo povezuju.",
+    confirmDescription:
+      "Hub preuzima ovo izdanje, provjerava ga, zamjenjuje svoj program i ponovo se pokreće. Razgovori i mašine se na trenutak prekidaju, a zatim se ponovo povezuju.",
     confirmDevTitle: (version: string) => `Instalirati razvojnu verziju ${version}?`,
-    confirmDevWarning: "Ovo je razvojna verzija. Može biti nestabilna, sadržavati greške ili izmijeniti sačuvane podatke tako da ih starije izdanje ne može pročitati. Instalirajte je samo na hub koji možete popraviti.",
+    confirmDevWarning:
+      "Ovo je razvojna verzija. Može biti nestabilna, sadržavati greške ili izmijeniti sačuvane podatke tako da ih starije izdanje ne može pročitati. Instalirajte je samo na hub koji možete popraviti.",
     confirm: "Ažuriraj sada",
     confirmDev: "Ipak instaliraj",
     startFailed: "Pokretanje ažuriranja nije uspjelo",
@@ -552,7 +563,8 @@ export default {
     later: "Kasnije",
     openSettings: "Otvori postavke",
     updateNow: "Ažuriraj sada",
-    promptManual: "Automatska ažuriranja nisu postavljena na ovom serveru. Otvorite postavke da vidite kako ga ažurirati.",
+    promptManual:
+      "Automatska ažuriranja nisu postavljena na ovom serveru. Otvorite postavke da vidite kako ga ažurirati.",
   },
   error: {
     unreachable: "Hub nije dostupan.",

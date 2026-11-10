@@ -7,15 +7,18 @@ import { Button } from "@opencode/ui/button"
 import { FileComponentProvider } from "@opencode/ui/context/file"
 import { Icon } from "@opencode/ui/icon"
 import { IconButton } from "@opencode/ui/icon-button"
-import { Loader } from "@opencode/ui/loader"
-import { Mark } from "@opencode/ui/logo"
-import { Select } from "@opencode/ui/select"
+import { Avatar } from "@opencode/ui/avatar"
+import { Logo, Mark } from "@opencode/ui/logo"
+import { Spinner } from "@opencode/ui/spinner"
 import { showToast } from "@opencode/ui/toast"
 import { SessionID } from "@opencode/schema/session-id"
 import { createGlobalEmitter } from "@solid-primitives/event-bus"
 import { createEffect, createMemo, createResource, createSignal, For, on, onCleanup, onMount, Show } from "solid-js"
+import { createStore } from "solid-js/store"
+import type { ComposerPersistedState } from "@/composer/types"
 import { errorText, hubApi, HubError, type HubChatTarget, type HubSession } from "./api"
-import { AttachMenu, projectName } from "./chat-machine"
+import { projectName } from "./chat-machine"
+import { HubComposer, type HubSubmit } from "./composer"
 import { copy } from "./copy"
 import { modelKey, readHiddenModels } from "./models"
 
@@ -26,6 +29,7 @@ const SIDEBAR_KEY = "hub.chat.sidebar"
 const STICK_DISTANCE = 80
 const MACHINES_REFRESH = 15_000
 const MODELS_RETRY = 1500
+const RUN_POLL = 2000
 
 const sessionFromPath = () => /^\/s\/([^/]+)$/.exec(location.pathname)?.[1]
 
@@ -71,7 +75,13 @@ function ChatScreen(props: { session: HubSession; onSignedOut: () => void }) {
   })
 
   const [active, setActive] = createSignal(sessionFromPath())
-  const [draft, setDraft] = createSignal("")
+  const composer = createStore<ComposerPersistedState>({
+    prompt: [{ type: "text", content: "", start: 0, end: 0 }],
+    cursor: 0,
+    context: { items: [] },
+  })
+  // The effort chosen before the session exists, which it is created with.
+  const [pickedVariant, setPickedVariant] = createSignal("default")
   const [drawer, setDrawer] = createSignal(false)
   const [picked, setPicked] = createSignal(readStored(MODEL_KEY))
   const [folded, setFolded] = createSignal(readStored(SIDEBAR_KEY) === "closed")
@@ -151,13 +161,32 @@ function ChatScreen(props: { session: HubSession; onSignedOut: () => void }) {
     return id !== undefined && data.session.status(id) === "running"
   }
 
+  const variant = () => {
+    const id = active()
+    const chosen = id ? (current()?.model?.variant ?? "default") : pickedVariant()
+    return model()?.variants.some((item) => item.id === chosen) ? chosen : "default"
+  }
+  const modelRef = (next: ModelInfo, effort: string) => ({
+    id: next.id,
+    providerID: next.providerID,
+    variant: effort === "default" ? undefined : effort,
+  })
+
   const chooseModel = (next: ModelInfo | null) => {
     if (!next) return
     setPicked(modelKey(next))
     store(MODEL_KEY, modelKey(next))
+    const effort = next.variants.some((item) => item.id === variant()) ? variant() : "default"
+    setPickedVariant(effort)
     const id = active()
-    if (id)
-      void api.session.switchModel({ sessionID: id, model: { id: next.id, providerID: next.providerID } }).catch(fail)
+    if (id) void api.session.switchModel({ sessionID: id, model: modelRef(next, effort) }).catch(fail)
+  }
+
+  const chooseVariant = (effort: string) => {
+    setPickedVariant(effort)
+    const id = active()
+    const chosen = model()
+    if (id && chosen) void api.session.switchModel({ sessionID: id, model: modelRef(chosen, effort) }).catch(fail)
   }
 
   const [target, setTarget] = createSignal<HubChatTarget>()
@@ -169,14 +198,51 @@ function ChatScreen(props: { session: HubSession; onSignedOut: () => void }) {
     const current = target()
     return current !== undefined && (machines()?.find((machine) => machine.id === current.machine)?.online ?? false)
   }
+  // A command or shell line running on the attached machine, polled until the hub reports it done.
+  const [running, setRunning] = createSignal(false)
   createEffect(
     on(active, (id) => {
+      setRunning(false)
       if (!id) return setTarget(undefined)
       void hubApi.chatTarget(id).then((response) => {
-        if (active() === id) setTarget(response.target ?? undefined)
+        if (active() !== id) return
+        setTarget(response.target ?? undefined)
+        setRunning(response.running ?? false)
       }, fail)
     }),
   )
+  createEffect(() => {
+    const id = active()
+    if (!id || !running()) return
+    const timer = setInterval(() => {
+      void hubApi.chatTarget(id).then((response) => {
+        if (active() !== id || response.running) return
+        setRunning(false)
+        if (response.error) showToast({ variant: "error", title: copy.chat.runFailed, description: response.error })
+      }, fail)
+    }, RUN_POLL)
+    onCleanup(() => clearInterval(timer))
+  })
+
+  const [machineCommands] = createResource(
+    () => target(),
+    (attached) =>
+      hubApi.machineCommands(attached.machine, attached.directory).then(
+        (data) => ({ key: attached, data }),
+        () => ({ key: attached, data: [] }),
+      ),
+  )
+  const commands = () => {
+    const loaded = machineCommands.state === "ready" || machineCommands.state === "refreshing"
+    const result = loaded ? machineCommands.latest : undefined
+    return result && result.key === target() ? result.data : []
+  }
+  const searchFiles = (query: string) => {
+    const attached = target()
+    return attached
+      ? hubApi.machineFiles(attached.machine, attached.directory, query).catch(() => [])
+      : Promise.resolve([])
+  }
   const attach = (next: HubChatTarget) => {
     setTarget(next)
     const id = active()
@@ -188,38 +254,53 @@ function ChatScreen(props: { session: HubSession; onSignedOut: () => void }) {
     if (id) void hubApi.clearChatTarget(id).catch(fail)
   }
 
-  const send = async () => {
-    const text = draft().trim()
+  /** Sends a prompt to the hub's model, or runs a command or shell line on the machine; false keeps the draft. */
+  const send = async (request: HubSubmit) => {
     const chosen = model()
-    if (!text || !chosen) return
-    setDraft("")
     const existing = active()
+    // A new session takes the chosen model, even when its first message runs on the machine.
+    if (!chosen && (request.type === "prompt" || !existing)) return false
     const id = existing ?? SessionID.create()
-    if (!existing) {
-      const created = await data.session
-        .create({ id, model: { id: chosen.id, providerID: chosen.providerID } })
-        .request.then(
-          () => true,
-          (error: unknown) => {
-            setDraft(text)
-            fail(error)
-            return false
-          },
-        )
-      if (!created) return
+    if (!existing && chosen) {
+      const created = await data.session.create({ id, model: modelRef(chosen, variant()) }).request.then(
+        () => true,
+        (error: unknown) => {
+          fail(error)
+          return false
+        },
+      )
+      if (!created) return false
       const attached = target()
       if (attached) await hubApi.setChatTarget(id, attached).catch(fail)
       open(id)
     }
-    await data.session.prompt({ sessionID: id, text }).catch((error: unknown) => {
-      setDraft(text)
-      fail(error)
-    })
+    const sent =
+      request.type === "prompt"
+        ? data.session.prompt({
+            sessionID: id,
+            text: request.text,
+            files: request.files.length > 0 ? request.files : undefined,
+          })
+        : request.type === "command"
+          ? hubApi.runCommand(id, request.name, request.arguments)
+          : hubApi.runShell(id, request.command)
+    return sent.then(
+      () => {
+        if (request.type !== "prompt") setRunning(true)
+        return true
+      },
+      (error: unknown) => {
+        fail(error)
+        return false
+      },
+    )
   }
 
   const stop = () => {
     const id = active()
-    if (id) void api.session.interrupt({ sessionID: id }).catch(fail)
+    if (!id) return
+    if (running()) void hubApi.stopRun(id).then(() => setRunning(false), fail)
+    if (busy()) void api.session.interrupt({ sessionID: id }).catch(fail)
   }
 
   const remove = (id: string) => {
@@ -259,6 +340,73 @@ function ChatScreen(props: { session: HubSession; onSignedOut: () => void }) {
   onCleanup(() => resize.disconnect())
 
   const noModels = () => models.state === "ready" && (models() ?? []).length === 0
+
+  // The new-session screen shows the composer under the logo, an open session docks it under the timeline.
+  const composerBlock = () => (
+    <div class="hub-chat-composer">
+      <Show when={noModels()}>
+        <p class="hub-chat-notice" role="status">
+          {copy.chat.noProviders} <a href="/settings">{copy.chat.openSettings}</a>
+        </p>
+      </Show>
+      <Show when={running() ? target() : undefined}>
+        {(attached) => (
+          <div class="hub-chat-running" role="status">
+            <Spinner class="size-4" />
+            <span class="hub-chat-badge-text">{copy.chat.running(attached().machineName)}</span>
+            <Button variant="ghost" size="small" onClick={stop}>
+              {copy.chat.stop}
+            </Button>
+          </div>
+        )}
+      </Show>
+      <HubComposer
+        store={composer}
+        models={models() ?? []}
+        modelsLoading={models.loading}
+        model={model()}
+        onModel={chooseModel}
+        variant={variant()}
+        onVariant={chooseVariant}
+        target={target()}
+        commands={commands()}
+        searchFiles={searchFiles}
+        machines={machines() ?? []}
+        onMachinesOpen={() => void refetchMachines()}
+        onAttach={attach}
+        placeholder={
+          target() ? copy.chat.placeholderMachine : active() ? copy.chat.placeholder : copy.chat.emptyDescription
+        }
+        working={busy() || running()}
+        onSubmit={send}
+        onStop={stop}
+        onError={fail}
+      />
+      <div class="hub-chat-under">
+        <span class="hub-chat-user">
+          <Avatar fallback={props.session.user.login} size="small" />
+          <span class="hub-chat-badge-text">{props.session.user.login}</span>
+        </span>
+        <Show when={target()}>
+          {(attached) => (
+            <span class="hub-chat-place" title={`${attached().machineName}: ${attached().directory}`}>
+              <span class="hub-status" data-online={targetOnline() ? "" : undefined} aria-hidden="true" />
+              <span class="hub-chat-badge-text">{attached().machineName}</span>
+              <Icon name="folder" size="small" />
+              <span class="hub-chat-badge-text">{projectName(attached().directory)}</span>
+              <IconButton
+                icon={<Icon name="close" size="small" />}
+                variant="ghost"
+                size="small"
+                aria-label={copy.attach.detach}
+                onClick={detach}
+              />
+            </span>
+          )}
+        </Show>
+      </div>
+    </div>
+  )
 
   return (
     <div class="hub-chat" data-drawer={drawer() ? "" : undefined} data-folded={folded() ? "" : undefined}>
@@ -363,123 +511,49 @@ function ChatScreen(props: { session: HubSession; onSignedOut: () => void }) {
           </p>
         </Show>
 
-        <div class="hub-chat-scroll" data-scrollable ref={scroller} onScroll={onScroll}>
-          <Show
-            when={document()}
-            fallback={
-              <div class="hub-chat-empty">
-                <h2>{copy.chat.emptyTitle}</h2>
-                <p>{copy.chat.emptyDescription}</p>
+        <Show
+          when={document()}
+          fallback={
+            <div class="hub-chat-start">
+              <div class="hub-chat-start-content">
+                <h2 class="sr-only">{copy.chat.emptyTitle}</h2>
+                <div class="hub-chat-logo" aria-hidden="true">
+                  <Logo />
+                </div>
+                {composerBlock()}
               </div>
-            }
-          >
-            {(doc) => (
-              <div
-                class="hub-chat-timeline"
-                ref={(element) => {
-                  resize.observe(element)
-                  onCleanup(() => resize.unobserve(element))
-                }}
-              >
-                <DataProvider
-                  directory=""
-                  sessionID={doc().sessionID}
-                  agents={false}
-                  data={{
-                    session: sessions(),
-                    session_status: { [doc().sessionID]: doc().status },
-                    session_diff: {},
-                    provider: providerCatalog(models() ?? []),
+            </div>
+          }
+        >
+          {(doc) => (
+            <>
+              <div class="hub-chat-scroll" data-scrollable ref={scroller} onScroll={onScroll}>
+                <div
+                  class="hub-chat-timeline"
+                  ref={(element) => {
+                    resize.observe(element)
+                    onCleanup(() => resize.unobserve(element))
                   }}
                 >
-                  <SessionTimeline document={doc()} />
-                </DataProvider>
+                  <DataProvider
+                    directory=""
+                    sessionID={doc().sessionID}
+                    agents={false}
+                    data={{
+                      session: sessions(),
+                      session_status: { [doc().sessionID]: doc().status },
+                      session_diff: {},
+                      provider: providerCatalog(models() ?? []),
+                    }}
+                  >
+                    <SessionTimeline document={doc()} />
+                  </DataProvider>
+                </div>
               </div>
-            )}
-          </Show>
-        </div>
-
-        <div class="hub-chat-composer">
-          <Show when={noModels()}>
-            <p class="hub-chat-notice" role="status">
-              {copy.chat.noProviders} <a href="/settings">{copy.chat.openSettings}</a>
-            </p>
-          </Show>
-          <form
-            class="hub-chat-form"
-            onSubmit={(event) => {
-              event.preventDefault()
-              void send()
-            }}
-          >
-            <div class="hub-chat-input">
-              <Show when={target()}>
-                {(current) => (
-                  <div class="hub-chat-badges">
-                    <span class="hub-chat-badge">
-                      <span class="hub-status" data-online={targetOnline() ? "" : undefined} aria-hidden="true" />
-                      <span class="hub-chat-badge-text">{current().machineName}</span>
-                    </span>
-                    <span class="hub-chat-badge" title={current().directory}>
-                      <Icon name="folder" size="small" />
-                      <span class="hub-chat-badge-text">{projectName(current().directory)}</span>
-                      <button type="button" aria-label={copy.attach.detach} onClick={detach}>
-                        <Icon name="close" size="small" />
-                      </button>
-                    </span>
-                  </div>
-                )}
-              </Show>
-              <textarea
-                rows={1}
-                value={draft()}
-                placeholder={copy.chat.placeholder}
-                aria-label={copy.chat.placeholder}
-                onInput={(event) => setDraft(event.currentTarget.value)}
-                onKeyDown={(event) => {
-                  if (event.key !== "Enter" || event.shiftKey || event.isComposing) return
-                  event.preventDefault()
-                  void send()
-                }}
-              />
-            </div>
-            <div class="hub-chat-form-row">
-              <AttachMenu machines={machines() ?? []} onOpen={() => void refetchMachines()} onPick={attach} />
-              <Show
-                when={(models() ?? []).length > 0}
-                fallback={
-                  <Show when={models.loading}>
-                    <Loader class="size-4 text-v2-icon-icon-muted" />
-                  </Show>
-                }
-              >
-                <Select
-                  class="hub-chat-model"
-                  appearance="small"
-                  surface="invisible"
-                  options={models() ?? []}
-                  current={model()}
-                  value={modelKey}
-                  label={(item) => item.name}
-                  groupBy={(item) => item.providerID}
-                  onSelect={chooseModel}
-                />
-              </Show>
-              <Show
-                when={busy()}
-                fallback={
-                  <Button type="submit" variant="submit" disabled={!draft().trim() || !model()}>
-                    {copy.chat.send}
-                  </Button>
-                }
-              >
-                <Button type="button" variant="outline" onClick={stop}>
-                  {copy.chat.stop}
-                </Button>
-              </Show>
-            </div>
-          </form>
-        </div>
+              <div class="hub-chat-dock">{composerBlock()}</div>
+            </>
+          )}
+        </Show>
       </main>
     </div>
   )

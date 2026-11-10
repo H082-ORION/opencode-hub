@@ -45,6 +45,7 @@ export default {
     open: "Bu qovluğu aç",
     parent: "Üst qovluq",
     noFolders: "Burada qovluq yoxdur",
+    needsMachine: "Maşın qoşulduqdan sonra əlçatan olur",
     detach: "Maşını sil",
   },
   chat: {
@@ -66,8 +67,11 @@ export default {
     noProviders: "Hələ heç bir model mövcud deyil. Əvvəlcə provayder əlavə edin.",
     openSettings: "Parametrləri aç",
     placeholder: "Sual verin",
-    send: "Göndər",
     stop: "Dayandır",
+    placeholderMachine: "İstənilən sualı verin, əmrlər üçün /, fayllar üçün @, shell üçün !",
+    running: (machine: string) => `${machine} üzərində işləyir…`,
+    runFailed: "Maşında icra uğursuz oldu",
+    attachRejected: "Yalnız şəkillər və PDF-lər əlavə edilə bilər, onlar da yalnız onları oxuya bilən model üçün.",
   },
   login: {
     title: "Hub-a daxil olun",
@@ -177,7 +181,8 @@ export default {
     failed: "Dəvəti yaratmaq mümkün olmadı",
     link: "Dəvət keçidi",
     resetLink: "Sıfırlama keçidi",
-    linkHint: "Yalnız bir dəfə göstərilir. Bu keçidi əldə edən hər kəs ondan istifadə edə bilər, ona görə onu şəxsi göndərin.",
+    linkHint:
+      "Yalnız bir dəfə göstərilir. Bu keçidi əldə edən hər kəs ondan istifadə edə bilər, ona görə onu şəxsi göndərin.",
   },
   machines: {
     title: "Maşınlarım",
@@ -261,8 +266,7 @@ export default {
     instances: "Bütün bulud nüsxələri",
     revoke: "Ləğv et…",
     revokeTitle: "Bulud serveri ləğv edilsin?",
-    revokeDescription: (name: string) =>
-      `${name} ayrılır və tokeni silinir. Geri qayıtmaq üçün yenidən bağlanmalıdır.`,
+    revokeDescription: (name: string) => `${name} ayrılır və tokeni silinir. Geri qayıtmaq üçün yenidən bağlanmalıdır.`,
     revokeConfirm: "Ləğv et",
     revoked: (name: string) => `${name} ləğv edildi`,
     revokeFailed: "Bulud serverini ləğv etmək mümkün olmadı",
@@ -516,7 +520,8 @@ export default {
     checkError: (message: string) => `Son yoxlama uğursuz oldu: ${message}`,
     current: "Cari versiya",
     local: "Lokal yığım",
-    localDescription: "Bu hub dərc olunmuş buraxılış deyil, lokal yığım işlədir. Buraxılışın quraşdırılması onu əvəz edir.",
+    localDescription:
+      "Bu hub dərc olunmuş buraxılış deyil, lokal yığım işlədir. Buraxılışın quraşdırılması onu əvəz edir.",
     upToDate: "Bu hub güncəldir",
     upToDateDescription: "Daha yeni stabil buraxılış dərc olunmayıb.",
     available: (version: string) => `${version} versiyası mövcuddur`,
@@ -529,11 +534,13 @@ export default {
     noNotes: "Bu buraxılışın qeydləri yoxdur.",
     github: "GitHub-da bax",
     devTitle: "İnkişaf versiyaları",
-    devDescription: "Ən son dəyişiklikləri olan ilkin buraxılışlar. Onlar stabil buraxılışlardan az sınaqdan keçirilir və nasaz işləyə bilər.",
+    devDescription:
+      "Ən son dəyişiklikləri olan ilkin buraxılışlar. Onlar stabil buraxılışlardan az sınaqdan keçirilir və nasaz işləyə bilər.",
     showDev: "İnkişaf versiyalarını göstər",
     devNone: "Heç bir inkişaf versiyası dərc olunmayıb.",
     manualTitle: "Əl ilə yenilə",
-    manualDescription: "Bu serverdə avtomatik yeniləmələr qurulmayıb. Ən son buraxılışı quraşdırmaq üçün bu əmri serverdə işə salın; o, avtomatik yeniləmələri də qurur.",
+    manualDescription:
+      "Bu serverdə avtomatik yeniləmələr qurulmayıb. Ən son buraxılışı quraşdırmaq üçün bu əmri serverdə işə salın; o, avtomatik yeniləmələri də qurur.",
     pending: (version: string) => `${version} versiyasına yeniləmə tələb olundu…`,
     running: (version: string) => `${version} quraşdırılır…`,
     restarting: "Hub yenidən başladılır…",
@@ -541,9 +548,11 @@ export default {
     failed: (version: string) => `${version} versiyasına yeniləmə uğursuz oldu`,
     failedHint: "Quraşdırıcı səbəb göstərmədi. Serverdə opencode-hub-update xidmətinin jurnallarını yoxlayın.",
     confirmTitle: (version: string) => `${version} versiyasına yenilənsin?`,
-    confirmDescription: "Hub bu buraxılışı endirir, yoxlayır, proqramını əvəz edir və yenidən başlayır. Çatlar və maşınlar bir anlıq ayrılır, sonra yenidən qoşulur.",
+    confirmDescription:
+      "Hub bu buraxılışı endirir, yoxlayır, proqramını əvəz edir və yenidən başlayır. Çatlar və maşınlar bir anlıq ayrılır, sonra yenidən qoşulur.",
     confirmDevTitle: (version: string) => `${version} inkişaf versiyası quraşdırılsın?`,
-    confirmDevWarning: "Bu, inkişaf versiyasıdır. O, qeyri-stabil ola, xətalar ehtiva edə və ya saxlanılan məlumatları köhnə buraxılışın oxuya bilməyəcəyi şəkildə dəyişə bilər. Onu yalnız bərpa edə biləcəyiniz hub-a quraşdırın.",
+    confirmDevWarning:
+      "Bu, inkişaf versiyasıdır. O, qeyri-stabil ola, xətalar ehtiva edə və ya saxlanılan məlumatları köhnə buraxılışın oxuya bilməyəcəyi şəkildə dəyişə bilər. Onu yalnız bərpa edə biləcəyiniz hub-a quraşdırın.",
     confirm: "İndi yenilə",
     confirmDev: "Yenə də quraşdır",
     startFailed: "Yeniləməni başlatmaq mümkün olmadı",
@@ -552,7 +561,8 @@ export default {
     later: "Sonra",
     openSettings: "Parametrləri aç",
     updateNow: "İndi yenilə",
-    promptManual: "Bu serverdə avtomatik yeniləmələr qurulmayıb. Onu necə yeniləyəcəyinizi görmək üçün parametrləri açın.",
+    promptManual:
+      "Bu serverdə avtomatik yeniləmələr qurulmayıb. Onu necə yeniləyəcəyinizi görmək üçün parametrləri açın.",
   },
   error: {
     unreachable: "Hub-a çatmaq mümkün olmadı.",

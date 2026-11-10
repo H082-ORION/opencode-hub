@@ -45,6 +45,7 @@ export default {
     open: "Öppna den här mappen",
     parent: "Överordnad mapp",
     noFolders: "Inga mappar här",
+    needsMachine: "Tillgängligt när en maskin är ansluten",
     detach: "Ta bort maskinen",
   },
   chat: {
@@ -66,8 +67,11 @@ export default {
     noProviders: "Ingen modell är tillgänglig ännu. Lägg först till en leverantör.",
     openSettings: "Öppna inställningar",
     placeholder: "Ställ en fråga",
-    send: "Skicka",
     stop: "Stoppa",
+    placeholderMachine: "Fråga vad som helst, / för kommandon, @ för filer, ! för skalet",
+    running: (machine: string) => `Körs på ${machine} …`,
+    runFailed: "Körningen på maskinen misslyckades",
+    attachRejected: "Bara bilder och PDF-filer kan bifogas, och bara för en modell som kan läsa dem.",
   },
   login: {
     title: "Logga in på hubben",
@@ -437,7 +441,8 @@ export default {
   },
   connector: {
     title: "Lägg till en koppling",
-    description: "En MCP-fjärrserver över HTTP. Servrar som körs som ett lokalt kommando förblir konfigurerade på varje maskin.",
+    description:
+      "En MCP-fjärrserver över HTTP. Servrar som körs som ett lokalt kommando förblir konfigurerade på varje maskin.",
     name: "Namn",
     namePlaceholder: "GitHub",
     nameHint: "Dess id, som används i hub-<id> på dina maskiner, skapas utifrån namnet.",
@@ -507,7 +512,8 @@ export default {
   },
   updates: {
     title: "Uppdateringar",
-    description: "Håll den här hubben på den senaste versionen av OpenCode Hub. Bara administratörer ser den här sidan.",
+    description:
+      "Håll den här hubben på den senaste versionen av OpenCode Hub. Bara administratörer ser den här sidan.",
     check: "Sök efter uppdateringar",
     checking: "Söker…",
     checkFailed: "Det gick inte att söka efter uppdateringar",
@@ -516,7 +522,8 @@ export default {
     checkError: (message: string) => `Den senaste kontrollen misslyckades: ${message}`,
     current: "Nuvarande version",
     local: "Lokalt bygge",
-    localDescription: "Den här hubben kör ett lokalt bygge, inte en publicerad version. Om du installerar en version ersätts det.",
+    localDescription:
+      "Den här hubben kör ett lokalt bygge, inte en publicerad version. Om du installerar en version ersätts det.",
     upToDate: "Den här hubben är uppdaterad",
     upToDateDescription: "Ingen nyare stabil version har publicerats.",
     available: (version: string) => `Version ${version} är tillgänglig`,
@@ -529,21 +536,26 @@ export default {
     noNotes: "Den här versionen har ingen versionsinformation.",
     github: "Visa på GitHub",
     devTitle: "Utvecklingsversioner",
-    devDescription: "Förhandsversioner med de senaste ändringarna. De testas mindre än stabila versioner och kan sluta fungera.",
+    devDescription:
+      "Förhandsversioner med de senaste ändringarna. De testas mindre än stabila versioner och kan sluta fungera.",
     showDev: "Visa utvecklingsversioner",
     devNone: "Ingen utvecklingsversion har publicerats.",
     manualTitle: "Uppdatera manuellt",
-    manualDescription: "Automatiska uppdateringar är inte konfigurerade på den här servern. Kör det här kommandot på servern för att installera den senaste versionen; det konfigurerar även automatiska uppdateringar.",
+    manualDescription:
+      "Automatiska uppdateringar är inte konfigurerade på den här servern. Kör det här kommandot på servern för att installera den senaste versionen; det konfigurerar även automatiska uppdateringar.",
     pending: (version: string) => `Uppdatering till ${version} begärd…`,
     running: (version: string) => `Installerar ${version}…`,
     restarting: "Hubben startar om…",
     progressHint: "Sidan läses in igen av sig själv när hubben kör den nya versionen.",
     failed: (version: string) => `Uppdateringen till ${version} misslyckades`,
-    failedHint: "Installationsprogrammet angav ingen orsak. Kontrollera loggarna för tjänsten opencode-hub-update på servern.",
+    failedHint:
+      "Installationsprogrammet angav ingen orsak. Kontrollera loggarna för tjänsten opencode-hub-update på servern.",
     confirmTitle: (version: string) => `Uppdatera till ${version}?`,
-    confirmDescription: "Hubben laddar ner den här versionen, verifierar den, ersätter sitt program och startar om. Chattar och maskiner kopplas från en kort stund och ansluter sedan igen.",
+    confirmDescription:
+      "Hubben laddar ner den här versionen, verifierar den, ersätter sitt program och startar om. Chattar och maskiner kopplas från en kort stund och ansluter sedan igen.",
     confirmDevTitle: (version: string) => `Installera utvecklingsversion ${version}?`,
-    confirmDevWarning: "Det här är en utvecklingsversion. Den kan vara instabil, innehålla buggar eller ändra sparade data på sätt som en äldre version inte kan läsa. Installera den bara på en hubb som du kan reparera.",
+    confirmDevWarning:
+      "Det här är en utvecklingsversion. Den kan vara instabil, innehålla buggar eller ändra sparade data på sätt som en äldre version inte kan läsa. Installera den bara på en hubb som du kan reparera.",
     confirm: "Uppdatera nu",
     confirmDev: "Installera ändå",
     startFailed: "Det gick inte att starta uppdateringen",
@@ -552,7 +564,8 @@ export default {
     later: "Senare",
     openSettings: "Öppna inställningar",
     updateNow: "Uppdatera nu",
-    promptManual: "Automatiska uppdateringar är inte konfigurerade på den här servern. Öppna inställningarna för att se hur du uppdaterar den.",
+    promptManual:
+      "Automatiska uppdateringar är inte konfigurerade på den här servern. Öppna inställningarna för att se hur du uppdaterar den.",
   },
   error: {
     unreachable: "Det gick inte att nå hubben.",

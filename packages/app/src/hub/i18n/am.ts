@@ -45,6 +45,7 @@ export default {
     open: "ይህን አቃፊ ክፈት",
     parent: "የወላጅ አቃፊ",
     noFolders: "እዚህ ምንም አቃፊ የለም",
+    needsMachine: "ማሽን ከተያያዘ በኋላ ይገኛል",
     detach: "ማሽኑን አስወግድ",
   },
   chat: {
@@ -66,8 +67,11 @@ export default {
     noProviders: "እስካሁን ምንም ሞዴል አይገኝም። መጀመሪያ አቅራቢ ያክሉ።",
     openSettings: "ቅንብሮችን ክፈት",
     placeholder: "ጥያቄ ይጠይቁ",
-    send: "ላክ",
     stop: "አቁም",
+    placeholderMachine: "ማንኛውንም ይጠይቁ፣ / ለትዕዛዞች፣ @ ለፋይሎች፣ ! ለሼል",
+    running: (machine: string) => `በ${machine} ላይ በመሮጥ ላይ…`,
+    runFailed: "በማሽኑ ላይ ያለው ሩጫ አልተሳካም",
+    attachRejected: "ምስሎችና PDF ብቻ ሊያያዙ ይችላሉ፣ እነሱንም ማንበብ ለሚችል ሞዴል ብቻ።",
   },
   login: {
     title: "ወደ ሃብ ይግቡ",
@@ -143,8 +147,7 @@ export default {
     enable: "አንቃ",
     reset: "የይለፍ ቃል ዳግም አስጀምር…",
     disableTitle: "መለያው ይሰናከል?",
-    disableDescription: (login: string) =>
-      `${login} በሁሉም ቦታ ይወጣል እና መለያው እንደገና እስኪነቃ ድረስ መግባት አይችልም።`,
+    disableDescription: (login: string) => `${login} በሁሉም ቦታ ይወጣል እና መለያው እንደገና እስኪነቃ ድረስ መግባት አይችልም።`,
     disableConfirm: "አሰናክል",
     resetTitle: "የይለፍ ቃል ዳግም ይጀመር?",
     resetDescription: (login: string) =>
@@ -193,8 +196,7 @@ export default {
     emptyDescription: "opencodeውን ከየትኛውም ቦታ ለመድረስ ማሽን ያክሉ።",
     reconnecting: "እንደገና በመገናኘት ላይ…",
     revokeTitle: "ማሽኑ ይሰረዝ?",
-    revokeDescription: (name: string) =>
-      `${name} ይቋረጣል እና ቶከኖቹ ይሰረዛሉ። ተመልሶ ለመምጣት እንደገና ሃብን መቀላቀል አለበት።`,
+    revokeDescription: (name: string) => `${name} ይቋረጣል እና ቶከኖቹ ይሰረዛሉ። ተመልሶ ለመምጣት እንደገና ሃብን መቀላቀል አለበት።`,
     revokeConfirm: "ሰርዝ",
     revoked: (name: string) => `${name} ተሰርዟል`,
     revokeFailed: "ማሽኑን መሰረዝ አልተቻለም",
@@ -203,8 +205,7 @@ export default {
   },
   cloud: {
     title: "የደመና ምሳሌዎች",
-    description:
-      "በዚህ ሃብ የደመና አገልጋዮች ላይ ያሉ፣ opencode ዝግጁ የሆነባቸው ምናባዊ ማሽኖች። እያንዳንዱ ከማሽኖችዎ አንዱ ይሆናል።",
+    description: "በዚህ ሃብ የደመና አገልጋዮች ላይ ያሉ፣ opencode ዝግጁ የሆነባቸው ምናባዊ ማሽኖች። እያንዳንዱ ከማሽኖችዎ አንዱ ይሆናል።",
     create: "አዲስ ምሳሌ",
     empty: "እስካሁን ምንም የደመና ምሳሌ የለም",
     emptyDescription: "ምንም ሳይጭኑ opencode ያለው አዲስ ማሽን ለማግኘት ምሳሌ ይፍጠሩ።",
@@ -229,13 +230,11 @@ export default {
     owner: (login: string) => `ባለቤት: ${login}`,
     actionFailed: "ምሳሌውን ማዘመን አልተቻለም",
     deleteTitle: "ምሳሌው ይሰረዝ?",
-    deleteDescription: (name: string) =>
-      `የ${name} ምናባዊ ማሽን እና በላዩ ላይ ያለው ሁሉ ይሰረዛል፣ ማሽኑም ከሃብ ይወጣል። ይህ መመለስ አይችልም።`,
+    deleteDescription: (name: string) => `የ${name} ምናባዊ ማሽን እና በላዩ ላይ ያለው ሁሉ ይሰረዛል፣ ማሽኑም ከሃብ ይወጣል። ይህ መመለስ አይችልም።`,
     deleteConfirm: "ሰርዝ",
     deleting: (name: string) => `${name}ን በመሰረዝ ላይ`,
     newTitle: "አዲስ የደመና ምሳሌ",
-    newDescription:
-      "የደመና አገልጋዩ ዝግጁ ማሽንን ይቀዳል፣ ይጀምረዋል እና ከሃብ ጋር ያጣምረዋል። ጥቂት ደቂቃዎች ይወስዳል።",
+    newDescription: "የደመና አገልጋዩ ዝግጁ ማሽንን ይቀዳል፣ ይጀምረዋል እና ከሃብ ጋር ያጣምረዋል። ጥቂት ደቂቃዎች ይወስዳል።",
     name: "ስም",
     server: "የደመና አገልጋይ",
     cpu: "CPU",
@@ -249,8 +248,7 @@ export default {
   },
   cloudHosts: {
     title: "የደመና አገልጋዮች",
-    description:
-      "ወኪላቸው ለዚህ ሃብ ተጠቃሚዎች ሁሉ የደመና ምሳሌዎችን የሚፈጥር LXD አገልጋዮች። ይህን ዝርዝር አስተዳዳሪዎች ብቻ ያያሉ።",
+    description: "ወኪላቸው ለዚህ ሃብ ተጠቃሚዎች ሁሉ የደመና ምሳሌዎችን የሚፈጥር LXD አገልጋዮች። ይህን ዝርዝር አስተዳዳሪዎች ብቻ ያያሉ።",
     link: "አገልጋይ አገናኝ",
     empty: "የደመና አገልጋዮች የሉም",
     emptyDescription: "ተጠቃሚዎች የደመና ምሳሌዎችን እንዲፈጥሩ agent-hub-lxd የሚያሄድ LXD አገልጋይ ያገናኙ።",
@@ -261,8 +259,7 @@ export default {
     instances: "ሁሉም የደመና ምሳሌዎች",
     revoke: "ሰርዝ…",
     revokeTitle: "የደመና አገልጋዩ ይሰረዝ?",
-    revokeDescription: (name: string) =>
-      `${name} ይቋረጣል እና ቶከኑ ይሰረዛል። ተመልሶ ለመምጣት እንደገና መገናኘት አለበት።`,
+    revokeDescription: (name: string) => `${name} ይቋረጣል እና ቶከኑ ይሰረዛል። ተመልሶ ለመምጣት እንደገና መገናኘት አለበት።`,
     revokeConfirm: "ሰርዝ",
     revoked: (name: string) => `${name} ተሰርዟል`,
     revokeFailed: "የደመና አገልጋዩን መሰረዝ አልተቻለም",
@@ -274,8 +271,7 @@ export default {
   },
   allMachines: {
     title: "ሁሉም ማሽኖች",
-    description:
-      "በዚህ ሃብ ላይ የተመዘገቡ ሁሉም ማሽኖች ከባለቤታቸው ጋር። አስተዳዳሪዎች ማንኛውንም መሰረዝ ይችላሉ ነገር ግን የራሳቸውን ብቻ መክፈት ይችላሉ።",
+    description: "በዚህ ሃብ ላይ የተመዘገቡ ሁሉም ማሽኖች ከባለቤታቸው ጋር። አስተዳዳሪዎች ማንኛውንም መሰረዝ ይችላሉ ነገር ግን የራሳቸውን ብቻ መክፈት ይችላሉ።",
     loadFailed: "ማሽኖችን መጫን አልተቻለም",
     retry: "እንደገና ሞክር",
     empty: "በዚህ ሃብ ላይ ማሽን የለም",
@@ -303,8 +299,7 @@ export default {
   },
   orgs: {
     title: "ድርጅቶች",
-    description:
-      "ማሽኖችን የሚጋሩ የተጠቃሚዎች ቡድኖች። ይህን ዝርዝር የሚያዩት፣ ድርጅቶችን የሚፈጥሩት እና አባሎቻቸውን የሚመርጡት አስተዳዳሪዎች ብቻ ናቸው።",
+    description: "ማሽኖችን የሚጋሩ የተጠቃሚዎች ቡድኖች። ይህን ዝርዝር የሚያዩት፣ ድርጅቶችን የሚፈጥሩት እና አባሎቻቸውን የሚመርጡት አስተዳዳሪዎች ብቻ ናቸው።",
     create: "አዲስ ድርጅት",
     loadFailed: "ድርጅቶችን መጫን አልተቻለም",
     retry: "እንደገና ሞክር",
@@ -323,13 +318,11 @@ export default {
     save: "አስቀምጥ",
     saving: "በማስቀመጥ ላይ…",
     deleteTitle: "ድርጅቱ ይሰረዝ?",
-    deleteDescription: (name: string) =>
-      `${name} እና አባልነቶቹ ይሰረዛሉ። አሁንም ማሽኖች ያሉት ድርጅት መሰረዝ አይቻልም።`,
+    deleteDescription: (name: string) => `${name} እና አባልነቶቹ ይሰረዛሉ። አሁንም ማሽኖች ያሉት ድርጅት መሰረዝ አይቻልም።`,
     deleteConfirm: "ሰርዝ",
     deleted: (name: string) => `${name} ተሰርዟል`,
     membersTitle: (name: string) => `የ${name} አባላት`,
-    membersDescription:
-      "አባላት የድርጅቱን ማሽኖች ይከፍታሉ እና አዲስ ማከል ይችላሉ። አባልን ማስወገድ መዳረሻውን ወዲያውኑ ይቆርጣል።",
+    membersDescription: "አባላት የድርጅቱን ማሽኖች ይከፍታሉ እና አዲስ ማከል ይችላሉ። አባልን ማስወገድ መዳረሻውን ወዲያውኑ ይቆርጣል።",
     noMembers: "እስካሁን ምንም አባል የለም",
     others: "ሌሎች ተጠቃሚዎች",
     noOthers: "ሁሉም ተጠቃሚዎች አባላት ናቸው።",
@@ -358,8 +351,7 @@ export default {
     createTitle: "አዲስ ክህሎት",
     editTitle: "ክህሎትን አርትዕ",
     viewTitle: (name: string) => `ክህሎት ${name}`,
-    formDescription:
-      "ሃብ እንደ SKILL.md ይጽፈዋል፣ ስሙንና መግለጫውን በ frontmatter ውስጥ በማድረግ፣ ማሽኖችዎም ወዲያውኑ ያገኙታል።",
+    formDescription: "ሃብ እንደ SKILL.md ይጽፈዋል፣ ስሙንና መግለጫውን በ frontmatter ውስጥ በማድረግ፣ ማሽኖችዎም ወዲያውኑ ያገኙታል።",
     name: "ስም",
     nameHint: "ትናንሽ ፊደላት እና አሃዞች፣ በሰረዝ የተያያዙ ቃላት።",
     descriptionLabel: "መግለጫ",
@@ -381,8 +373,7 @@ export default {
     deleted: (name: string) => `${name} ተሰርዟል`,
     actionFailed: "ክህሎቱን ማዘመን አልተቻለም",
     orgTitle: (name: string) => `የ${name} ክህሎቶች`,
-    orgDescription:
-      "እያንዳንዱ አባል እነዚህን ክህሎቶች በሁሉም ማሽኖቹ ላይ ያገኛል። ከእነዚህ አንዱ የአባሉን ተመሳሳይ ስም ያለው የራሱን ክህሎት ይተካል።",
+    orgDescription: "እያንዳንዱ አባል እነዚህን ክህሎቶች በሁሉም ማሽኖቹ ላይ ያገኛል። ከእነዚህ አንዱ የአባሉን ተመሳሳይ ስም ያለው የራሱን ክህሎት ይተካል።",
     orgDeleteDescription: (name: string) => `${name} ከሁሉም አባላት ማሽኖች ይወገዳል።`,
   },
   providers: {
@@ -428,8 +419,7 @@ export default {
     loadFailed: "አገናኞችን መጫን አልተቻለም",
     retry: "እንደገና ሞክር",
     removeTitle: "አገናኙ ይወገድ?",
-    removeDescription: (name: string) =>
-      `ማሽኖችዎ በሃብ በኩል ${name}ን መድረስ ያቆማሉ፣ የተቀመጡ ራስጌዎቹ ወይም መግቢያው ይሰረዛሉ።`,
+    removeDescription: (name: string) => `ማሽኖችዎ በሃብ በኩል ${name}ን መድረስ ያቆማሉ፣ የተቀመጡ ራስጌዎቹ ወይም መግቢያው ይሰረዛሉ።`,
     removeConfirm: "አስወግድ",
     removed: (name: string) => `${name} ተወግዷል`,
     removeFailed: "አገናኙን ማስወገድ አልተቻለም",
@@ -443,8 +433,7 @@ export default {
     nameHint: "በማሽኖችዎ ላይ በ hub-<id> ውስጥ የሚጠቀመው መታወቂያው ከስሙ ይሠራል።",
     url: "የአገልጋይ URL",
     urlPlaceholder: "https://mcp.example.com/mcp",
-    urlHint:
-      "https:// ይጠቀሙ። ሃብ የራሱን አድራሻ እና link-local አድራሻዎችን፣ እንዲሁም አስተዳዳሪው ካልፈቀደ የግል አድራሻዎችን ውድቅ ያደርጋል።",
+    urlHint: "https:// ይጠቀሙ። ሃብ የራሱን አድራሻ እና link-local አድራሻዎችን፣ እንዲሁም አስተዳዳሪው ካልፈቀደ የግል አድራሻዎችን ውድቅ ያደርጋል።",
     auth: "ማረጋገጫ",
     headers: "ራስጌዎች",
     headersHint: "ሃብ እነዚህን ራስጌዎች፣ ለምሳሌ የኤፒአይ ቁልፍ፣ ወደ እያንዳንዱ ጥያቄ ይጨምራል።",
@@ -541,9 +530,11 @@ export default {
     failed: (version: string) => `ወደ ${version} ማዘመን አልተሳካም`,
     failedHint: "ጫኚው ምንም ምክንያት አልሰጠም። በአገልጋዩ ላይ የopencode-hub-update አገልግሎት ምዝግብ ማስታወሻዎችን ይፈትሹ።",
     confirmTitle: (version: string) => `ወደ ${version} ይዘመን?`,
-    confirmDescription: "ሃቡ ይህን ልቀት ያወርዳል፣ ያረጋግጠዋል፣ ፕሮግራሙን ይተካል እና እንደገና ይጀምራል። ውይይቶች እና ማሽኖች ለአፍታ ይቋረጣሉ፣ ከዚያም እንደገና ይገናኛሉ።",
+    confirmDescription:
+      "ሃቡ ይህን ልቀት ያወርዳል፣ ያረጋግጠዋል፣ ፕሮግራሙን ይተካል እና እንደገና ይጀምራል። ውይይቶች እና ማሽኖች ለአፍታ ይቋረጣሉ፣ ከዚያም እንደገና ይገናኛሉ።",
     confirmDevTitle: (version: string) => `የልማት ስሪት ${version} ይጫን?`,
-    confirmDevWarning: "ይህ የልማት ስሪት ነው። ያልተረጋጋ ሊሆን፣ ስህተቶችን ሊይዝ ወይም የተቀመጠ ውሂብን የቆየ ልቀት ሊያነበው በማይችል መንገድ ሊለውጥ ይችላል። መጠገን በሚችሉት ሃብ ላይ ብቻ ይጫኑት።",
+    confirmDevWarning:
+      "ይህ የልማት ስሪት ነው። ያልተረጋጋ ሊሆን፣ ስህተቶችን ሊይዝ ወይም የተቀመጠ ውሂብን የቆየ ልቀት ሊያነበው በማይችል መንገድ ሊለውጥ ይችላል። መጠገን በሚችሉት ሃብ ላይ ብቻ ይጫኑት።",
     confirm: "አሁን አዘምን",
     confirmDev: "ቢሆንም ጫን",
     startFailed: "ማዘመኑን መጀመር አልተቻለም",

@@ -45,6 +45,7 @@ export default {
     open: "Buka folder ini",
     parent: "Folder induk",
     noFolders: "Tidak ada folder",
+    needsMachine: "Tersedia setelah mesin dihubungkan",
     detach: "Hapus mesin",
   },
   chat: {
@@ -62,12 +63,16 @@ export default {
     failed: "Permintaan obrolan gagal",
     locked: "Kunci Anda terkunci, sehingga model tidak dapat menjawab. Keluar lalu masuk kembali untuk membukanya.",
     emptyTitle: "Tanyakan apa saja",
-    emptyDescription: "Ajukan pertanyaan, atau lampirkan salah satu mesin Anda dengan tombol + untuk mengerjakan proyek.",
+    emptyDescription:
+      "Ajukan pertanyaan, atau lampirkan salah satu mesin Anda dengan tombol + untuk mengerjakan proyek.",
     noProviders: "Belum ada model yang tersedia. Tambahkan penyedia terlebih dahulu.",
     openSettings: "Buka pengaturan",
     placeholder: "Ajukan pertanyaan",
-    send: "Kirim",
     stop: "Hentikan",
+    placeholderMachine: "Tanyakan apa saja, / untuk perintah, @ untuk berkas, ! untuk shell",
+    running: (machine: string) => `Berjalan di ${machine}…`,
+    runFailed: "Eksekusi di mesin gagal",
+    attachRejected: "Hanya gambar dan PDF yang dapat dilampirkan, dan hanya untuk model yang dapat membacanya.",
   },
   login: {
     title: "Masuk ke hub",
@@ -177,11 +182,13 @@ export default {
     failed: "Tidak dapat membuat undangan",
     link: "Tautan undangan",
     resetLink: "Tautan pengaturan ulang",
-    linkHint: "Hanya ditampilkan sekali. Siapa pun yang memiliki tautan ini dapat menggunakannya, jadi kirim secara pribadi.",
+    linkHint:
+      "Hanya ditampilkan sekali. Siapa pun yang memiliki tautan ini dapat menggunakannya, jadi kirim secara pribadi.",
   },
   machines: {
     title: "Mesin saya",
-    description: "Komputer Anda yang menjalankan opencode dan tetap terhubung ke hub ini. Hanya Anda yang dapat membukanya.",
+    description:
+      "Komputer Anda yang menjalankan opencode dan tetap terhubung ke hub ini. Hanya Anda yang dapat membukanya.",
     add: "Tambah mesin",
     open: "Buka",
     revoke: "Cabut…",
@@ -437,7 +444,8 @@ export default {
   },
   connector: {
     title: "Tambah konektor",
-    description: "Server MCP jarak jauh melalui HTTP. Server yang berjalan sebagai perintah lokal tetap dikonfigurasi di setiap mesin.",
+    description:
+      "Server MCP jarak jauh melalui HTTP. Server yang berjalan sebagai perintah lokal tetap dikonfigurasi di setiap mesin.",
     name: "Nama",
     namePlaceholder: "GitHub",
     nameHint: "Id-nya, dipakai dalam hub-<id> di mesin Anda, dibuat dari nama.",
@@ -451,7 +459,8 @@ export default {
     oauth: "Masuk OAuth",
     oauthHint: "Hub masuk ke server atas nama Anda, lalu menyimpan dan memperbarui token.",
     headerList: "Header yang ditambahkan",
-    headerListHint: "Nilai dienkripsi dan tidak pernah ditampilkan lagi. Biarkan baris kosong untuk server tanpa rahasia.",
+    headerListHint:
+      "Nilai dienkripsi dan tidak pernah ditampilkan lagi. Biarkan baris kosong untuk server tanpa rahasia.",
     headerName: "Nama header",
     headerNamePlaceholder: "Authorization",
     headerValue: "Nilai",

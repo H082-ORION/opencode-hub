@@ -45,6 +45,7 @@ export default {
     open: "פתח תיקייה זו",
     parent: "תיקיית אב",
     noFolders: "אין תיקיות כאן",
+    needsMachine: "זמין לאחר שמחברים מכונה",
     detach: "הסר את המכונה",
   },
   chat: {
@@ -66,8 +67,11 @@ export default {
     noProviders: "אין עדיין מודל זמין. הוסיפו ספק קודם.",
     openSettings: "פתיחת ההגדרות",
     placeholder: "שאלו שאלה",
-    send: "שליחה",
     stop: "עצירה",
+    placeholderMachine: "שאלו כל דבר, / לפקודות, @ לקבצים, ! ל-shell",
+    running: (machine: string) => `פועל על ${machine}…`,
+    runFailed: "ההרצה במכונה נכשלה",
+    attachRejected: "ניתן לצרף רק תמונות וקובצי PDF, ורק עבור מודל שקורא אותם.",
   },
   login: {
     title: "התחברות ל-Hub",
@@ -143,8 +147,7 @@ export default {
     enable: "הפעלה",
     reset: "איפוס סיסמה…",
     disableTitle: "להשבית את החשבון?",
-    disableDescription: (login: string) =>
-      `${login} ינותק מכל מקום ולא יוכל להתחבר עד שהחשבון יופעל מחדש.`,
+    disableDescription: (login: string) => `${login} ינותק מכל מקום ולא יוכל להתחבר עד שהחשבון יופעל מחדש.`,
     disableConfirm: "השבתה",
     resetTitle: "לאפס את הסיסמה?",
     resetDescription: (login: string) =>
@@ -193,8 +196,7 @@ export default {
     emptyDescription: "הוסיפו מכונה כדי לגשת ל-opencode שלה מכל מקום.",
     reconnecting: "מתחבר מחדש…",
     revokeTitle: "לבטל את הרשאת המכונה?",
-    revokeDescription: (name: string) =>
-      `${name} תנותק והאסימונים שלה יימחקו. כדי לחזור היא תצטרך להצטרף ל-Hub מחדש.`,
+    revokeDescription: (name: string) => `${name} תנותק והאסימונים שלה יימחקו. כדי לחזור היא תצטרך להצטרף ל-Hub מחדש.`,
     revokeConfirm: "ביטול הרשאה",
     revoked: (name: string) => `הרשאת ${name} בוטלה`,
     revokeFailed: "לא ניתן היה לבטל את הרשאת המכונה",
@@ -203,8 +205,7 @@ export default {
   },
   cloud: {
     title: "מופעי ענן",
-    description:
-      "מכונות וירטואליות בשרתי הענן של ה-Hub הזה, עם opencode מוכן לשימוש. כל אחת הופכת לאחת המכונות שלכם.",
+    description: "מכונות וירטואליות בשרתי הענן של ה-Hub הזה, עם opencode מוכן לשימוש. כל אחת הופכת לאחת המכונות שלכם.",
     create: "מופע חדש",
     empty: "אין עדיין מופעי ענן",
     emptyDescription: "צרו מופע כדי לקבל מכונה חדשה עם opencode, בלי להתקין דבר.",
@@ -234,8 +235,7 @@ export default {
     deleteConfirm: "מחיקה",
     deleting: (name: string) => `מוחק את ${name}`,
     newTitle: "מופע ענן חדש",
-    newDescription:
-      "שרת הענן משכפל מכונה מוכנה, מפעיל אותה ומצמד אותה ל-Hub. זה לוקח כמה דקות.",
+    newDescription: "שרת הענן משכפל מכונה מוכנה, מפעיל אותה ומצמד אותה ל-Hub. זה לוקח כמה דקות.",
     name: "שם",
     server: "שרת ענן",
     cpu: "CPU",
@@ -249,8 +249,7 @@ export default {
   },
   cloudHosts: {
     title: "שרתי ענן",
-    description:
-      "שרתי LXD שהסוכן שלהם יוצר מופעי ענן לכל משתמשי ה-Hub הזה. רק מנהלים רואים את הרשימה הזו.",
+    description: "שרתי LXD שהסוכן שלהם יוצר מופעי ענן לכל משתמשי ה-Hub הזה. רק מנהלים רואים את הרשימה הזו.",
     link: "קישור שרת",
     empty: "אין שרתי ענן",
     emptyDescription: "קשרו שרת LXD שמריץ agent-hub-lxd כדי לאפשר למשתמשים ליצור מופעי ענן.",
@@ -261,8 +260,7 @@ export default {
     instances: "כל מופעי הענן",
     revoke: "ביטול הרשאה…",
     revokeTitle: "לבטל את הרשאת שרת הענן?",
-    revokeDescription: (name: string) =>
-      `${name} ינותק והאסימון שלו יימחק. כדי לחזור הוא יצטרך להיקשר מחדש.`,
+    revokeDescription: (name: string) => `${name} ינותק והאסימון שלו יימחק. כדי לחזור הוא יצטרך להיקשר מחדש.`,
     revokeConfirm: "ביטול הרשאה",
     revoked: (name: string) => `הרשאת ${name} בוטלה`,
     revokeFailed: "לא ניתן היה לבטל את הרשאת שרת הענן",
@@ -274,8 +272,7 @@ export default {
   },
   allMachines: {
     title: "כל המכונות",
-    description:
-      "כל מכונה שרשומה ב-Hub הזה, עם הבעלים שלה. מנהלים יכולים לבטל הרשאה של כל מכונה אך לפתוח רק את שלהם.",
+    description: "כל מכונה שרשומה ב-Hub הזה, עם הבעלים שלה. מנהלים יכולים לבטל הרשאה של כל מכונה אך לפתוח רק את שלהם.",
     loadFailed: "לא ניתן היה לטעון את המכונות",
     retry: "ניסיון חוזר",
     empty: "אין מכונות ב-Hub הזה",
@@ -303,8 +300,7 @@ export default {
   },
   orgs: {
     title: "ארגונים",
-    description:
-      "קבוצות משתמשים שחולקות מכונות. רק מנהלים רואים את הרשימה הזו, יוצרים ארגונים ובוחרים את חבריהם.",
+    description: "קבוצות משתמשים שחולקות מכונות. רק מנהלים רואים את הרשימה הזו, יוצרים ארגונים ובוחרים את חבריהם.",
     create: "ארגון חדש",
     loadFailed: "לא ניתן היה לטעון את הארגונים",
     retry: "ניסיון חוזר",
@@ -323,13 +319,11 @@ export default {
     save: "שמירה",
     saving: "שומר…",
     deleteTitle: "למחוק את הארגון?",
-    deleteDescription: (name: string) =>
-      `${name} והחברויות בו יימחקו. אי אפשר למחוק ארגון שעדיין יש לו מכונות.`,
+    deleteDescription: (name: string) => `${name} והחברויות בו יימחקו. אי אפשר למחוק ארגון שעדיין יש לו מכונות.`,
     deleteConfirm: "מחיקה",
     deleted: (name: string) => `${name} נמחק`,
     membersTitle: (name: string) => `החברים ב-${name}`,
-    membersDescription:
-      "חברים פותחים את מכונות הארגון ויכולים להוסיף חדשות. הסרת חבר מנתקת את הגישה שלו מיד.",
+    membersDescription: "חברים פותחים את מכונות הארגון ויכולים להוסיף חדשות. הסרת חבר מנתקת את הגישה שלו מיד.",
     noMembers: "אין עדיין חברים",
     others: "משתמשים אחרים",
     noOthers: "כל המשתמשים הם חברים.",
@@ -358,8 +352,7 @@ export default {
     createTitle: "סקיל חדש",
     editTitle: "עריכת סקיל",
     viewTitle: (name: string) => `הסקיל ${name}`,
-    formDescription:
-      "ה-Hub כותב אותו כ-SKILL.md, עם השם והתיאור ב-frontmatter שלו, והמכונות שלכם מקבלות אותו מיד.",
+    formDescription: "ה-Hub כותב אותו כ-SKILL.md, עם השם והתיאור ב-frontmatter שלו, והמכונות שלכם מקבלות אותו מיד.",
     name: "שם",
     nameHint: "אותיות קטנות באנגלית וספרות, במילים המחוברות במקפים.",
     descriptionLabel: "תיאור",
@@ -381,8 +374,7 @@ export default {
     deleted: (name: string) => `${name} נמחק`,
     actionFailed: "לא ניתן היה לעדכן את הסקיל",
     orgTitle: (name: string) => `הסקילים של ${name}`,
-    orgDescription:
-      "כל חבר מקבל את הסקילים האלה בכל המכונות שלו. אחד מהם גובר על סקיל של חבר באותו שם.",
+    orgDescription: "כל חבר מקבל את הסקילים האלה בכל המכונות שלו. אחד מהם גובר על סקיל של חבר באותו שם.",
     orgDeleteDescription: (name: string) => `${name} יוסר מהמכונות של כל חבר.`,
   },
   providers: {

@@ -45,6 +45,7 @@ export default {
     open: "Otevřít tuto složku",
     parent: "Nadřazená složka",
     noFolders: "Žádné složky",
+    needsMachine: "Dostupné po připojení počítače",
     detach: "Odebrat počítač",
   },
   chat: {
@@ -66,8 +67,11 @@ export default {
     noProviders: "Zatím není k dispozici žádný model. Nejprve přidejte poskytovatele.",
     openSettings: "Otevřít nastavení",
     placeholder: "Položte otázku",
-    send: "Odeslat",
     stop: "Zastavit",
+    placeholderMachine: "Zeptejte se na cokoli, / pro příkazy, @ pro soubory, ! pro shell",
+    running: (machine: string) => `Běží na ${machine}…`,
+    runFailed: "Spuštění na počítači selhalo",
+    attachRejected: "Přiložit lze pouze obrázky a soubory PDF, a to jen pro model, který je umí číst.",
   },
   login: {
     title: "Přihlášení do Hubu",
@@ -181,7 +185,8 @@ export default {
   },
   machines: {
     title: "Moje počítače",
-    description: "Vaše počítače, na kterých běží opencode a které zůstávají připojené k tomuto Hubu. Otevřít je můžete jen vy.",
+    description:
+      "Vaše počítače, na kterých běží opencode a které zůstávají připojené k tomuto Hubu. Otevřít je můžete jen vy.",
     add: "Přidat počítač",
     open: "Otevřít",
     revoke: "Odebrat přístup…",
@@ -234,7 +239,8 @@ export default {
     deleteConfirm: "Smazat",
     deleting: (name: string) => `Mazání instance ${name}`,
     newTitle: "Nová cloudová instance",
-    newDescription: "Cloudový server naklonuje připravený počítač, spustí jej a spáruje s Hubem. Trvá to několik minut.",
+    newDescription:
+      "Cloudový server naklonuje připravený počítač, spustí jej a spáruje s Hubem. Trvá to několik minut.",
     name: "Název",
     server: "Cloudový server",
     cpu: "CPU",
@@ -436,7 +442,8 @@ export default {
   },
   connector: {
     title: "Přidat konektor",
-    description: "Vzdálený server MCP přes HTTP. Servery spouštěné jako místní příkaz zůstávají nastavené na každém počítači.",
+    description:
+      "Vzdálený server MCP přes HTTP. Servery spouštěné jako místní příkaz zůstávají nastavené na každém počítači.",
     name: "Název",
     namePlaceholder: "GitHub",
     nameHint: "Jeho ID, použité v hub-<id> na vašich počítačích, se vytvoří z názvu.",
@@ -532,7 +539,8 @@ export default {
     showDev: "Zobrazit vývojové verze",
     devNone: "Žádná vývojová verze nebyla vydána.",
     manualTitle: "Aktualizovat ručně",
-    manualDescription: "Automatické aktualizace nejsou na tomto serveru nastavené. Spusťte na serveru tento příkaz a nainstalujte nejnovější verzi; zároveň nastaví automatické aktualizace.",
+    manualDescription:
+      "Automatické aktualizace nejsou na tomto serveru nastavené. Spusťte na serveru tento příkaz a nainstalujte nejnovější verzi; zároveň nastaví automatické aktualizace.",
     pending: (version: string) => `Aktualizace na ${version} vyžádána…`,
     running: (version: string) => `Instaluje se ${version}…`,
     restarting: "Hub se restartuje…",
@@ -540,9 +548,11 @@ export default {
     failed: (version: string) => `Aktualizace na ${version} selhala`,
     failedHint: "Instalátor neuvedl důvod. Zkontrolujte protokoly služby opencode-hub-update na serveru.",
     confirmTitle: (version: string) => `Aktualizovat na ${version}?`,
-    confirmDescription: "Hub stáhne tuto verzi, ověří ji, nahradí svůj program a restartuje se. Chaty a počítače se na chvíli odpojí a pak se znovu připojí.",
+    confirmDescription:
+      "Hub stáhne tuto verzi, ověří ji, nahradí svůj program a restartuje se. Chaty a počítače se na chvíli odpojí a pak se znovu připojí.",
     confirmDevTitle: (version: string) => `Nainstalovat vývojovou verzi ${version}?`,
-    confirmDevWarning: "Toto je vývojová verze. Může být nestabilní, obsahovat chyby nebo změnit uložená data tak, že je starší verze nedokáže přečíst. Instalujte ji jen na Hub, který dokážete opravit.",
+    confirmDevWarning:
+      "Toto je vývojová verze. Může být nestabilní, obsahovat chyby nebo změnit uložená data tak, že je starší verze nedokáže přečíst. Instalujte ji jen na Hub, který dokážete opravit.",
     confirm: "Aktualizovat nyní",
     confirmDev: "Přesto nainstalovat",
     startFailed: "Aktualizaci se nepodařilo spustit",
@@ -551,7 +561,8 @@ export default {
     later: "Později",
     openSettings: "Otevřít nastavení",
     updateNow: "Aktualizovat nyní",
-    promptManual: "Automatické aktualizace nejsou na tomto serveru nastavené. Otevřete nastavení a podívejte se, jak ho aktualizovat.",
+    promptManual:
+      "Automatické aktualizace nejsou na tomto serveru nastavené. Otevřete nastavení a podívejte se, jak ho aktualizovat.",
   },
   error: {
     unreachable: "Hub se nepodařilo kontaktovat.",

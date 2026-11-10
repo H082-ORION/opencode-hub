@@ -45,6 +45,7 @@ export default {
     open: "Otvori ovu mapu",
     parent: "Nadređena mapa",
     noFolders: "Nema mapa",
+    needsMachine: "Dostupno kada se stroj poveže",
     detach: "Ukloni stroj",
   },
   chat: {
@@ -60,14 +61,18 @@ export default {
     collapse: "Sažmi bočnu traku",
     expand: "Otvori bočnu traku",
     failed: "Zahtjev za razgovor nije uspio",
-    locked: "Vaši su ključevi zaključani pa modeli ne mogu odgovarati. Odjavite se i ponovno prijavite da biste ih otključali.",
+    locked:
+      "Vaši su ključevi zaključani pa modeli ne mogu odgovarati. Odjavite se i ponovno prijavite da biste ih otključali.",
     emptyTitle: "Pitajte bilo što",
     emptyDescription: "Postavite pitanje ili priložite jedan od svojih strojeva gumbom + za rad na projektu.",
     noProviders: "Još nema dostupnog modela. Prvo dodajte pružatelja.",
     openSettings: "Otvori postavke",
     placeholder: "Postavite pitanje",
-    send: "Pošalji",
     stop: "Zaustavi",
+    placeholderMachine: "Pitajte bilo što, / za naredbe, @ za datoteke, ! za ljusku",
+    running: (machine: string) => `Izvodi se na stroju ${machine}…`,
+    runFailed: "Izvođenje na stroju nije uspjelo",
+    attachRejected: "Mogu se priložiti samo slike i PDF-ovi, i to samo za model koji ih može čitati.",
   },
   login: {
     title: "Prijava na hub",
@@ -181,7 +186,8 @@ export default {
   },
   machines: {
     title: "Moji strojevi",
-    description: "Vaša računala na kojima radi opencode i koja ostaju povezana s ovim hubom. Samo ih vi možete otvoriti.",
+    description:
+      "Vaša računala na kojima radi opencode i koja ostaju povezana s ovim hubom. Samo ih vi možete otvoriti.",
     add: "Dodaj stroj",
     open: "Otvori",
     revoke: "Opozovi…",
@@ -234,8 +240,7 @@ export default {
     deleteConfirm: "Izbriši",
     deleting: (name: string) => `Brisanje ${name}`,
     newTitle: "Nova instanca u oblaku",
-    newDescription:
-      "Oblačni poslužitelj kloni spreman stroj, pokreće ga i uparuje s hubom. To traje nekoliko minuta.",
+    newDescription: "Oblačni poslužitelj kloni spreman stroj, pokreće ga i uparuje s hubom. To traje nekoliko minuta.",
     name: "Naziv",
     server: "Oblačni poslužitelj",
     cpu: "CPU",
@@ -253,7 +258,8 @@ export default {
       "LXD poslužitelji čiji agent izrađuje instance u oblaku za sve korisnike ovog huba. Ovaj popis vide samo administratori.",
     link: "Poveži poslužitelj",
     empty: "Nema oblačnih poslužitelja",
-    emptyDescription: "Povežite LXD poslužitelj na kojem radi agent-hub-lxd da bi korisnici mogli izrađivati instance u oblaku.",
+    emptyDescription:
+      "Povežite LXD poslužitelj na kojem radi agent-hub-lxd da bi korisnici mogli izrađivati instance u oblaku.",
     capacity: (cpu: string, memory: string, disk: string, instances: string) =>
       `CPU ${cpu} · RAM ${memory} · disk ${disk} · instanci: ${instances}`,
     load: (load: string) => `Opterećenje ${load}`,
@@ -437,7 +443,8 @@ export default {
   },
   connector: {
     title: "Dodavanje konektora",
-    description: "Udaljeni MCP poslužitelj preko HTTP-a. Poslužitelji koji rade kao lokalna naredba ostaju konfigurirani na svakom stroju.",
+    description:
+      "Udaljeni MCP poslužitelj preko HTTP-a. Poslužitelji koji rade kao lokalna naredba ostaju konfigurirani na svakom stroju.",
     name: "Naziv",
     namePlaceholder: "GitHub",
     nameHint: "Njegov id, koji se koristi u hub-<id> na vašim strojevima, izvodi se iz naziva.",
@@ -451,7 +458,8 @@ export default {
     oauth: "OAuth prijava",
     oauthHint: "Hub se umjesto vas prijavljuje na poslužitelj, a zatim čuva i osvježava tokene.",
     headerList: "Zaglavlja za dodavanje",
-    headerListHint: "Vrijednosti su šifrirane i više se nikad ne prikazuju. Ostavite redak praznim za poslužitelj bez tajni.",
+    headerListHint:
+      "Vrijednosti su šifrirane i više se nikad ne prikazuju. Ostavite redak praznim za poslužitelj bez tajni.",
     headerName: "Naziv zaglavlja",
     headerNamePlaceholder: "Authorization",
     headerValue: "Vrijednost",

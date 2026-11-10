@@ -231,6 +231,10 @@ export async function start(options: Options) {
     request: machineRequest,
     online: (machine) => tunnels.has(machine),
     model: (user, session) => chat?.sessionModel(user, session) ?? Promise.resolve(undefined),
+    files: (user, session) => chat?.lastFiles(user, session) ?? Promise.resolve([]),
+    record: (user, session, message) => chat?.record(user, session, message) ?? Promise.resolve(undefined),
+    // Shell commands run on a user's machine from the hub leave a trace in the hub's log.
+    log: (message) => console.info(message),
   })
   const chatTools: ChatTools.Instance | undefined =
     chat && ChatTools.create({ owner: chat.owner, skills, runTask: chatMachines.run, fetch: options.chat?.fetch })

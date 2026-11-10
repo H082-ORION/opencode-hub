@@ -45,6 +45,7 @@ export default {
     open: "開啟此資料夾",
     parent: "上層資料夾",
     noFolders: "此處沒有資料夾",
+    needsMachine: "關聯裝置後可用",
     detach: "移除裝置",
   },
   chat: {
@@ -66,8 +67,11 @@ export default {
     noProviders: "目前沒有可用的模型。請先新增供應商。",
     openSettings: "開啟設定",
     placeholder: "輸入問題",
-    send: "傳送",
     stop: "停止",
+    placeholderMachine: "隨意提問，/ 呼叫指令，@ 引用檔案，! 執行 shell",
+    running: (machine: string) => `正在 ${machine} 上執行…`,
+    runFailed: "在裝置上執行失敗",
+    attachRejected: "只能附加圖片和 PDF，且僅限能夠讀取它們的模型。",
   },
   login: {
     title: "登入 Hub",
@@ -83,8 +87,7 @@ export default {
     title: "建立您的帳號",
     resetTitle: "設定新密碼",
     description: "此邀請會在 Hub 上建立一個帳號。您的密碼不會離開此瀏覽器。",
-    resetDescription: (login: string) =>
-      `此連結會重設 ${login} 的密碼。以舊密碼儲存的金鑰將會遺失，需要重新輸入。`,
+    resetDescription: (login: string) => `此連結會重設 ${login} 的密碼。以舊密碼儲存的金鑰將會遺失，需要重新輸入。`,
     login: "帳號",
     loginHint: "3 到 32 個小寫字母、數字、句點、連字號或底線。",
     password: "密碼",
@@ -226,7 +229,8 @@ export default {
     owner: (login: string) => `擁有者：${login}`,
     actionFailed: "無法更新執行個體",
     deleteTitle: "刪除執行個體？",
-    deleteDescription: (name: string) => `${name} 的虛擬機器及其上的所有內容都會被刪除，其裝置也會離開 Hub。此動作無法復原。`,
+    deleteDescription: (name: string) =>
+      `${name} 的虛擬機器及其上的所有內容都會被刪除，其裝置也會離開 Hub。此動作無法復原。`,
     deleteConfirm: "刪除",
     deleting: (name: string) => `正在刪除 ${name}`,
     newTitle: "新增雲端執行個體",
@@ -328,7 +332,8 @@ export default {
   },
   skills: {
     title: "技能",
-    description: "opencode 依需求載入的指示。您的技能和您所屬組織的技能會傳到您開啟的每部裝置上，與裝置上既有的技能並存。",
+    description:
+      "opencode 依需求載入的指示。您的技能和您所屬組織的技能會傳到您開啟的每部裝置上，與裝置上既有的技能並存。",
     create: "新增技能",
     loadFailed: "無法載入技能",
     retry: "重試",
@@ -527,7 +532,8 @@ export default {
     confirmTitle: (version: string) => `更新至 ${version}？`,
     confirmDescription: "Hub 會下載此版本、進行驗證、取代自身程式並重新啟動。聊天與裝置會短暫中斷連線，然後重新連線。",
     confirmDevTitle: (version: string) => `安裝開發版本 ${version}？`,
-    confirmDevWarning: "這是開發版本。它可能不穩定、包含錯誤，或以舊版本無法讀取的方式變更已儲存的資料。請僅安裝在您能夠修復的 Hub 上。",
+    confirmDevWarning:
+      "這是開發版本。它可能不穩定、包含錯誤，或以舊版本無法讀取的方式變更已儲存的資料。請僅安裝在您能夠修復的 Hub 上。",
     confirm: "立即更新",
     confirmDev: "仍要安裝",
     startFailed: "無法開始更新",

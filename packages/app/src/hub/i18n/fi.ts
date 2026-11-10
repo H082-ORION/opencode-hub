@@ -45,6 +45,7 @@ export default {
     open: "Avaa tämä kansio",
     parent: "Ylempi kansio",
     noFolders: "Ei kansioita",
+    needsMachine: "Käytettävissä, kun kone on liitetty",
     detach: "Poista kone",
   },
   chat: {
@@ -66,8 +67,11 @@ export default {
     noProviders: "Mallia ei ole vielä saatavilla. Lisää ensin palveluntarjoaja.",
     openSettings: "Avaa asetukset",
     placeholder: "Esitä kysymys",
-    send: "Lähetä",
     stop: "Pysäytä",
+    placeholderMachine: "Kysy mitä tahansa, / komennoille, @ tiedostoille, ! komentotulkille",
+    running: (machine: string) => `Suoritetaan koneella ${machine}…`,
+    runFailed: "Suoritus koneella epäonnistui",
+    attachRejected: "Liitteeksi kelpaavat vain kuvat ja PDF-tiedostot, ja vain mallille, joka osaa lukea ne.",
   },
   login: {
     title: "Kirjaudu hubiin",
@@ -177,11 +181,13 @@ export default {
     failed: "Kutsua ei voitu luoda",
     link: "Kutsulinkki",
     resetLink: "Nollauslinkki",
-    linkHint: "Näytetään vain kerran. Kuka tahansa, jolla on tämä linkki, voi käyttää sitä, joten lähetä se yksityisesti.",
+    linkHint:
+      "Näytetään vain kerran. Kuka tahansa, jolla on tämä linkki, voi käyttää sitä, joten lähetä se yksityisesti.",
   },
   machines: {
     title: "Koneeni",
-    description: "Tietokoneesi, joissa opencode on käynnissä ja jotka pysyvät yhteydessä tähän hubiin. Vain sinä voit avata ne.",
+    description:
+      "Tietokoneesi, joissa opencode on käynnissä ja jotka pysyvät yhteydessä tähän hubiin. Vain sinä voit avata ne.",
     add: "Lisää kone",
     open: "Avaa",
     revoke: "Peruuta käyttöoikeus…",
@@ -253,7 +259,8 @@ export default {
       "LXD-palvelimet, joiden agentti luo pilviinstansseja kaikille tämän hubin käyttäjille. Vain ylläpitäjät näkevät tämän luettelon.",
     link: "Linkitä palvelin",
     empty: "Ei pilvipalvelimia",
-    emptyDescription: "Linkitä LXD-palvelin, jolla ajetaan agent-hub-lxd, jotta käyttäjät voivat luoda pilviinstansseja.",
+    emptyDescription:
+      "Linkitä LXD-palvelin, jolla ajetaan agent-hub-lxd, jotta käyttäjät voivat luoda pilviinstansseja.",
     capacity: (cpu: string, memory: string, disk: string, instances: string) =>
       `CPU ${cpu} · RAM ${memory} · levy ${disk} · ${instances} instanssia`,
     load: (load: string) => `Kuormitus ${load}`,
@@ -437,7 +444,8 @@ export default {
   },
   connector: {
     title: "Lisää liitin",
-    description: "Etä-MCP-palvelin HTTP:n yli. Paikallisena komentona ajettavat palvelimet pysyvät määritettyinä kullakin koneella.",
+    description:
+      "Etä-MCP-palvelin HTTP:n yli. Paikallisena komentona ajettavat palvelimet pysyvät määritettyinä kullakin koneella.",
     name: "Nimi",
     namePlaceholder: "GitHub",
     nameHint: "Sen tunniste, jota käytetään koneillasi muodossa hub-<id>, muodostetaan nimestä.",
@@ -451,7 +459,8 @@ export default {
     oauth: "OAuth-kirjautuminen",
     oauthHint: "Hubi kirjautuu palvelimelle puolestasi ja säilyttää ja uusii tunnisteet.",
     headerList: "Lisättävät otsikot",
-    headerListHint: "Arvot salataan, eikä niitä näytetä enää. Jätä rivi tyhjäksi palvelimelle, jolla ei ole salaisuuksia.",
+    headerListHint:
+      "Arvot salataan, eikä niitä näytetä enää. Jätä rivi tyhjäksi palvelimelle, jolla ei ole salaisuuksia.",
     headerName: "Otsikon nimi",
     headerNamePlaceholder: "Authorization",
     headerValue: "Arvo",

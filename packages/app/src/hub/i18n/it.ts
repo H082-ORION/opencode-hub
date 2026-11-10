@@ -45,6 +45,7 @@ export default {
     open: "Apri questa cartella",
     parent: "Cartella superiore",
     noFolders: "Nessuna cartella qui",
+    needsMachine: "Disponibile dopo aver associato una macchina",
     detach: "Rimuovi la macchina",
   },
   chat: {
@@ -63,12 +64,16 @@ export default {
     locked:
       "Le tue chiavi sono bloccate, quindi i modelli non possono rispondere. Esci e accedi di nuovo per sbloccarle.",
     emptyTitle: "Chiedi pure",
-    emptyDescription: "Fai una domanda oppure collega una delle tue macchine con il pulsante + per lavorare a un progetto.",
+    emptyDescription:
+      "Fai una domanda oppure collega una delle tue macchine con il pulsante + per lavorare a un progetto.",
     noProviders: "Nessun modello disponibile per ora. Aggiungi prima un provider.",
     openSettings: "Apri impostazioni",
     placeholder: "Fai una domanda",
-    send: "Invia",
     stop: "Interrompi",
+    placeholderMachine: "Chiedi qualsiasi cosa, / per i comandi, @ per i file, ! per la shell",
+    running: (machine: string) => `In esecuzione su ${machine}…`,
+    runFailed: "L’esecuzione sulla macchina non è riuscita",
+    attachRejected: "È possibile allegare solo immagini e PDF, e solo per un modello che sia in grado di leggerli.",
   },
   login: {
     title: "Accedi all’hub",
@@ -182,8 +187,7 @@ export default {
   },
   machines: {
     title: "Le mie macchine",
-    description:
-      "I tuoi computer che eseguono opencode e restano connessi a questo hub. Solo tu puoi aprirli.",
+    description: "I tuoi computer che eseguono opencode e restano connessi a questo hub. Solo tu puoi aprirli.",
     add: "Aggiungi macchina",
     open: "Apri",
     revoke: "Revoca…",
@@ -270,8 +274,7 @@ export default {
     revoked: (name: string) => `${name} è stato revocato`,
     revokeFailed: "Impossibile revocare il server cloud",
     linkTitle: "Collega un server cloud",
-    linkDescription:
-      "Sul server LXD, con agent-hub-lxd installato e configurato (vedi il suo README):",
+    linkDescription: "Sul server LXD, con agent-hub-lxd installato e configurato (vedi il suo README):",
     step1: "Unisciti all’hub, poi inserisci questo codice monouso quando richiesto",
     step2: "Poi avvia l’agente",
     codeFailed: "Impossibile creare un codice",
@@ -416,8 +419,7 @@ export default {
     title: "Connettori MCP",
     description:
       "I tuoi server MCP remoti. Le tue macchine li raggiungono tramite l’hub, che aggiunge gli header o l’accesso che hai salvato qui, cifrati con la tua chiave personale. Ognuno compare sulle tue macchine come server MCP hub-<id>.",
-    lockedDescription:
-      "Le tue macchine ricevono un errore dall’hub per questi connettori finché non accedi di nuovo.",
+    lockedDescription: "Le tue macchine ricevono un errore dall’hub per questi connettori finché non accedi di nuovo.",
     add: "Aggiungi connettore",
     headersBadge: (count: number) => (count === 1 ? "1 header" : `${count} header`),
     oauthConnected: "Accesso effettuato",

@@ -45,6 +45,7 @@ export default {
     open: "Atidaryti šį aplanką",
     parent: "Pagrindinis aplankas",
     noFolders: "Čia nėra aplankų",
+    needsMachine: "Pasiekiama prijungus įrenginį",
     detach: "Pašalinti įrenginį",
   },
   chat: {
@@ -60,14 +61,19 @@ export default {
     collapse: "Sutraukti šoninę juostą",
     expand: "Atidaryti šoninę juostą",
     failed: "Pokalbio užklausa nepavyko",
-    locked: "Jūsų raktai užrakinti, todėl modeliai negali atsakyti. Atsijunkite ir prisijunkite iš naujo, kad juos atrakintumėte.",
+    locked:
+      "Jūsų raktai užrakinti, todėl modeliai negali atsakyti. Atsijunkite ir prisijunkite iš naujo, kad juos atrakintumėte.",
     emptyTitle: "Klauskite bet ko",
-    emptyDescription: "Užduokite klausimą arba mygtuku + prijunkite vieną iš savo įrenginių, kad galėtumėte dirbti su projektu.",
+    emptyDescription:
+      "Užduokite klausimą arba mygtuku + prijunkite vieną iš savo įrenginių, kad galėtumėte dirbti su projektu.",
     noProviders: "Kol kas nėra jokio modelio. Pirmiausia pridėkite tiekėją.",
     openSettings: "Atidaryti nustatymus",
     placeholder: "Užduokite klausimą",
-    send: "Siųsti",
     stop: "Stabdyti",
+    placeholderMachine: "Klauskite bet ko, / komandoms, @ failams, ! apvalkalui",
+    running: (machine: string) => `Vykdoma įrenginyje ${machine}…`,
+    runFailed: "Vykdymas įrenginyje nepavyko",
+    attachRejected: "Galima prisegti tik paveikslėlius ir PDF, ir tik modeliui, kuris gali juos perskaityti.",
   },
   login: {
     title: "Prisijungimas prie hub",
@@ -177,11 +183,13 @@ export default {
     failed: "Nepavyko sukurti kvietimo",
     link: "Kvietimo nuoroda",
     resetLink: "Nustatymo iš naujo nuoroda",
-    linkHint: "Rodoma tik vieną kartą. Kiekvienas, turintis šią nuorodą, gali ją panaudoti, todėl siųskite ją privačiai.",
+    linkHint:
+      "Rodoma tik vieną kartą. Kiekvienas, turintis šią nuorodą, gali ją panaudoti, todėl siųskite ją privačiai.",
   },
   machines: {
     title: "Mano įrenginiai",
-    description: "Jūsų kompiuteriai, kuriuose veikia opencode ir kurie lieka prisijungę prie šio hub. Atidaryti juos galite tik jūs.",
+    description:
+      "Jūsų kompiuteriai, kuriuose veikia opencode ir kurie lieka prisijungę prie šio hub. Atidaryti juos galite tik jūs.",
     add: "Pridėti įrenginį",
     open: "Atidaryti",
     revoke: "Atšaukti…",
@@ -253,7 +261,8 @@ export default {
       "LXD serveriai, kurių agentas kuria debesies egzempliorius visiems šio hub naudotojams. Šį sąrašą mato tik administratoriai.",
     link: "Susieti serverį",
     empty: "Debesies serverių nėra",
-    emptyDescription: "Susiekite LXD serverį, kuriame veikia agent-hub-lxd, kad naudotojai galėtų kurti debesies egzempliorius.",
+    emptyDescription:
+      "Susiekite LXD serverį, kuriame veikia agent-hub-lxd, kad naudotojai galėtų kurti debesies egzempliorius.",
     capacity: (cpu: string, memory: string, disk: string, instances: string) =>
       `CPU ${cpu} · RAM ${memory} · diskas ${disk} · egzempliorių: ${instances}`,
     load: (load: string) => `Apkrova ${load}`,
@@ -437,7 +446,8 @@ export default {
   },
   connector: {
     title: "Jungties pridėjimas",
-    description: "Nuotolinis MCP serveris per HTTP. Serveriai, veikiantys kaip vietinė komanda, lieka sukonfigūruoti kiekviename įrenginyje.",
+    description:
+      "Nuotolinis MCP serveris per HTTP. Serveriai, veikiantys kaip vietinė komanda, lieka sukonfigūruoti kiekviename įrenginyje.",
     name: "Pavadinimas",
     namePlaceholder: "GitHub",
     nameHint: "Jos id, naudojamas hub-<id> jūsų įrenginiuose, sudaromas iš pavadinimo.",

@@ -44,6 +44,7 @@ export const en = {
     open: "Open this folder",
     parent: "Parent folder",
     noFolders: "No folders here",
+    needsMachine: "Available once a machine is attached",
     detach: "Remove the machine",
   },
   chat: {
@@ -65,8 +66,11 @@ export const en = {
     noProviders: "No model is available yet. Add a provider first.",
     openSettings: "Open settings",
     placeholder: "Ask a question",
-    send: "Send",
     stop: "Stop",
+    placeholderMachine: "Ask anything, / for commands, @ for files, ! for the shell",
+    running: (machine: string) => `Running on ${machine}…`,
+    runFailed: "The run on the machine failed",
+    attachRejected: "Only images and PDFs can be attached, and only for a model that reads them.",
   },
   login: {
     title: "Sign in to the hub",

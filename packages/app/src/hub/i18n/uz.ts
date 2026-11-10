@@ -45,6 +45,7 @@ export default {
     open: "Bu jildni ochish",
     parent: "Yuqori jild",
     noFolders: "Bu yerda jildlar yo‘q",
+    needsMachine: "Mashina ulanganidan keyin mavjud",
     detach: "Mashinani olib tashlash",
   },
   chat: {
@@ -60,14 +61,19 @@ export default {
     collapse: "Yon panelni yig‘ish",
     expand: "Yon panelni ochish",
     failed: "Chat so‘rovi bajarilmadi",
-    locked: "Kalitlaringiz qulflangan, shuning uchun modellar javob bera olmaydi. Ularni ochish uchun chiqib, qayta kiring.",
+    locked:
+      "Kalitlaringiz qulflangan, shuning uchun modellar javob bera olmaydi. Ularni ochish uchun chiqib, qayta kiring.",
     emptyTitle: "Istalgan narsani so‘rang",
-    emptyDescription: "Savol bering yoki loyiha ustida ishlash uchun + tugmasi bilan mashinalaringizdan birini biriktiring.",
+    emptyDescription:
+      "Savol bering yoki loyiha ustida ishlash uchun + tugmasi bilan mashinalaringizdan birini biriktiring.",
     noProviders: "Hozircha hech qanday model mavjud emas. Avval provayder qo‘shing.",
     openSettings: "Sozlamalarni ochish",
     placeholder: "Savol bering",
-    send: "Yuborish",
     stop: "To‘xtatish",
+    placeholderMachine: "Istalgan narsani so‘rang, buyruqlar uchun /, fayllar uchun @, shell uchun !",
+    running: (machine: string) => `${machine} da ishlamoqda…`,
+    runFailed: "Mashinada ishga tushirish muvaffaqiyatsiz tugadi",
+    attachRejected: "Faqat rasmlar va PDF fayllarni biriktirish mumkin, u ham faqat ularni o‘qiy oladigan model uchun.",
   },
   login: {
     title: "Hubga kiring",
@@ -177,7 +183,8 @@ export default {
     failed: "Taklifni yaratib bo‘lmadi",
     link: "Taklif havolasi",
     resetLink: "Tiklash havolasi",
-    linkHint: "Faqat bir marta ko‘rsatiladi. Bu havolaga ega har kim undan foydalana oladi, shuning uchun uni shaxsiy tarzda yuboring.",
+    linkHint:
+      "Faqat bir marta ko‘rsatiladi. Bu havolaga ega har kim undan foydalana oladi, shuning uchun uni shaxsiy tarzda yuboring.",
   },
   machines: {
     title: "Mening mashinalarim",
@@ -253,7 +260,8 @@ export default {
       "Agenti bu hubning har bir foydalanuvchisi uchun bulut nusxalarini yaratadigan LXD serverlari. Bu ro‘yxatni faqat administratorlar ko‘radi.",
     link: "Serverni ulash",
     empty: "Bulut serverlari yo‘q",
-    emptyDescription: "Foydalanuvchilar bulut nusxalarini yarata olishi uchun agent-hub-lxd ishlayotgan LXD serverini ulang.",
+    emptyDescription:
+      "Foydalanuvchilar bulut nusxalarini yarata olishi uchun agent-hub-lxd ishlayotgan LXD serverini ulang.",
     capacity: (cpu: string, memory: string, disk: string, instances: string) =>
       `CPU ${cpu} · RAM ${memory} · disk ${disk} · ${instances} nusxa`,
     load: (load: string) => `Yuklama ${load}`,
@@ -437,7 +445,8 @@ export default {
   },
   connector: {
     title: "Konnektor qo‘shish",
-    description: "HTTP orqali masofaviy MCP serveri. Mahalliy buyruq sifatida ishlaydigan serverlar har bir mashinada sozlanib qoladi.",
+    description:
+      "HTTP orqali masofaviy MCP serveri. Mahalliy buyruq sifatida ishlaydigan serverlar har bir mashinada sozlanib qoladi.",
     name: "Nomi",
     namePlaceholder: "GitHub",
     nameHint: "Mashinalaringizda hub-<id> da ishlatiladigan id nomdan yaratiladi.",
@@ -516,7 +525,8 @@ export default {
     checkError: (message: string) => `Oxirgi tekshiruv muvaffaqiyatsiz tugadi: ${message}`,
     current: "Joriy versiya",
     local: "Mahalliy yig‘ma",
-    localDescription: "Bu hub e’lon qilingan versiyada emas, balki mahalliy yig‘mada ishlamoqda. Versiyani o‘rnatish uni almashtiradi.",
+    localDescription:
+      "Bu hub e’lon qilingan versiyada emas, balki mahalliy yig‘mada ishlamoqda. Versiyani o‘rnatish uni almashtiradi.",
     upToDate: "Bu hub yangilangan",
     upToDateDescription: "Yangiroq barqaror versiya e’lon qilinmagan.",
     available: (version: string) => `${version} versiyasi mavjud`,
@@ -529,11 +539,13 @@ export default {
     noNotes: "Bu versiyada izohlar yo‘q.",
     github: "GitHub’da ko‘rish",
     devTitle: "Ishlab chiqish versiyalari",
-    devDescription: "Eng so‘nggi o‘zgarishlarga ega dastlabki versiyalar. Ular barqaror versiyalarga qaraganda kamroq sinovdan o‘tkaziladi va buzilishi mumkin.",
+    devDescription:
+      "Eng so‘nggi o‘zgarishlarga ega dastlabki versiyalar. Ular barqaror versiyalarga qaraganda kamroq sinovdan o‘tkaziladi va buzilishi mumkin.",
     showDev: "Ishlab chiqish versiyalarini ko‘rsatish",
     devNone: "Hech qanday ishlab chiqish versiyasi e’lon qilinmagan.",
     manualTitle: "Qo‘lda yangilash",
-    manualDescription: "Bu serverda avtomatik yangilanishlar sozlanmagan. Eng so‘nggi versiyani o‘rnatish uchun serverda ushbu buyruqni ishga tushiring; u avtomatik yangilanishlarni ham sozlaydi.",
+    manualDescription:
+      "Bu serverda avtomatik yangilanishlar sozlanmagan. Eng so‘nggi versiyani o‘rnatish uchun serverda ushbu buyruqni ishga tushiring; u avtomatik yangilanishlarni ham sozlaydi.",
     pending: (version: string) => `${version} versiyasiga yangilash so‘raldi…`,
     running: (version: string) => `${version} o‘rnatilmoqda…`,
     restarting: "Hub qayta ishga tushmoqda…",
@@ -541,9 +553,11 @@ export default {
     failed: (version: string) => `${version} versiyasiga yangilash muvaffaqiyatsiz tugadi`,
     failedHint: "O‘rnatuvchi sababini ko‘rsatmadi. Serverdagi opencode-hub-update xizmatining jurnallarini tekshiring.",
     confirmTitle: (version: string) => `${version} versiyasiga yangilansinmi?`,
-    confirmDescription: "Hub bu versiyani yuklab oladi, tekshiradi, o‘z dasturini almashtiradi va qayta ishga tushadi. Chatlar va mashinalar bir lahzaga uziladi, so‘ng qayta ulanadi.",
+    confirmDescription:
+      "Hub bu versiyani yuklab oladi, tekshiradi, o‘z dasturini almashtiradi va qayta ishga tushadi. Chatlar va mashinalar bir lahzaga uziladi, so‘ng qayta ulanadi.",
     confirmDevTitle: (version: string) => `${version} ishlab chiqish versiyasi o‘rnatilsinmi?`,
-    confirmDevWarning: "Bu ishlab chiqish versiyasi. U beqaror bo‘lishi, xatolarga ega bo‘lishi yoki saqlangan ma’lumotlarni eskiroq versiya o‘qiy olmaydigan tarzda o‘zgartirishi mumkin. Uni faqat o‘zingiz tuzata oladigan hubga o‘rnating.",
+    confirmDevWarning:
+      "Bu ishlab chiqish versiyasi. U beqaror bo‘lishi, xatolarga ega bo‘lishi yoki saqlangan ma’lumotlarni eskiroq versiya o‘qiy olmaydigan tarzda o‘zgartirishi mumkin. Uni faqat o‘zingiz tuzata oladigan hubga o‘rnating.",
     confirm: "Hozir yangilash",
     confirmDev: "Baribir o‘rnatish",
     startFailed: "Yangilashni boshlab bo‘lmadi",
@@ -552,7 +566,8 @@ export default {
     later: "Keyinroq",
     openSettings: "Sozlamalarni ochish",
     updateNow: "Hozir yangilash",
-    promptManual: "Bu serverda avtomatik yangilanishlar sozlanmagan. Uni qanday yangilashni ko‘rish uchun sozlamalarni oching.",
+    promptManual:
+      "Bu serverda avtomatik yangilanishlar sozlanmagan. Uni qanday yangilashni ko‘rish uchun sozlamalarni oching.",
   },
   error: {
     unreachable: "Hubga ulanib bo‘lmadi.",

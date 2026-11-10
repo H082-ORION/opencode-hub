@@ -45,6 +45,7 @@ export default {
     open: "이 폴더 열기",
     parent: "상위 폴더",
     noFolders: "폴더가 없습니다",
+    needsMachine: "머신을 연결하면 사용할 수 있습니다",
     detach: "머신 제거",
   },
   chat: {
@@ -66,8 +67,11 @@ export default {
     noProviders: "사용할 수 있는 모델이 아직 없습니다. 먼저 제공자를 추가하세요.",
     openSettings: "설정 열기",
     placeholder: "질문하기",
-    send: "보내기",
     stop: "중지",
+    placeholderMachine: "무엇이든 질문하세요. /는 명령어, @는 파일, !는 셸",
+    running: (machine: string) => `${machine}에서 실행 중…`,
+    runFailed: "머신에서 실행하지 못했습니다",
+    attachRejected: "이미지와 PDF만 첨부할 수 있으며, 이를 읽을 수 있는 모델에서만 가능합니다.",
   },
   login: {
     title: "허브에 로그인",
@@ -357,8 +361,7 @@ export default {
     createTitle: "새 스킬",
     editTitle: "스킬 편집",
     viewTitle: (name: string) => `스킬 ${name}`,
-    formDescription:
-      "허브는 이름과 설명을 프런트매터에 넣어 SKILL.md로 기록하며, 머신은 이를 즉시 받습니다.",
+    formDescription: "허브는 이름과 설명을 프런트매터에 넣어 SKILL.md로 기록하며, 머신은 이를 즉시 받습니다.",
     name: "이름",
     nameHint: "소문자와 숫자로 이루어진 단어를 하이픈으로 연결하세요.",
     descriptionLabel: "설명",
@@ -515,7 +518,8 @@ export default {
     checkError: (message: string) => `마지막 확인에 실패했습니다: ${message}`,
     current: "현재 버전",
     local: "로컬 빌드",
-    localDescription: "이 허브는 게시된 릴리스가 아닌 로컬 빌드로 실행 중입니다. 릴리스를 설치하면 로컬 빌드가 대체됩니다.",
+    localDescription:
+      "이 허브는 게시된 릴리스가 아닌 로컬 빌드로 실행 중입니다. 릴리스를 설치하면 로컬 빌드가 대체됩니다.",
     upToDate: "이 허브는 최신 상태입니다",
     upToDateDescription: "더 새로운 안정 릴리스가 게시되지 않았습니다.",
     available: (version: string) => `${version} 버전을 사용할 수 있습니다`,
@@ -528,11 +532,13 @@ export default {
     noNotes: "이 릴리스에는 노트가 없습니다.",
     github: "GitHub에서 보기",
     devTitle: "개발 버전",
-    devDescription: "최신 변경 사항이 포함된 사전 릴리스입니다. 안정 릴리스보다 테스트가 덜 되어 문제가 생길 수 있습니다.",
+    devDescription:
+      "최신 변경 사항이 포함된 사전 릴리스입니다. 안정 릴리스보다 테스트가 덜 되어 문제가 생길 수 있습니다.",
     showDev: "개발 버전 표시",
     devNone: "게시된 개발 버전이 없습니다.",
     manualTitle: "수동으로 업데이트",
-    manualDescription: "이 서버에는 자동 업데이트가 설정되어 있지 않습니다. 서버에서 이 명령을 실행하면 최신 릴리스가 설치되고 자동 업데이트도 설정됩니다.",
+    manualDescription:
+      "이 서버에는 자동 업데이트가 설정되어 있지 않습니다. 서버에서 이 명령을 실행하면 최신 릴리스가 설치되고 자동 업데이트도 설정됩니다.",
     pending: (version: string) => `${version} 버전으로 업데이트를 요청했습니다…`,
     running: (version: string) => `${version} 설치 중…`,
     restarting: "허브를 다시 시작하는 중…",
@@ -540,9 +546,11 @@ export default {
     failed: (version: string) => `${version} 버전으로 업데이트하지 못했습니다`,
     failedHint: "설치 프로그램이 이유를 알려 주지 않았습니다. 서버에서 opencode-hub-update 서비스의 로그를 확인하세요.",
     confirmTitle: (version: string) => `${version} 버전으로 업데이트할까요?`,
-    confirmDescription: "허브가 이 릴리스를 다운로드하고 검증한 뒤 프로그램을 교체하고 다시 시작합니다. 채팅과 머신의 연결이 잠시 끊겼다가 다시 연결됩니다.",
+    confirmDescription:
+      "허브가 이 릴리스를 다운로드하고 검증한 뒤 프로그램을 교체하고 다시 시작합니다. 채팅과 머신의 연결이 잠시 끊겼다가 다시 연결됩니다.",
     confirmDevTitle: (version: string) => `${version} 개발 버전을 설치할까요?`,
-    confirmDevWarning: "개발 버전입니다. 불안정하거나 버그가 있을 수 있으며, 이전 릴리스에서 읽을 수 없는 방식으로 저장된 데이터를 변경할 수 있습니다. 복구할 수 있는 허브에만 설치하세요.",
+    confirmDevWarning:
+      "개발 버전입니다. 불안정하거나 버그가 있을 수 있으며, 이전 릴리스에서 읽을 수 없는 방식으로 저장된 데이터를 변경할 수 있습니다. 복구할 수 있는 허브에만 설치하세요.",
     confirm: "지금 업데이트",
     confirmDev: "그래도 설치",
     startFailed: "업데이트를 시작할 수 없습니다",

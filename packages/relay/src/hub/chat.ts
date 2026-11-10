@@ -19,7 +19,8 @@ update one, and install them from a GitHub repository. A skill changes how agent
 installing from a repository, make sure the user asked for that exact repository, and report what was installed.
 When the conversation has a machine attached, machine_task hands a request to the coding agent running on it, which can
 read and change that project. Pass the whole request, and any context it needs, since that agent sees nothing else
-from this conversation. It returns that agent's final message: summarize it for the user or relay it.`
+from this conversation. When the agent needs the images or PDFs the user attached to their last message, pass images=true.
+It returns that agent's final message: summarize it for the user or relay it.`
 
 const IDLE_AFTER = 15 * 60 * 1000
 const SWEEP_EVERY = 60 * 1000
@@ -74,12 +75,28 @@ const decodeCreate = Schema.decodeUnknownOption(
   ),
 )
 const decodeTitle = Schema.decodeUnknownOption(Schema.fromJsonString(Schema.Struct({ title: Schema.String })))
+const PromptFile = Schema.Struct({ uri: Schema.String, mime: Schema.String, name: Schema.optional(Schema.String) })
 const decodePrompt = Schema.decodeUnknownOption(
   Schema.fromJsonString(
     Schema.Struct({
       id: Schema.optional(Schema.String),
       text: Schema.String,
       delivery: Schema.optional(Schema.Literals(["steer", "queue"])),
+      files: Schema.optional(Schema.Array(PromptFile)),
+    }),
+  ),
+)
+const decodeUserMessages = Schema.decodeUnknownOption(
+  Schema.fromJsonString(
+    Schema.Struct({
+      data: Schema.Array(
+        Schema.Struct({
+          type: Schema.String,
+          files: Schema.optional(
+            Schema.Array(Schema.Struct({ uri: Schema.String, name: Schema.optional(Schema.String) })),
+          ),
+        }),
+      ),
     }),
   ),
 )
@@ -105,6 +122,10 @@ const ONE = new RegExp(`^api/session/(${SESSION})$`)
 const PROMPT = new RegExp(`^api/session/${SESSION}/prompt$`)
 const INTERRUPT = new RegExp(`^api/session/${SESSION}/interrupt$`)
 const SWITCH = new RegExp(`^api/session/${SESSION}/model$`)
+/** Files travel inline, as data URIs: a `file://` or any other URI would be read from the hub's or a machine's disk. */
+const DATA_URI = /^data:(image\/[A-Za-z0-9.+-]+|application\/pdf)(;base64)?,/i
+const MAX_FILE = 5 * 1024 * 1024
+const MAX_FILES = 20 * 1024 * 1024
 
 /**
  * One opencode instance per active user, restricted to the hub's own tools, behind a closed list of routes. The browser never reaches the
@@ -174,6 +195,27 @@ export function create(input: {
       return response.ok ? Option.getOrUndefined(decodeSession(await response.text()))?.data.model : undefined
     },
 
+    /** The inline files of the last user message of a chat session, for a task that hands them to a machine. */
+    async lastFiles(user: string, session: string) {
+      if (!SESSION_ID.test(session)) return []
+      const response = await forward(await instance(user), "GET", `api/session/${session}/message`, "?limit=20")
+      if (!response.ok) return []
+      const messages = Option.getOrUndefined(decodeUserMessages(await response.text()))?.data ?? []
+      return (messages.find((message) => message.type === "user")?.files ?? [])
+        .filter((file) => DATA_URI.test(file.uri))
+        .map((file) => ({ uri: file.uri, name: file.name }))
+    },
+
+    /** Adds a message to a chat session for the model to read at its next prompt, without starting it. */
+    async record(user: string, session: string, message: { text: string; description: string }) {
+      if (!SESSION_ID.test(session)) return json(400, { error: "Invalid session." })
+      return forward(await instance(user), "POST", `api/session/${session}/synthetic`, "", {
+        text: message.text,
+        description: message.description,
+        resume: false,
+      })
+    },
+
     async stop() {
       clearInterval(sweep)
       await manager.stop()
@@ -223,10 +265,20 @@ export function create(input: {
     if (method === "POST" && PROMPT.test(route)) {
       const payload = Option.getOrUndefined(decodePrompt(body ?? ""))
       if (!payload) return json(400, { error: "Expected { text }." })
+      const files = promptFiles(payload.files ?? [])
+      if (!files)
+        return json(400, {
+          error: "Files must be images or PDFs as data URIs, at most 5 MB each and 20 MB in all.",
+        })
       const note = input.note?.(user, route.split("/")[2]!)
       if (note)
         await forward(await local(), method, route.replace(/prompt$/, "synthetic"), "", { text: note, resume: false })
-      return forward(await local(), method, route, "", payload)
+      return forward(await local(), method, route, "", {
+        id: payload.id,
+        text: payload.text,
+        delivery: payload.delivery,
+        files: files.length > 0 ? files : undefined,
+      })
     }
     if (method === "POST" && INTERRUPT.test(route)) return forward(await local(), method, route, "", {})
     if (method === "POST" && SWITCH.test(route)) {
@@ -339,6 +391,19 @@ function respond(response: Response, text: string) {
       "cache-control": "no-store",
     },
   })
+}
+
+/** The prompt's files rebuilt for the instance, or undefined when one is not an inline image or PDF, or they are too large. */
+function promptFiles(files: readonly (typeof PromptFile.Type)[]) {
+  const sizes = files.map((file) => {
+    const match = DATA_URI.exec(file.uri)
+    if (!match || match[1]!.toLowerCase() !== file.mime.toLowerCase()) return undefined
+    const payload = file.uri.length - match[0].length
+    return match[2] ? Math.floor((payload * 3) / 4) : payload
+  })
+  if (sizes.some((size) => size === undefined || size > MAX_FILE)) return undefined
+  if (sizes.reduce((total: number, size) => total + (size ?? 0), 0) > MAX_FILES) return undefined
+  return files.map((file) => ({ uri: file.uri, name: file.name }))
 }
 
 /** Keeps only the entries of a `{ data: [...] }` list that come from the user's own providers. */

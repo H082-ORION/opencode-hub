@@ -45,6 +45,7 @@ export default {
     open: "Ava see kaust",
     parent: "Ülemkaust",
     noFolders: "Kaustu pole",
+    needsMachine: "Saadaval pärast seadme ühendamist",
     detach: "Eemalda seade",
   },
   chat: {
@@ -66,8 +67,11 @@ export default {
     noProviders: "Ühtegi mudelit pole veel saadaval. Lisage esmalt pakkuja.",
     openSettings: "Ava seaded",
     placeholder: "Esitage küsimus",
-    send: "Saada",
     stop: "Peata",
+    placeholderMachine: "Küsige mida tahes, / käskude, @ failide, ! kesta jaoks",
+    running: (machine: string) => `Töötab seadmes ${machine}…`,
+    runFailed: "Seadmes käivitamine ebaõnnestus",
+    attachRejected: "Lisada saab ainult pilte ja PDF-faile ning ainult mudelile, mis neid loeb.",
   },
   login: {
     title: "Sisselogimine hubi",
@@ -177,7 +181,8 @@ export default {
     failed: "Kutset ei õnnestunud luua",
     link: "Kutse link",
     resetLink: "Lähtestamise link",
-    linkHint: "Kuvatakse ainult üks kord. Igaüks, kellel on see link, saab seda kasutada, seega saatke see privaatselt.",
+    linkHint:
+      "Kuvatakse ainult üks kord. Igaüks, kellel on see link, saab seda kasutada, seega saatke see privaatselt.",
   },
   machines: {
     title: "Minu seadmed",
@@ -234,8 +239,7 @@ export default {
     deleteConfirm: "Kustuta",
     deleting: (name: string) => `Kustutamine: ${name}`,
     newTitle: "Uus pilve eksemplar",
-    newDescription:
-      "Pilveserver kloonib valmis seadme, käivitab selle ja seob hubiga. See võtab paar minutit.",
+    newDescription: "Pilveserver kloonib valmis seadme, käivitab selle ja seob hubiga. See võtab paar minutit.",
     name: "Nimi",
     server: "Pilveserver",
     cpu: "CPU",
@@ -437,7 +441,8 @@ export default {
   },
   connector: {
     title: "Liidese lisamine",
-    description: "Kaug-MCP server HTTP kaudu. Serverid, mis töötavad kohaliku käsuna, jäävad seadistatuks igas seadmes.",
+    description:
+      "Kaug-MCP server HTTP kaudu. Serverid, mis töötavad kohaliku käsuna, jäävad seadistatuks igas seadmes.",
     name: "Nimi",
     namePlaceholder: "GitHub",
     nameHint: "Selle id, mida kasutatakse teie seadmetes nimes hub-<id>, tuletatakse nimest.",
@@ -451,7 +456,8 @@ export default {
     oauth: "OAuth sisselogimine",
     oauthHint: "Hub logib teie eest serverisse sisse, seejärel hoiab ja värskendab tunnuseid.",
     headerList: "Lisatavad päised",
-    headerListHint: "Väärtused on krüptitud ega ilmu enam kunagi nähtavale. Jätke rida tühjaks serveri jaoks, millel pole saladusi.",
+    headerListHint:
+      "Väärtused on krüptitud ega ilmu enam kunagi nähtavale. Jätke rida tühjaks serveri jaoks, millel pole saladusi.",
     headerName: "Päise nimi",
     headerNamePlaceholder: "Authorization",
     headerValue: "Väärtus",

@@ -45,6 +45,7 @@ export default {
     open: "Mở thư mục này",
     parent: "Thư mục cha",
     noFolders: "Không có thư mục",
+    needsMachine: "Khả dụng sau khi đã gắn một máy",
     detach: "Gỡ máy",
   },
   chat: {
@@ -66,8 +67,11 @@ export default {
     noProviders: "Chưa có mô hình nào. Hãy thêm nhà cung cấp trước.",
     openSettings: "Mở cài đặt",
     placeholder: "Đặt một câu hỏi",
-    send: "Gửi",
     stop: "Dừng",
+    placeholderMachine: "Hỏi bất cứ điều gì, / để dùng lệnh, @ để chọn tệp, ! để chạy shell",
+    running: (machine: string) => `Đang chạy trên ${machine}…`,
+    runFailed: "Chạy trên máy không thành công",
+    attachRejected: "Chỉ có thể đính kèm hình ảnh và PDF, và chỉ với mô hình đọc được chúng.",
   },
   login: {
     title: "Đăng nhập vào hub",
@@ -203,8 +207,7 @@ export default {
   },
   cloud: {
     title: "Phiên bản đám mây",
-    description:
-      "Các máy ảo trên máy chủ đám mây của hub này, có sẵn opencode. Mỗi máy trở thành một máy của bạn.",
+    description: "Các máy ảo trên máy chủ đám mây của hub này, có sẵn opencode. Mỗi máy trở thành một máy của bạn.",
     create: "Phiên bản mới",
     empty: "Chưa có phiên bản đám mây nào",
     emptyDescription: "Tạo một phiên bản để có máy mới với opencode mà không cần cài đặt gì.",
@@ -234,8 +237,7 @@ export default {
     deleteConfirm: "Xóa",
     deleting: (name: string) => `Đang xóa ${name}`,
     newTitle: "Phiên bản đám mây mới",
-    newDescription:
-      "Máy chủ đám mây nhân bản một máy có sẵn, khởi động và ghép nối với hub. Quá trình mất vài phút.",
+    newDescription: "Máy chủ đám mây nhân bản một máy có sẵn, khởi động và ghép nối với hub. Quá trình mất vài phút.",
     name: "Tên",
     server: "Máy chủ đám mây",
     cpu: "CPU",
@@ -437,7 +439,8 @@ export default {
   },
   connector: {
     title: "Thêm trình kết nối",
-    description: "Một máy chủ MCP từ xa qua HTTP. Các máy chủ chạy dưới dạng lệnh cục bộ vẫn được cấu hình trên từng máy.",
+    description:
+      "Một máy chủ MCP từ xa qua HTTP. Các máy chủ chạy dưới dạng lệnh cục bộ vẫn được cấu hình trên từng máy.",
     name: "Tên",
     namePlaceholder: "GitHub",
     nameHint: "Id của nó, dùng trong hub-<id> trên các máy của bạn, được tạo từ tên.",
@@ -516,7 +519,8 @@ export default {
     checkError: (message: string) => `Lần kiểm tra gần nhất thất bại: ${message}`,
     current: "Phiên bản hiện tại",
     local: "Bản dựng cục bộ",
-    localDescription: "Hub này đang chạy một bản dựng cục bộ, không phải bản phát hành chính thức. Cài đặt một bản phát hành sẽ thay thế nó.",
+    localDescription:
+      "Hub này đang chạy một bản dựng cục bộ, không phải bản phát hành chính thức. Cài đặt một bản phát hành sẽ thay thế nó.",
     upToDate: "Hub này đã được cập nhật",
     upToDateDescription: "Chưa có bản phát hành ổn định nào mới hơn.",
     available: (version: string) => `Đã có phiên bản ${version}`,
@@ -529,11 +533,13 @@ export default {
     noNotes: "Bản phát hành này không có ghi chú.",
     github: "Xem trên GitHub",
     devTitle: "Phiên bản phát triển",
-    devDescription: "Các bản phát hành trước với những thay đổi mới nhất. Chúng được kiểm thử ít hơn các bản ổn định và có thể gặp lỗi.",
+    devDescription:
+      "Các bản phát hành trước với những thay đổi mới nhất. Chúng được kiểm thử ít hơn các bản ổn định và có thể gặp lỗi.",
     showDev: "Hiện phiên bản phát triển",
     devNone: "Chưa có phiên bản phát triển nào được phát hành.",
     manualTitle: "Cập nhật thủ công",
-    manualDescription: "Máy chủ này chưa thiết lập cập nhật tự động. Chạy lệnh này trên máy chủ để cài đặt bản phát hành mới nhất; lệnh này cũng thiết lập cập nhật tự động.",
+    manualDescription:
+      "Máy chủ này chưa thiết lập cập nhật tự động. Chạy lệnh này trên máy chủ để cài đặt bản phát hành mới nhất; lệnh này cũng thiết lập cập nhật tự động.",
     pending: (version: string) => `Đã yêu cầu cập nhật lên ${version}…`,
     running: (version: string) => `Đang cài đặt ${version}…`,
     restarting: "Hub đang khởi động lại…",
@@ -541,9 +547,11 @@ export default {
     failed: (version: string) => `Cập nhật lên ${version} thất bại`,
     failedHint: "Trình cài đặt không cho biết lý do. Hãy xem nhật ký của dịch vụ opencode-hub-update trên máy chủ.",
     confirmTitle: (version: string) => `Cập nhật lên ${version}?`,
-    confirmDescription: "Hub sẽ tải xuống bản phát hành này, xác minh, thay thế chương trình của nó và khởi động lại. Các cuộc trò chuyện và máy sẽ ngắt kết nối trong giây lát rồi kết nối lại.",
+    confirmDescription:
+      "Hub sẽ tải xuống bản phát hành này, xác minh, thay thế chương trình của nó và khởi động lại. Các cuộc trò chuyện và máy sẽ ngắt kết nối trong giây lát rồi kết nối lại.",
     confirmDevTitle: (version: string) => `Cài đặt phiên bản phát triển ${version}?`,
-    confirmDevWarning: "Đây là phiên bản phát triển. Nó có thể không ổn định, chứa lỗi hoặc thay đổi dữ liệu đã lưu theo cách mà bản phát hành cũ hơn không đọc được. Chỉ cài đặt trên hub mà bạn có thể khắc phục.",
+    confirmDevWarning:
+      "Đây là phiên bản phát triển. Nó có thể không ổn định, chứa lỗi hoặc thay đổi dữ liệu đã lưu theo cách mà bản phát hành cũ hơn không đọc được. Chỉ cài đặt trên hub mà bạn có thể khắc phục.",
     confirm: "Cập nhật ngay",
     confirmDev: "Vẫn cài đặt",
     startFailed: "Không thể bắt đầu cập nhật",

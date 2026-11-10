@@ -45,6 +45,7 @@ export default {
     open: "打开此文件夹",
     parent: "上级文件夹",
     noFolders: "此处没有文件夹",
+    needsMachine: "关联设备后可用",
     detach: "移除设备",
   },
   chat: {
@@ -66,8 +67,11 @@ export default {
     noProviders: "暂无可用模型。请先添加提供商。",
     openSettings: "打开设置",
     placeholder: "提出问题",
-    send: "发送",
     stop: "停止",
+    placeholderMachine: "随便问，/ 调用命令，@ 引用文件，! 运行 shell",
+    running: (machine: string) => `正在 ${machine} 上运行…`,
+    runFailed: "在设备上运行失败",
+    attachRejected: "只能附加图片和 PDF，且仅限能够读取它们的模型。",
   },
   login: {
     title: "登录 Hub",
@@ -83,8 +87,7 @@ export default {
     title: "创建您的账户",
     resetTitle: "设置新密码",
     description: "此邀请将在 Hub 上创建一个账户。您的密码不会离开此浏览器。",
-    resetDescription: (login: string) =>
-      `此链接将重置 ${login} 的密码。使用旧密码保存的密钥将丢失，需要重新输入。`,
+    resetDescription: (login: string) => `此链接将重置 ${login} 的密码。使用旧密码保存的密钥将丢失，需要重新输入。`,
     login: "用户名",
     loginHint: "3 到 32 个小写字母、数字、点、短横线或下划线。",
     password: "密码",
@@ -226,7 +229,8 @@ export default {
     owner: (login: string) => `所有者：${login}`,
     actionFailed: "无法更新实例",
     deleteTitle: "删除实例？",
-    deleteDescription: (name: string) => `${name} 的虚拟机及其上的所有内容都将被删除，其设备也将离开 Hub。此操作无法撤销。`,
+    deleteDescription: (name: string) =>
+      `${name} 的虚拟机及其上的所有内容都将被删除，其设备也将离开 Hub。此操作无法撤销。`,
     deleteConfirm: "删除",
     deleting: (name: string) => `正在删除 ${name}`,
     newTitle: "新建云实例",
@@ -328,7 +332,8 @@ export default {
   },
   skills: {
     title: "技能",
-    description: "opencode 按需加载的指令。您的技能和您所在组织的技能会传到您打开的每台设备上，与设备上已有的技能并存。",
+    description:
+      "opencode 按需加载的指令。您的技能和您所在组织的技能会传到您打开的每台设备上，与设备上已有的技能并存。",
     create: "新建技能",
     loadFailed: "无法加载技能",
     retry: "重试",
@@ -527,7 +532,8 @@ export default {
     confirmTitle: (version: string) => `更新到 ${version}？`,
     confirmDescription: "Hub 将下载此版本、进行验证、替换自身程序并重启。聊天和设备会短暂断开，然后重新连接。",
     confirmDevTitle: (version: string) => `安装开发版本 ${version}？`,
-    confirmDevWarning: "这是开发版本。它可能不稳定、包含错误，或以旧版本无法读取的方式更改已存储的数据。请仅在您能够修复的 Hub 上安装。",
+    confirmDevWarning:
+      "这是开发版本。它可能不稳定、包含错误，或以旧版本无法读取的方式更改已存储的数据。请仅在您能够修复的 Hub 上安装。",
     confirm: "立即更新",
     confirmDev: "仍然安装",
     startFailed: "无法启动更新",

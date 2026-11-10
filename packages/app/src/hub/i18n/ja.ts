@@ -45,6 +45,7 @@ export default {
     open: "このフォルダを開く",
     parent: "親フォルダ",
     noFolders: "フォルダがありません",
+    needsMachine: "マシンを接続すると利用できます",
     detach: "マシンを削除",
   },
   chat: {
@@ -60,14 +61,18 @@ export default {
     collapse: "サイドバーを閉じる",
     expand: "サイドバーを開く",
     failed: "チャットのリクエストに失敗しました",
-    locked: "キーがロックされているため、モデルは応答できません。サインアウトしてもう一度サインインするとロックを解除できます。",
+    locked:
+      "キーがロックされているため、モデルは応答できません。サインアウトしてもう一度サインインするとロックを解除できます。",
     emptyTitle: "何でも質問してください",
     emptyDescription: "質問するか、+ ボタンでマシンを接続して、プロジェクトに取り組みましょう。",
     noProviders: "利用できるモデルがまだありません。先にプロバイダーを追加してください。",
     openSettings: "設定を開く",
     placeholder: "質問を入力",
-    send: "送信",
     stop: "停止",
+    placeholderMachine: "何でも質問できます。/ でコマンド、@ でファイル、! でシェル",
+    running: (machine: string) => `${machine} で実行中…`,
+    runFailed: "マシンでの実行に失敗しました",
+    attachRejected: "添付できるのは画像と PDF のみで、それらを読み取れるモデルでのみ利用できます。",
   },
   login: {
     title: "Hub にサインイン",
@@ -82,7 +87,8 @@ export default {
   register: {
     title: "アカウントを作成",
     resetTitle: "新しいパスワードを設定",
-    description: "この招待により Hub にアカウントが 1 つ作成されます。パスワードがこのブラウザーの外に出ることはありません。",
+    description:
+      "この招待により Hub にアカウントが 1 つ作成されます。パスワードがこのブラウザーの外に出ることはありません。",
     resetDescription: (login: string) =>
       `このリンクで ${login} のパスワードをリセットします。古いパスワードで保存したキーは失われるため、もう一度入力する必要があります。`,
     login: "ログイン名",
@@ -165,7 +171,8 @@ export default {
   },
   invite: {
     title: "ユーザーを招待",
-    description: "Hub が 1 回限りのリンクを作成します。相手に送ってください。このリンクでアカウントが 1 つ作成されます。",
+    description:
+      "Hub が 1 回限りのリンクを作成します。相手に送ってください。このリンクでアカウントが 1 つ作成されます。",
     admin: "管理者",
     adminDescription: "ユーザーの招待と管理ができます。",
     orgs: "組織",
@@ -252,7 +259,8 @@ export default {
       "この Hub のすべてのユーザーのためにエージェントがクラウドインスタンスを作成する LXD サーバーです。この一覧は管理者のみに表示されます。",
     link: "サーバーをリンク",
     empty: "クラウドサーバーはありません",
-    emptyDescription: "agent-hub-lxd を実行している LXD サーバーをリンクすると、ユーザーがクラウドインスタンスを作成できます。",
+    emptyDescription:
+      "agent-hub-lxd を実行している LXD サーバーをリンクすると、ユーザーがクラウドインスタンスを作成できます。",
     capacity: (cpu: string, memory: string, disk: string, instances: string) =>
       `CPU ${cpu} · RAM ${memory} · ディスク ${disk} · インスタンス ${instances}`,
     load: (load: string) => `負荷 ${load}`,
@@ -366,7 +374,8 @@ export default {
     body: "指示",
     bodyHint: "SKILL.md の Markdown 本文です。",
     extraFiles: "その他のファイル",
-    extraFilesHint: "SKILL.md と同じ場所にあるテキストファイルを、reference/checklist.md のような相対パスで指定します。",
+    extraFilesHint:
+      "SKILL.md と同じ場所にあるテキストファイルを、reference/checklist.md のような相対パスで指定します。",
     addFile: "ファイルを追加",
     path: "パス",
     content: "内容",
@@ -436,7 +445,8 @@ export default {
   },
   connector: {
     title: "コネクタを追加",
-    description: "HTTP 経由のリモート MCP サーバーです。ローカルコマンドとして動作するサーバーは、引き続き各マシンで設定します。",
+    description:
+      "HTTP 経由のリモート MCP サーバーです。ローカルコマンドとして動作するサーバーは、引き続き各マシンで設定します。",
     name: "名前",
     namePlaceholder: "GitHub",
     nameHint: "マシン上で hub-<id> に使われる ID は、名前から作られます。",
@@ -450,7 +460,8 @@ export default {
     oauth: "OAuth サインイン",
     oauthHint: "Hub があなたに代わってサーバーにサインインし、トークンを保持して更新します。",
     headerList: "追加するヘッダー",
-    headerListHint: "値は暗号化され、二度と表示されません。シークレットのないサーバーでは、行を空のままにしてください。",
+    headerListHint:
+      "値は暗号化され、二度と表示されません。シークレットのないサーバーでは、行を空のままにしてください。",
     headerName: "ヘッダー名",
     headerNamePlaceholder: "Authorization",
     headerValue: "値",

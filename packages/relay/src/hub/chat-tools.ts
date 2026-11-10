@@ -26,7 +26,9 @@ const decodeCall = Schema.decodeUnknownOption(
     _meta: Schema.optional(Schema.Record(Schema.String, Schema.Unknown)),
   }),
 )
-const decodeTask = Schema.decodeUnknownOption(Schema.Struct({ prompt: Schema.String }))
+const decodeTask = Schema.decodeUnknownOption(
+  Schema.Struct({ prompt: Schema.String, images: Schema.optional(Schema.Boolean) }),
+)
 const decodeName = Schema.decodeUnknownOption(Schema.Struct({ name: Schema.String }))
 const decodeSave = Schema.decodeUnknownOption(
   Schema.Struct({
@@ -49,7 +51,14 @@ const TOOLS = [
       "Hand a request to the coding agent on the machine and project attached to this conversation, and wait for its final message. It works in its own session: pass the whole request and any context it needs.",
     inputSchema: {
       type: "object",
-      properties: { prompt: { type: "string", description: "The complete request for the agent on the machine." } },
+      properties: {
+        prompt: { type: "string", description: "The complete request for the agent on the machine." },
+        images: {
+          type: "boolean",
+          description:
+            "Also hand over the images and PDFs attached to the user's last message, when the request is about them.",
+        },
+      },
       required: ["prompt"],
     },
   },
@@ -112,7 +121,13 @@ export function create(input: {
   owner: (token: string) => string | undefined
   skills: HubSkills.Instance
   /** Runs a request on the machine attached to a chat session and resolves to its final message. */
-  runTask: (input: { user: string; session: string; prompt: string; signal: AbortSignal }) => Promise<string>
+  runTask: (input: {
+    user: string
+    session: string
+    prompt: string
+    images?: boolean
+    signal: AbortSignal
+  }) => Promise<string>
   fetch?: typeof fetch
 }) {
   return {
@@ -148,10 +163,16 @@ export function create(input: {
   async function run(user: string, name: string, args: unknown, context: { session: unknown; signal: AbortSignal }) {
     if (name === "machine_task") {
       const parsed = Option.getOrUndefined(decodeTask(args))
-      if (!parsed) return failure("Expected { prompt }.")
+      if (!parsed) return failure("Expected { prompt, images? }.")
       if (typeof context.session !== "string") return failure("This tool needs a chat session.")
       return text(
-        await input.runTask({ user, session: context.session, prompt: parsed.prompt, signal: context.signal }),
+        await input.runTask({
+          user,
+          session: context.session,
+          prompt: parsed.prompt,
+          images: parsed.images === true,
+          signal: context.signal,
+        }),
       )
     }
     if (name === "skills_list") return list(user)

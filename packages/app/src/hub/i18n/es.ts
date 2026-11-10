@@ -45,6 +45,7 @@ export default {
     open: "Abrir esta carpeta",
     parent: "Carpeta superior",
     noFolders: "No hay carpetas aquí",
+    needsMachine: "Disponible cuando se asocia una máquina",
     detach: "Quitar la máquina",
   },
   chat: {
@@ -67,8 +68,11 @@ export default {
     noProviders: "Aún no hay ningún modelo disponible. Añada primero un proveedor.",
     openSettings: "Abrir ajustes",
     placeholder: "Haga una pregunta",
-    send: "Enviar",
     stop: "Detener",
+    placeholderMachine: "Pregunte lo que quiera, / para comandos, @ para archivos, ! para el shell",
+    running: (machine: string) => `Ejecutando en ${machine}…`,
+    runFailed: "Falló la ejecución en la máquina",
+    attachRejected: "Solo se pueden adjuntar imágenes y PDF, y solo para un modelo que los lea.",
   },
   login: {
     title: "Inicie sesión en el hub",
@@ -178,12 +182,12 @@ export default {
     failed: "No se pudo crear la invitación",
     link: "Enlace de invitación",
     resetLink: "Enlace de restablecimiento",
-    linkHint: "Se muestra una sola vez. Cualquiera que tenga este enlace puede usarlo, así que envíelo de forma privada.",
+    linkHint:
+      "Se muestra una sola vez. Cualquiera que tenga este enlace puede usarlo, así que envíelo de forma privada.",
   },
   machines: {
     title: "Mis máquinas",
-    description:
-      "Sus ordenadores que ejecutan opencode y permanecen conectados a este hub. Solo usted puede abrirlos.",
+    description: "Sus ordenadores que ejecutan opencode y permanecen conectados a este hub. Solo usted puede abrirlos.",
     add: "Añadir máquina",
     open: "Abrir",
     revoke: "Revocar…",
@@ -270,8 +274,7 @@ export default {
     revoked: (name: string) => `${name} se ha revocado`,
     revokeFailed: "No se pudo revocar el servidor en la nube",
     linkTitle: "Vincular un servidor en la nube",
-    linkDescription:
-      "En el servidor LXD, con agent-hub-lxd instalado y configurado (consulte su README):",
+    linkDescription: "En el servidor LXD, con agent-hub-lxd instalado y configurado (consulte su README):",
     step1: "Únase al hub e introduzca este código de un solo uso cuando se le pida",
     step2: "Después inicie el agente",
     codeFailed: "No se pudo crear un código",
@@ -416,8 +419,7 @@ export default {
     title: "Conectores MCP",
     description:
       "Sus servidores MCP remotos. Sus máquinas acceden a ellos a través del hub, que añade las cabeceras o el inicio de sesión que guardó aquí, cifrados con su propia clave. Cada uno aparece en sus máquinas como el servidor MCP hub-<id>.",
-    lockedDescription:
-      "Sus máquinas reciben un error del hub para estos conectores hasta que vuelva a iniciar sesión.",
+    lockedDescription: "Sus máquinas reciben un error del hub para estos conectores hasta que vuelva a iniciar sesión.",
     add: "Añadir conector",
     headersBadge: (count: number) => (count === 1 ? "1 cabecera" : `${count} cabeceras`),
     oauthConnected: "Sesión iniciada",
@@ -523,7 +525,8 @@ export default {
     checkError: (message: string) => `La última comprobación falló: ${message}`,
     current: "Versión actual",
     local: "Compilación local",
-    localDescription: "Este hub ejecuta una compilación local, no una versión publicada. Instalar una versión la reemplaza.",
+    localDescription:
+      "Este hub ejecuta una compilación local, no una versión publicada. Instalar una versión la reemplaza.",
     upToDate: "Este hub está actualizado",
     upToDateDescription: "No se ha publicado ninguna versión estable más reciente.",
     available: (version: string) => `La versión ${version} está disponible`,
@@ -536,21 +539,26 @@ export default {
     noNotes: "Esta versión no tiene notas.",
     github: "Ver en GitHub",
     devTitle: "Versiones de desarrollo",
-    devDescription: "Versiones preliminares con los cambios más recientes. Se prueban menos que las versiones estables y pueden fallar.",
+    devDescription:
+      "Versiones preliminares con los cambios más recientes. Se prueban menos que las versiones estables y pueden fallar.",
     showDev: "Mostrar versiones de desarrollo",
     devNone: "No se ha publicado ninguna versión de desarrollo.",
     manualTitle: "Actualizar manualmente",
-    manualDescription: "Las actualizaciones automáticas no están configuradas en este servidor. Ejecute este comando en el servidor para instalar la última versión; también configura las actualizaciones automáticas.",
+    manualDescription:
+      "Las actualizaciones automáticas no están configuradas en este servidor. Ejecute este comando en el servidor para instalar la última versión; también configura las actualizaciones automáticas.",
     pending: (version: string) => `Actualización a ${version} solicitada…`,
     running: (version: string) => `Instalando ${version}…`,
     restarting: "El hub se está reiniciando…",
     progressHint: "Esta página se recargará sola cuando el hub ejecute la nueva versión.",
     failed: (version: string) => `La actualización a ${version} falló`,
-    failedHint: "El instalador no indicó ningún motivo. Consulte los registros del servicio opencode-hub-update en el servidor.",
+    failedHint:
+      "El instalador no indicó ningún motivo. Consulte los registros del servicio opencode-hub-update en el servidor.",
     confirmTitle: (version: string) => `¿Actualizar a ${version}?`,
-    confirmDescription: "El hub descarga esta versión, la verifica, reemplaza su programa y se reinicia. Los chats y las máquinas se desconectan un momento y luego se vuelven a conectar.",
+    confirmDescription:
+      "El hub descarga esta versión, la verifica, reemplaza su programa y se reinicia. Los chats y las máquinas se desconectan un momento y luego se vuelven a conectar.",
     confirmDevTitle: (version: string) => `¿Instalar la versión de desarrollo ${version}?`,
-    confirmDevWarning: "Esta es una versión de desarrollo. Puede ser inestable, contener errores o modificar los datos guardados de forma que una versión anterior no pueda leerlos. Instálela solo en un hub que pueda reparar.",
+    confirmDevWarning:
+      "Esta es una versión de desarrollo. Puede ser inestable, contener errores o modificar los datos guardados de forma que una versión anterior no pueda leerlos. Instálela solo en un hub que pueda reparar.",
     confirm: "Actualizar ahora",
     confirmDev: "Instalar de todos modos",
     startFailed: "No se pudo iniciar la actualización",
@@ -559,7 +567,8 @@ export default {
     later: "Más tarde",
     openSettings: "Abrir ajustes",
     updateNow: "Actualizar ahora",
-    promptManual: "Las actualizaciones automáticas no están configuradas en este servidor. Abra los ajustes para ver cómo actualizarlo.",
+    promptManual:
+      "Las actualizaciones automáticas no están configuradas en este servidor. Abra los ajustes para ver cómo actualizarlo.",
   },
   error: {
     unreachable: "No se pudo contactar con el hub.",

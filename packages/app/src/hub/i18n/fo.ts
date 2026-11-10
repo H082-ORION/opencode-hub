@@ -45,6 +45,7 @@ export default {
     open: "Opna hesa mappuna",
     parent: "Yvirmappa",
     noFolders: "Ongar mappur her",
+    needsMachine: "Tøkt tá ið ein maskina er tengd",
     detach: "Strika maskinuna",
   },
   chat: {
@@ -62,12 +63,16 @@ export default {
     failed: "Kjatbønin miseydnaðist",
     locked: "Lyklarnir hjá tær eru læstir, so módel kunnu ikki svara. Rita út og inn aftur fyri at læsa teir upp.",
     emptyTitle: "Spyr um hvat tú vilt",
-    emptyDescription: "Set eina spurning, ella fest eina av tínum maskinum við + knøttinum fyri at arbeiða við einum verkætlan.",
+    emptyDescription:
+      "Set eina spurning, ella fest eina av tínum maskinum við + knøttinum fyri at arbeiða við einum verkætlan.",
     noProviders: "Einki módel er tøkt enn. Legg fyrst ein veitara afturat.",
     openSettings: "Opna stillingar",
     placeholder: "Spyr ein spurning",
-    send: "Send",
     stop: "Steðga",
+    placeholderMachine: "Spyr um alt, / til skipanir, @ til fílur, ! til skel",
+    running: (machine: string) => `Koyrir á ${machine}…`,
+    runFailed: "Koyringin á maskinuni miseydnaðist",
+    attachRejected: "Bert myndir og PDF kunnu viðfestast, og bert til ein modell, sum kann lesa tær.",
   },
   login: {
     title: "Rita inn á hub",
@@ -181,7 +186,8 @@ export default {
   },
   machines: {
     title: "Mínar maskinur",
-    description: "Teldurnar hjá tær, sum keyra opencode og eru støðugt sambundnar við hetta hub. Bert tú kanst opna tær.",
+    description:
+      "Teldurnar hjá tær, sum keyra opencode og eru støðugt sambundnar við hetta hub. Bert tú kanst opna tær.",
     add: "Legg maskinu afturat",
     open: "Opna",
     revoke: "Tak aftur…",
@@ -437,7 +443,8 @@ export default {
   },
   connector: {
     title: "Legg sambindara afturat",
-    description: "Ein fjarlægur MCP-tænari yvir HTTP. Tænarar, sum keyra sum lokal skipan, verða verandi uppsettir á hvørji maskinu.",
+    description:
+      "Ein fjarlægur MCP-tænari yvir HTTP. Tænarar, sum keyra sum lokal skipan, verða verandi uppsettir á hvørji maskinu.",
     name: "Navn",
     namePlaceholder: "GitHub",
     nameHint: "Id hansara, brúkt í hub-<id> á maskinunum hjá tær, verður gjørt út frá navninum.",
@@ -451,7 +458,8 @@ export default {
     oauth: "OAuth-innritan",
     oauthHint: "Hub ritar inn á tænaran fyri teg, goymir so og endurnýggjar tokenini.",
     headerList: "Høvd at leggja afturat",
-    headerListHint: "Virði verða krypteraði og ongantíð víst aftur. Lat reglu vera tóma fyri ein tænara uttan loyndarmál.",
+    headerListHint:
+      "Virði verða krypteraði og ongantíð víst aftur. Lat reglu vera tóma fyri ein tænara uttan loyndarmál.",
     headerName: "Navn á høvdi",
     headerNamePlaceholder: "Authorization",
     headerValue: "Virði",

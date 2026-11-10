@@ -45,6 +45,7 @@ export default {
     open: "Bu klasörü aç",
     parent: "Üst klasör",
     noFolders: "Burada klasör yok",
+    needsMachine: "Bir makine bağlandığında kullanılabilir",
     detach: "Makineyi kaldır",
   },
   chat: {
@@ -60,14 +61,19 @@ export default {
     collapse: "Kenar çubuğunu daralt",
     expand: "Kenar çubuğunu aç",
     failed: "Sohbet isteği başarısız oldu",
-    locked: "Anahtarlarınız kilitli olduğundan modeller yanıt veremiyor. Kilidi açmak için oturumu kapatıp yeniden açın.",
+    locked:
+      "Anahtarlarınız kilitli olduğundan modeller yanıt veremiyor. Kilidi açmak için oturumu kapatıp yeniden açın.",
     emptyTitle: "Her şeyi sorun",
-    emptyDescription: "Bir soru sorun veya bir proje üzerinde çalışmak için + düğmesiyle makinelerinizden birini ekleyin.",
+    emptyDescription:
+      "Bir soru sorun veya bir proje üzerinde çalışmak için + düğmesiyle makinelerinizden birini ekleyin.",
     noProviders: "Henüz kullanılabilir model yok. Önce bir sağlayıcı ekleyin.",
     openSettings: "Ayarları aç",
     placeholder: "Bir soru sorun",
-    send: "Gönder",
     stop: "Durdur",
+    placeholderMachine: "Her şeyi sorun, komutlar için /, dosyalar için @, kabuk için !",
+    running: (machine: string) => `${machine} üzerinde çalışıyor…`,
+    runFailed: "Makinedeki çalıştırma başarısız oldu",
+    attachRejected: "Yalnızca görseller ve PDF'ler eklenebilir, o da yalnızca bunları okuyabilen bir model için.",
   },
   login: {
     title: "Hub'da oturum açın",
@@ -177,7 +183,8 @@ export default {
     failed: "Davet oluşturulamadı",
     link: "Davet bağlantısı",
     resetLink: "Sıfırlama bağlantısı",
-    linkHint: "Yalnızca bir kez gösterilir. Bu bağlantıya sahip olan herkes kullanabilir, bu yüzden özel olarak gönderin.",
+    linkHint:
+      "Yalnızca bir kez gösterilir. Bu bağlantıya sahip olan herkes kullanabilir, bu yüzden özel olarak gönderin.",
   },
   machines: {
     title: "Makinelerim",
@@ -252,7 +259,8 @@ export default {
       "Bu Hub'ın tüm kullanıcıları için aracısının bulut örnekleri oluşturduğu LXD sunucuları. Bu listeyi yalnızca yöneticiler görür.",
     link: "Sunucu bağla",
     empty: "Bulut sunucusu yok",
-    emptyDescription: "Kullanıcıların bulut örnekleri oluşturabilmesi için agent-hub-lxd çalıştıran bir LXD sunucusu bağlayın.",
+    emptyDescription:
+      "Kullanıcıların bulut örnekleri oluşturabilmesi için agent-hub-lxd çalıştıran bir LXD sunucusu bağlayın.",
     capacity: (cpu: string, memory: string, disk: string, instances: string) =>
       `CPU ${cpu} · RAM ${memory} · disk ${disk} · ${instances} örnek`,
     load: (load: string) => `Yük ${load}`,
@@ -322,8 +330,7 @@ export default {
     save: "Kaydet",
     saving: "Kaydediliyor…",
     deleteTitle: "Kuruluş silinsin mi?",
-    deleteDescription: (name: string) =>
-      `${name} ve üyelikleri silinir. Hâlâ makinesi olan bir kuruluş silinemez.`,
+    deleteDescription: (name: string) => `${name} ve üyelikleri silinir. Hâlâ makinesi olan bir kuruluş silinemez.`,
     deleteConfirm: "Sil",
     deleted: (name: string) => `${name} silindi`,
     membersTitle: (name: string) => `${name} üyeleri`,
@@ -436,7 +443,8 @@ export default {
   },
   connector: {
     title: "Bağlayıcı ekle",
-    description: "HTTP üzerinden uzak bir MCP sunucusu. Yerel komut olarak çalışan sunucular her makinede ayrıca yapılandırılır.",
+    description:
+      "HTTP üzerinden uzak bir MCP sunucusu. Yerel komut olarak çalışan sunucular her makinede ayrıca yapılandırılır.",
     name: "Ad",
     namePlaceholder: "GitHub",
     nameHint: "Makinelerinizde hub-<id> içinde kullanılan kimliği addan üretilir.",
@@ -450,7 +458,8 @@ export default {
     oauth: "OAuth ile oturum açma",
     oauthHint: "Hub sizin yerinize sunucuda oturum açar, ardından belirteçleri saklar ve yeniler.",
     headerList: "Eklenecek üst bilgiler",
-    headerListHint: "Değerler şifrelenir ve bir daha gösterilmez. Gizli bilgisi olmayan sunucu için satırı boş bırakın.",
+    headerListHint:
+      "Değerler şifrelenir ve bir daha gösterilmez. Gizli bilgisi olmayan sunucu için satırı boş bırakın.",
     headerName: "Üst bilgi adı",
     headerNamePlaceholder: "Authorization",
     headerValue: "Değer",
@@ -515,7 +524,8 @@ export default {
     checkError: (message: string) => `Son denetim başarısız oldu: ${message}`,
     current: "Geçerli sürüm",
     local: "Yerel derleme",
-    localDescription: "Bu Hub yayımlanmış bir sürüm değil, yerel bir derleme çalıştırıyor. Bir sürüm yüklemek bunun yerini alır.",
+    localDescription:
+      "Bu Hub yayımlanmış bir sürüm değil, yerel bir derleme çalıştırıyor. Bir sürüm yüklemek bunun yerini alır.",
     upToDate: "Bu Hub güncel",
     upToDateDescription: "Daha yeni bir kararlı sürüm yayımlanmadı.",
     available: (version: string) => `${version} sürümü kullanılabilir`,
@@ -528,11 +538,13 @@ export default {
     noNotes: "Bu sürümün notu yok.",
     github: "GitHub'da görüntüle",
     devTitle: "Geliştirme sürümleri",
-    devDescription: "En yeni değişiklikleri içeren ön sürümler. Kararlı sürümlerden daha az test edilir ve bozulabilir.",
+    devDescription:
+      "En yeni değişiklikleri içeren ön sürümler. Kararlı sürümlerden daha az test edilir ve bozulabilir.",
     showDev: "Geliştirme sürümlerini göster",
     devNone: "Henüz bir geliştirme sürümü yayımlanmadı.",
     manualTitle: "Elle güncelle",
-    manualDescription: "Bu sunucuda otomatik güncellemeler ayarlanmamış. En son sürümü yüklemek için bu komutu sunucuda çalıştırın; komut otomatik güncellemeleri de ayarlar.",
+    manualDescription:
+      "Bu sunucuda otomatik güncellemeler ayarlanmamış. En son sürümü yüklemek için bu komutu sunucuda çalıştırın; komut otomatik güncellemeleri de ayarlar.",
     pending: (version: string) => `${version} sürümüne güncelleme istendi…`,
     running: (version: string) => `${version} yükleniyor…`,
     restarting: "Hub yeniden başlatılıyor…",
@@ -540,9 +552,11 @@ export default {
     failed: (version: string) => `${version} sürümüne güncelleme başarısız oldu`,
     failedHint: "Yükleyici bir neden belirtmedi. Sunucudaki opencode-hub-update hizmetinin günlüklerine bakın.",
     confirmTitle: (version: string) => `${version} sürümüne güncellensin mi?`,
-    confirmDescription: "Hub bu sürümü indirir, doğrular, kendi programını değiştirir ve yeniden başlar. Sohbetler ve makineler kısa bir süre bağlantıyı keser, ardından yeniden bağlanır.",
+    confirmDescription:
+      "Hub bu sürümü indirir, doğrular, kendi programını değiştirir ve yeniden başlar. Sohbetler ve makineler kısa bir süre bağlantıyı keser, ardından yeniden bağlanır.",
     confirmDevTitle: (version: string) => `${version} geliştirme sürümü yüklensin mi?`,
-    confirmDevWarning: "Bu bir geliştirme sürümüdür. Kararsız olabilir, hata içerebilir veya kayıtlı verileri daha eski bir sürümün okuyamayacağı şekilde değiştirebilir. Yalnızca onarabileceğiniz bir Hub'a yükleyin.",
+    confirmDevWarning:
+      "Bu bir geliştirme sürümüdür. Kararsız olabilir, hata içerebilir veya kayıtlı verileri daha eski bir sürümün okuyamayacağı şekilde değiştirebilir. Yalnızca onarabileceğiniz bir Hub'a yükleyin.",
     confirm: "Şimdi güncelle",
     confirmDev: "Yine de yükle",
     startFailed: "Güncelleme başlatılamadı",

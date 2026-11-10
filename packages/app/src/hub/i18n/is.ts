@@ -45,6 +45,7 @@ export default {
     open: "Opna þessa möppu",
     parent: "Yfirmappa",
     noFolders: "Engar möppur hér",
+    needsMachine: "Í boði þegar vél hefur verið tengd",
     detach: "Fjarlægja vélina",
   },
   chat: {
@@ -66,8 +67,11 @@ export default {
     noProviders: "Ekkert líkan er tiltækt enn. Bættu fyrst við þjónustuveitu.",
     openSettings: "Opna stillingar",
     placeholder: "Spyrðu spurningar",
-    send: "Senda",
     stop: "Stöðva",
+    placeholderMachine: "Spyrðu um hvað sem er, / fyrir skipanir, @ fyrir skrár, ! fyrir skel",
+    running: (machine: string) => `Keyrir á ${machine}…`,
+    runFailed: "Keyrslan á vélinni mistókst",
+    attachRejected: "Aðeins er hægt að hengja við myndir og PDF-skjöl, og aðeins fyrir líkan sem getur lesið þau.",
   },
   login: {
     title: "Skráðu þig inn á hub",
@@ -177,7 +181,8 @@ export default {
     failed: "Ekki tókst að búa til boðið",
     link: "Boðshlekkur",
     resetLink: "Endurstillingarhlekkur",
-    linkHint: "Birtist aðeins einu sinni. Hver sem hefur þennan hlekk getur notað hann, svo sendu hann í einkaskilaboðum.",
+    linkHint:
+      "Birtist aðeins einu sinni. Hver sem hefur þennan hlekk getur notað hann, svo sendu hann í einkaskilaboðum.",
   },
   machines: {
     title: "Vélarnar mínar",
@@ -234,8 +239,7 @@ export default {
     deleteConfirm: "Eyða",
     deleting: (name: string) => `Eyði ${name}`,
     newTitle: "Ný skýjakeyrsla",
-    newDescription:
-      "Skýjaþjónninn afritar tilbúna vél, ræsir hana og tengir hana við hub. Það tekur nokkrar mínútur.",
+    newDescription: "Skýjaþjónninn afritar tilbúna vél, ræsir hana og tengir hana við hub. Það tekur nokkrar mínútur.",
     name: "Heiti",
     server: "Skýjaþjónn",
     cpu: "CPU",
@@ -437,7 +441,8 @@ export default {
   },
   connector: {
     title: "Bæta við tengi",
-    description: "Fjartengdur MCP-þjónn yfir HTTP. Þjónar sem keyra sem staðbundin skipun haldast stilltir á hverri vél.",
+    description:
+      "Fjartengdur MCP-þjónn yfir HTTP. Þjónar sem keyra sem staðbundin skipun haldast stilltir á hverri vél.",
     name: "Heiti",
     namePlaceholder: "GitHub",
     nameHint: "Auðkenni þess, sem notað er í hub-<id> á vélunum þínum, er myndað út frá heitinu.",

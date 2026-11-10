@@ -45,6 +45,7 @@ export default {
     open: "Mappa megnyitása",
     parent: "Szülőmappa",
     noFolders: "Nincsenek mappák",
+    needsMachine: "Gép csatlakoztatása után érhető el",
     detach: "Gép eltávolítása",
   },
   chat: {
@@ -60,14 +61,19 @@ export default {
     collapse: "Oldalsáv összecsukása",
     expand: "Oldalsáv megnyitása",
     failed: "A csevegési kérés sikertelen volt",
-    locked: "A kulcsai zárolva vannak, ezért a modellek nem tudnak válaszolni. Jelentkezzen ki, majd be újra a feloldásukhoz.",
+    locked:
+      "A kulcsai zárolva vannak, ezért a modellek nem tudnak válaszolni. Jelentkezzen ki, majd be újra a feloldásukhoz.",
     emptyTitle: "Kérdezzen bármit",
-    emptyDescription: "Tegyen fel egy kérdést, vagy csatolja valamelyik gépét a + gombbal, hogy egy projekten dolgozzon.",
+    emptyDescription:
+      "Tegyen fel egy kérdést, vagy csatolja valamelyik gépét a + gombbal, hogy egy projekten dolgozzon.",
     noProviders: "Még nincs elérhető modell. Először adjon hozzá egy szolgáltatót.",
     openSettings: "Beállítások megnyitása",
     placeholder: "Tegyen fel egy kérdést",
-    send: "Küldés",
     stop: "Leállítás",
+    placeholderMachine: "Kérdezzen bármit, / a parancsokhoz, @ a fájlokhoz, ! a shellhez",
+    running: (machine: string) => `Futtatás itt: ${machine}…`,
+    runFailed: "A gépen végzett futtatás sikertelen volt",
+    attachRejected: "Csak képek és PDF-ek csatolhatók, és csak olyan modellhez, amely képes olvasni őket.",
   },
   login: {
     title: "Bejelentkezés a hubba",
@@ -253,7 +259,8 @@ export default {
       "LXD-szerverek, amelyek ügynöke felhőpéldányokat hoz létre a hub minden felhasználója számára. Csak az adminisztrátorok látják ezt a listát.",
     link: "Szerver összekapcsolása",
     empty: "Nincsenek felhőszerverek",
-    emptyDescription: "Kapcsoljon össze egy agent-hub-lxd-t futtató LXD-szervert, hogy a felhasználók felhőpéldányokat hozhassanak létre.",
+    emptyDescription:
+      "Kapcsoljon össze egy agent-hub-lxd-t futtató LXD-szervert, hogy a felhasználók felhőpéldányokat hozhassanak létre.",
     capacity: (cpu: string, memory: string, disk: string, instances: string) =>
       `CPU ${cpu} · RAM ${memory} · lemez ${disk} · ${instances} példány`,
     load: (load: string) => `Terhelés ${load}`,
@@ -437,7 +444,8 @@ export default {
   },
   connector: {
     title: "Összekötő hozzáadása",
-    description: "Távoli MCP-szerver HTTP-n keresztül. A helyi parancsként futó szerverek továbbra is az egyes gépeken maradnak beállítva.",
+    description:
+      "Távoli MCP-szerver HTTP-n keresztül. A helyi parancsként futó szerverek továbbra is az egyes gépeken maradnak beállítva.",
     name: "Név",
     namePlaceholder: "GitHub",
     nameHint: "Az azonosítója, amelyet a gépein a hub-<id> formában használ, a névből készül.",
@@ -451,7 +459,8 @@ export default {
     oauth: "OAuth-bejelentkezés",
     oauthHint: "A hub bejelentkezik a szerverre Ön helyett, majd megőrzi és megújítja a tokeneket.",
     headerList: "Hozzáadandó fejlécek",
-    headerListHint: "Az értékek titkosítva vannak, és többé nem jelennek meg. Titkok nélküli szervernél hagyja üresen a sort.",
+    headerListHint:
+      "Az értékek titkosítva vannak, és többé nem jelennek meg. Titkok nélküli szervernél hagyja üresen a sort.",
     headerName: "Fejléc neve",
     headerNamePlaceholder: "Authorization",
     headerValue: "Érték",

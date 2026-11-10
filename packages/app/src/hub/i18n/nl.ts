@@ -45,6 +45,7 @@ export default {
     open: "Deze map openen",
     parent: "Bovenliggende map",
     noFolders: "Geen mappen hier",
+    needsMachine: "Beschikbaar zodra een machine is gekoppeld",
     detach: "Machine verwijderen",
   },
   chat: {
@@ -67,8 +68,11 @@ export default {
     noProviders: "Er is nog geen model beschikbaar. Voeg eerst een provider toe.",
     openSettings: "Instellingen openen",
     placeholder: "Stel een vraag",
-    send: "Verzenden",
     stop: "Stoppen",
+    placeholderMachine: "Vraag alles, / voor opdrachten, @ voor bestanden, ! voor de shell",
+    running: (machine: string) => `Wordt uitgevoerd op ${machine}…`,
+    runFailed: "De uitvoering op de machine is mislukt",
+    attachRejected: "Alleen afbeeldingen en pdf’s kunnen worden bijgevoegd, en alleen voor een model dat ze kan lezen.",
   },
   login: {
     title: "Inloggen bij de hub",
@@ -182,8 +186,7 @@ export default {
   },
   machines: {
     title: "Mijn machines",
-    description:
-      "Uw computers waarop opencode draait en die verbonden blijven met deze hub. Alleen u kunt ze openen.",
+    description: "Uw computers waarop opencode draait en die verbonden blijven met deze hub. Alleen u kunt ze openen.",
     add: "Machine toevoegen",
     open: "Openen",
     revoke: "Intrekken…",
@@ -270,8 +273,7 @@ export default {
     revoked: (name: string) => `${name} is ingetrokken`,
     revokeFailed: "De cloudserver kon niet worden ingetrokken",
     linkTitle: "Een cloudserver koppelen",
-    linkDescription:
-      "Op de LXD-server, met agent-hub-lxd geïnstalleerd en geconfigureerd (zie de README):",
+    linkDescription: "Op de LXD-server, met agent-hub-lxd geïnstalleerd en geconfigureerd (zie de README):",
     step1: "Word lid van de hub en voer daarna deze eenmalige code in wanneer erom wordt gevraagd",
     step2: "Start daarna de agent",
     codeFailed: "Er kon geen code worden gemaakt",
@@ -416,8 +418,7 @@ export default {
     title: "MCP-connectoren",
     description:
       "Uw externe MCP-servers. Uw machines bereiken ze via de hub, die de hier opgeslagen headers of de login toevoegt, versleuteld met uw eigen sleutel. Elke connector verschijnt op uw machines als de MCP-server hub-<id>.",
-    lockedDescription:
-      "Uw machines krijgen voor deze connectoren een foutmelding van de hub totdat u opnieuw inlogt.",
+    lockedDescription: "Uw machines krijgen voor deze connectoren een foutmelding van de hub totdat u opnieuw inlogt.",
     add: "Connector toevoegen",
     headersBadge: (count: number) => (count === 1 ? "1 header" : `${count} headers`),
     oauthConnected: "Ingelogd",

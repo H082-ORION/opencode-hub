@@ -45,6 +45,7 @@ export default {
     open: "Deschide acest dosar",
     parent: "Dosar părinte",
     noFolders: "Niciun dosar aici",
+    needsMachine: "Disponibil după ce o mașină este atașată",
     detach: "Elimină mașina",
   },
   chat: {
@@ -60,14 +61,19 @@ export default {
     collapse: "Restrânge bara laterală",
     expand: "Deschide bara laterală",
     failed: "Cererea de chat a eșuat",
-    locked: "Cheile dvs. sunt blocate, așa că modelele nu pot răspunde. Deconectați-vă și conectați-vă din nou pentru a le debloca.",
+    locked:
+      "Cheile dvs. sunt blocate, așa că modelele nu pot răspunde. Deconectați-vă și conectați-vă din nou pentru a le debloca.",
     emptyTitle: "Întrebați orice",
-    emptyDescription: "Pune o întrebare sau atașează una dintre mașinile tale cu butonul + pentru a lucra la un proiect.",
+    emptyDescription:
+      "Pune o întrebare sau atașează una dintre mașinile tale cu butonul + pentru a lucra la un proiect.",
     noProviders: "Niciun model nu este disponibil încă. Adăugați mai întâi un furnizor.",
     openSettings: "Deschide setările",
     placeholder: "Puneți o întrebare",
-    send: "Trimite",
     stop: "Oprește",
+    placeholderMachine: "Întreabă orice, / pentru comenzi, @ pentru fișiere, ! pentru shell",
+    running: (machine: string) => `Se execută pe ${machine}…`,
+    runFailed: "Execuția pe mașină a eșuat",
+    attachRejected: "Pot fi atașate doar imagini și PDF-uri, și doar pentru un model care le poate citi.",
   },
   login: {
     title: "Conectați-vă la hub",
@@ -181,7 +187,8 @@ export default {
   },
   machines: {
     title: "Mașinile mele",
-    description: "Calculatoarele dvs. care rulează opencode și rămân conectate la acest hub. Doar dvs. le puteți deschide.",
+    description:
+      "Calculatoarele dvs. care rulează opencode și rămân conectate la acest hub. Doar dvs. le puteți deschide.",
     add: "Adaugă mașină",
     open: "Deschide",
     revoke: "Revocă…",
@@ -253,7 +260,8 @@ export default {
       "Servere LXD al căror agent creează instanțe cloud pentru toți utilizatorii acestui hub. Doar administratorii văd această listă.",
     link: "Asociază server",
     empty: "Niciun server cloud",
-    emptyDescription: "Asociați un server LXD care rulează agent-hub-lxd pentru ca utilizatorii să poată crea instanțe cloud.",
+    emptyDescription:
+      "Asociați un server LXD care rulează agent-hub-lxd pentru ca utilizatorii să poată crea instanțe cloud.",
     capacity: (cpu: string, memory: string, disk: string, instances: string) =>
       `CPU ${cpu} · RAM ${memory} · disc ${disk} · ${instances} instanțe`,
     load: (load: string) => `Încărcare ${load}`,
@@ -437,7 +445,8 @@ export default {
   },
   connector: {
     title: "Adăugați un conector",
-    description: "Un server MCP la distanță prin HTTP. Serverele care rulează ca o comandă locală rămân configurate pe fiecare mașină.",
+    description:
+      "Un server MCP la distanță prin HTTP. Serverele care rulează ca o comandă locală rămân configurate pe fiecare mașină.",
     name: "Nume",
     namePlaceholder: "GitHub",
     nameHint: "ID-ul său, folosit în hub-<id> pe mașinile dvs., este creat din nume.",

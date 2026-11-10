@@ -2,7 +2,6 @@ import { Button } from "@opencode/ui/button"
 import { useDialog } from "@opencode/ui/context/dialog"
 import { Dialog, DialogBody, DialogFooter, DialogHeader, DialogTitleGroup } from "@opencode/ui/dialog"
 import { Icon } from "@opencode/ui/icon"
-import { IconButton } from "@opencode/ui/icon-button"
 import { Loader } from "@opencode/ui/loader"
 import { Menu } from "@opencode/ui/menu"
 import { TextInput } from "@opencode/ui/text-input"
@@ -13,8 +12,8 @@ import { copy } from "./copy"
 /** The last folder of a path, which names the project in the composer. */
 export const projectName = (directory: string) => directory.replace(/\/+$/, "").split("/").at(-1) || directory
 
-/** The composer's + menu: pick one of the user's machines, connected ones first. */
-export function AttachMenu(props: {
+/** The hub's entries in the composer's + menu: one of the user's machines, connected ones first, then the cloud. */
+export function AttachMenuItems(props: {
   machines: readonly HubMachine[]
   onOpen: () => void
   onPick: (target: HubChatTarget) => void
@@ -35,41 +34,31 @@ export function AttachMenu(props: {
     ))
 
   return (
-    <Menu gutter={6} modal={false} placement="top-start" onOpenChange={(value) => value && props.onOpen()}>
-      <Menu.Trigger as={IconButton} icon={<Icon name="plus" />} variant="ghost" aria-label={copy.attach.title} />
-      <Menu.Portal>
-        <Menu.Content>
-          <Menu.Sub gutter={4} overflowPadding={16} overlap>
-            <Menu.SubTrigger>
-              <Icon name="monitor" />
-              {copy.attach.machine}
-            </Menu.SubTrigger>
-            <Menu.Portal>
-              <Menu.SubContent class="hub-chat-machines">
-                <Show when={sorted().length > 0} fallback={<Menu.Item disabled>{copy.attach.noMachines}</Menu.Item>}>
-                  <For each={sorted()}>
-                    {(machine) => (
-                      <Menu.Item disabled={!machine.online} onSelect={() => open(machine)}>
-                        <span class="hub-status" data-online={machine.online ? "" : undefined} aria-hidden="true" />
-                        <span class="hub-chat-machine-name">{machine.name}</span>
-                        <Show when={!machine.online}>
-                          <span class="hub-chat-machine-state">{copy.machines.offline}</span>
-                        </Show>
-                      </Menu.Item>
-                    )}
-                  </For>
-                </Show>
-              </Menu.SubContent>
-            </Menu.Portal>
-          </Menu.Sub>
-          <Menu.Item disabled>
-            <Icon name="server" />
-            {copy.attach.cloud}
-            <span class="hub-chat-machine-state">{copy.attach.soon}</span>
-          </Menu.Item>
-        </Menu.Content>
-      </Menu.Portal>
-    </Menu>
+    <>
+      <Menu.Sub gutter={4} overflowPadding={16} overlap onOpenChange={(value) => value && props.onOpen()}>
+        <Menu.SubTrigger>{copy.attach.machine}</Menu.SubTrigger>
+        <Menu.Portal>
+          <Menu.SubContent class="hub-chat-machines">
+            <Show when={sorted().length > 0} fallback={<Menu.Item disabled>{copy.attach.noMachines}</Menu.Item>}>
+              <For each={sorted()}>
+                {(machine) => (
+                  <Menu.Item disabled={!machine.online} onSelect={() => open(machine)}>
+                    <span class="hub-status" data-online={machine.online ? "" : undefined} aria-hidden="true" />
+                    <span class="hub-chat-machine-name">{machine.name}</span>
+                    <Show when={!machine.online}>
+                      <span class="hub-chat-machine-state">{copy.machines.offline}</span>
+                    </Show>
+                  </Menu.Item>
+                )}
+              </For>
+            </Show>
+          </Menu.SubContent>
+        </Menu.Portal>
+      </Menu.Sub>
+      <Menu.Item disabled badge={copy.attach.soon}>
+        {copy.attach.cloud}
+      </Menu.Item>
+    </>
   )
 }
 

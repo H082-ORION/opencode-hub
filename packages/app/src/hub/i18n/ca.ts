@@ -45,6 +45,7 @@ export default {
     open: "Obre aquesta carpeta",
     parent: "Carpeta superior",
     noFolders: "No hi ha carpetes",
+    needsMachine: "Disponible un cop associada una màquina",
     detach: "Elimina la màquina",
   },
   chat: {
@@ -60,14 +61,19 @@ export default {
     collapse: "Replega la barra lateral",
     expand: "Obre la barra lateral",
     failed: "La sol·licitud del xat ha fallat",
-    locked: "Les vostres claus estan bloquejades, així que els models no poden respondre. Tanqueu la sessió i torneu-la a iniciar per desbloquejar-les.",
+    locked:
+      "Les vostres claus estan bloquejades, així que els models no poden respondre. Tanqueu la sessió i torneu-la a iniciar per desbloquejar-les.",
     emptyTitle: "Pregunteu el que vulgueu",
-    emptyDescription: "Fes una pregunta o adjunta una de les teves màquines amb el botó + per treballar en un projecte.",
+    emptyDescription:
+      "Fes una pregunta o adjunta una de les teves màquines amb el botó + per treballar en un projecte.",
     noProviders: "Encara no hi ha cap model disponible. Afegiu primer un proveïdor.",
     openSettings: "Obre la configuració",
     placeholder: "Feu una pregunta",
-    send: "Envia",
     stop: "Atura",
+    placeholderMachine: "Pregunteu el que vulgueu, / per a ordres, @ per a fitxers, ! per a l'intèrpret d'ordres",
+    running: (machine: string) => `S'està executant a ${machine}…`,
+    runFailed: "L'execució a la màquina ha fallat",
+    attachRejected: "Només es poden adjuntar imatges i PDF, i només per a un model que els llegeixi.",
   },
   login: {
     title: "Inicieu la sessió al hub",
@@ -177,11 +183,13 @@ export default {
     failed: "No s'ha pogut crear la invitació",
     link: "Enllaç d'invitació",
     resetLink: "Enllaç de restabliment",
-    linkHint: "Només es mostra una vegada. Qualsevol persona que tingui aquest enllaç el pot usar, així que envieu-lo en privat.",
+    linkHint:
+      "Només es mostra una vegada. Qualsevol persona que tingui aquest enllaç el pot usar, així que envieu-lo en privat.",
   },
   machines: {
     title: "Les meves màquines",
-    description: "Els vostres ordinadors que executen opencode i romanen connectats a aquest hub. Només vós els podeu obrir.",
+    description:
+      "Els vostres ordinadors que executen opencode i romanen connectats a aquest hub. Només vós els podeu obrir.",
     add: "Afegeix una màquina",
     open: "Obre",
     revoke: "Revoca…",
@@ -253,7 +261,8 @@ export default {
       "Servidors LXD el agent dels quals crea instàncies al núvol per a tots els usuaris d'aquest hub. Només els administradors veuen aquesta llista.",
     link: "Enllaça un servidor",
     empty: "No hi ha servidors del núvol",
-    emptyDescription: "Enllaceu un servidor LXD que executi agent-hub-lxd perquè els usuaris puguin crear instàncies al núvol.",
+    emptyDescription:
+      "Enllaceu un servidor LXD que executi agent-hub-lxd perquè els usuaris puguin crear instàncies al núvol.",
     capacity: (cpu: string, memory: string, disk: string, instances: string) =>
       `CPU ${cpu} · RAM ${memory} · disc ${disk} · ${instances} instàncies`,
     load: (load: string) => `Càrrega ${load}`,
@@ -412,7 +421,8 @@ export default {
     title: "Connectors MCP",
     description:
       "Els vostres servidors MCP remots. Les vostres màquines hi accedeixen a través del hub, que afegeix les capçaleres o l'inici de sessió que heu desat aquí, xifrats amb la vostra pròpia clau. Cadascun apareix a les vostres màquines com el servidor MCP hub-<id>.",
-    lockedDescription: "Les vostres màquines reben un error del hub per a aquests connectors fins que torneu a iniciar la sessió.",
+    lockedDescription:
+      "Les vostres màquines reben un error del hub per a aquests connectors fins que torneu a iniciar la sessió.",
     add: "Afegeix un connector",
     headersBadge: (count: number) => (count === 1 ? "1 capçalera" : `${count} capçaleres`),
     oauthConnected: "Sessió iniciada",
@@ -437,7 +447,8 @@ export default {
   },
   connector: {
     title: "Afegiu un connector",
-    description: "Un servidor MCP remot per HTTP. Els servidors que s'executen com a ordre local continuen configurats a cada màquina.",
+    description:
+      "Un servidor MCP remot per HTTP. Els servidors que s'executen com a ordre local continuen configurats a cada màquina.",
     name: "Nom",
     namePlaceholder: "GitHub",
     nameHint: "El seu identificador, usat a hub-<id> a les vostres màquines, es crea a partir del nom.",
@@ -451,7 +462,8 @@ export default {
     oauth: "Inici de sessió OAuth",
     oauthHint: "El hub inicia la sessió al servidor per vosaltres, i després conserva i renova els testimonis.",
     headerList: "Capçaleres per afegir",
-    headerListHint: "Els valors es xifren i no es tornen a mostrar. Deixeu la fila buida per a un servidor sense secrets.",
+    headerListHint:
+      "Els valors es xifren i no es tornen a mostrar. Deixeu la fila buida per a un servidor sense secrets.",
     headerName: "Nom de la capçalera",
     headerNamePlaceholder: "Authorization",
     headerValue: "Valor",
@@ -503,11 +515,13 @@ export default {
     completing: "S'està acabant…",
     restart: "Torna a començar",
     success: "ChatGPT està connectat",
-    successDescription: "Ara les vostres màquines accedeixen als models d'OpenAI mitjançant la vostra subscripció a ChatGPT.",
+    successDescription:
+      "Ara les vostres màquines accedeixen als models d'OpenAI mitjançant la vostra subscripció a ChatGPT.",
   },
   updates: {
     title: "Actualitzacions",
-    description: "Mantingueu aquest hub a la darrera versió d'OpenCode Hub. Només els administradors veuen aquesta pàgina.",
+    description:
+      "Mantingueu aquest hub a la darrera versió d'OpenCode Hub. Només els administradors veuen aquesta pàgina.",
     check: "Cerca actualitzacions",
     checking: "S'està comprovant…",
     checkFailed: "No s'han pogut cercar actualitzacions",
@@ -516,7 +530,8 @@ export default {
     checkError: (message: string) => `La darrera comprovació ha fallat: ${message}`,
     current: "Versió actual",
     local: "Compilació local",
-    localDescription: "Aquest hub executa una compilació local, no una versió publicada. Instal·lar una versió la substitueix.",
+    localDescription:
+      "Aquest hub executa una compilació local, no una versió publicada. Instal·lar una versió la substitueix.",
     upToDate: "Aquest hub està actualitzat",
     upToDateDescription: "No s'ha publicat cap versió estable més recent.",
     available: (version: string) => `La versió ${version} està disponible`,
@@ -529,21 +544,26 @@ export default {
     noNotes: "Aquesta versió no té notes.",
     github: "Mostra a GitHub",
     devTitle: "Versions de desenvolupament",
-    devDescription: "Versions preliminars amb els canvis més recents. Es proven menys que les versions estables i poden fallar.",
+    devDescription:
+      "Versions preliminars amb els canvis més recents. Es proven menys que les versions estables i poden fallar.",
     showDev: "Mostra les versions de desenvolupament",
     devNone: "No s'ha publicat cap versió de desenvolupament.",
     manualTitle: "Actualitza manualment",
-    manualDescription: "Les actualitzacions automàtiques no estan configurades en aquest servidor. Executeu aquesta ordre al servidor per instal·lar la darrera versió; també configura les actualitzacions automàtiques.",
+    manualDescription:
+      "Les actualitzacions automàtiques no estan configurades en aquest servidor. Executeu aquesta ordre al servidor per instal·lar la darrera versió; també configura les actualitzacions automàtiques.",
     pending: (version: string) => `S'ha sol·licitat l'actualització a ${version}…`,
     running: (version: string) => `S'està instal·lant ${version}…`,
     restarting: "El hub s'està reiniciant…",
     progressHint: "Aquesta pàgina es tornarà a carregar sola quan el hub executi la nova versió.",
     failed: (version: string) => `L'actualització a ${version} ha fallat`,
-    failedHint: "L'instal·lador no ha indicat cap motiu. Consulteu els registres del servei opencode-hub-update al servidor.",
+    failedHint:
+      "L'instal·lador no ha indicat cap motiu. Consulteu els registres del servei opencode-hub-update al servidor.",
     confirmTitle: (version: string) => `Voleu actualitzar a ${version}?`,
-    confirmDescription: "El hub baixa aquesta versió, la verifica, en substitueix el programa i es reinicia. Els xats i les màquines es desconnecten un moment i després es tornen a connectar.",
+    confirmDescription:
+      "El hub baixa aquesta versió, la verifica, en substitueix el programa i es reinicia. Els xats i les màquines es desconnecten un moment i després es tornen a connectar.",
     confirmDevTitle: (version: string) => `Voleu instal·lar la versió de desenvolupament ${version}?`,
-    confirmDevWarning: "Aquesta és una versió de desenvolupament. Pot ser inestable, contenir errors o modificar les dades desades d'una manera que una versió anterior no pugui llegir. Instal·leu-la només en un hub que pugueu reparar.",
+    confirmDevWarning:
+      "Aquesta és una versió de desenvolupament. Pot ser inestable, contenir errors o modificar les dades desades d'una manera que una versió anterior no pugui llegir. Instal·leu-la només en un hub que pugueu reparar.",
     confirm: "Actualitza ara",
     confirmDev: "Instal·la igualment",
     startFailed: "No s'ha pogut iniciar l'actualització",
@@ -552,7 +572,8 @@ export default {
     later: "Més tard",
     openSettings: "Obre la configuració",
     updateNow: "Actualitza ara",
-    promptManual: "Les actualitzacions automàtiques no estan configurades en aquest servidor. Obriu la configuració per veure com actualitzar-lo.",
+    promptManual:
+      "Les actualitzacions automàtiques no estan configurades en aquest servidor. Obriu la configuració per veure com actualitzar-lo.",
   },
   error: {
     unreachable: "No s'ha pogut accedir al hub.",

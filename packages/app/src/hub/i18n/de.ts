@@ -45,6 +45,7 @@ export default {
     open: "Diesen Ordner öffnen",
     parent: "Übergeordneter Ordner",
     noFolders: "Keine Ordner vorhanden",
+    needsMachine: "Verfügbar, sobald eine Maschine verbunden ist",
     detach: "Maschine entfernen",
   },
   chat: {
@@ -63,12 +64,16 @@ export default {
     locked:
       "Ihre Schlüssel sind gesperrt, daher können Modelle nicht antworten. Melden Sie sich ab und wieder an, um sie zu entsperren.",
     emptyTitle: "Fragen Sie, was Sie möchten",
-    emptyDescription: "Stelle eine Frage oder hänge mit der Schaltfläche + eine deiner Maschinen an, um an einem Projekt zu arbeiten.",
+    emptyDescription:
+      "Stelle eine Frage oder hänge mit der Schaltfläche + eine deiner Maschinen an, um an einem Projekt zu arbeiten.",
     noProviders: "Noch ist kein Modell verfügbar. Fügen Sie zuerst einen Anbieter hinzu.",
     openSettings: "Einstellungen öffnen",
     placeholder: "Frage stellen",
-    send: "Senden",
     stop: "Stopp",
+    placeholderMachine: "Frag etwas, / für Befehle, @ für Dateien, ! für die Shell",
+    running: (machine: string) => `Läuft auf ${machine}…`,
+    runFailed: "Die Ausführung auf der Maschine ist fehlgeschlagen",
+    attachRejected: "Es können nur Bilder und PDFs angehängt werden, und nur für ein Modell, das sie lesen kann.",
   },
   login: {
     title: "Beim Hub anmelden",
@@ -83,8 +88,7 @@ export default {
   register: {
     title: "Konto erstellen",
     resetTitle: "Neues Passwort wählen",
-    description:
-      "Diese Einladung erstellt ein Konto auf dem Hub. Ihr Passwort verlässt diesen Browser nie.",
+    description: "Diese Einladung erstellt ein Konto auf dem Hub. Ihr Passwort verlässt diesen Browser nie.",
     resetDescription: (login: string) =>
       `Dieser Link setzt das Passwort von ${login} zurück. Mit dem alten Passwort gespeicherte Schlüssel gehen verloren und müssen erneut eingegeben werden.`,
     login: "Benutzername",
@@ -210,7 +214,8 @@ export default {
       "Virtuelle Maschinen auf den Cloud-Servern dieses Hubs, mit sofort einsatzbereitem opencode. Jede wird zu einer Ihrer Maschinen.",
     create: "Neue Instanz",
     empty: "Noch keine Cloud-Instanzen",
-    emptyDescription: "Erstellen Sie eine Instanz, um eine frische Maschine mit opencode zu erhalten, ohne etwas zu installieren.",
+    emptyDescription:
+      "Erstellen Sie eine Instanz, um eine frische Maschine mit opencode zu erhalten, ohne etwas zu installieren.",
     noServer: "Derzeit ist kein Cloud-Server verbunden.",
     open: "Öffnen",
     start: "Starten",
@@ -271,8 +276,7 @@ export default {
     revoked: (name: string) => `${name} wurde widerrufen`,
     revokeFailed: "Der Cloud-Server konnte nicht widerrufen werden",
     linkTitle: "Cloud-Server verknüpfen",
-    linkDescription:
-      "Auf dem LXD-Server, mit installiertem und konfiguriertem agent-hub-lxd (siehe dessen README):",
+    linkDescription: "Auf dem LXD-Server, mit installiertem und konfiguriertem agent-hub-lxd (siehe dessen README):",
     step1: "Treten Sie dem Hub bei und geben Sie dann diesen Einmal-Code ein, wenn Sie dazu aufgefordert werden",
     step2: "Starten Sie danach den Agent",
     codeFailed: "Ein Code konnte nicht erstellt werden",
@@ -515,7 +519,8 @@ export default {
   },
   updates: {
     title: "Updates",
-    description: "Halten Sie diesen Hub auf dem neuesten Release von OpenCode Hub. Nur Administratoren sehen diese Seite.",
+    description:
+      "Halten Sie diesen Hub auf dem neuesten Release von OpenCode Hub. Nur Administratoren sehen diese Seite.",
     check: "Nach Updates suchen",
     checking: "Wird geprüft…",
     checkFailed: "Suche nach Updates fehlgeschlagen",
@@ -524,7 +529,8 @@ export default {
     checkError: (message: string) => `Die letzte Prüfung ist fehlgeschlagen: ${message}`,
     current: "Aktuelle Version",
     local: "Lokaler Build",
-    localDescription: "Dieser Hub läuft mit einem lokalen Build, nicht mit einem veröffentlichten Release. Die Installation eines Releases ersetzt ihn.",
+    localDescription:
+      "Dieser Hub läuft mit einem lokalen Build, nicht mit einem veröffentlichten Release. Die Installation eines Releases ersetzt ihn.",
     upToDate: "Dieser Hub ist auf dem neuesten Stand",
     upToDateDescription: "Es wurde kein neueres stabiles Release veröffentlicht.",
     available: (version: string) => `Version ${version} ist verfügbar`,
@@ -537,21 +543,26 @@ export default {
     noNotes: "Dieses Release hat keine Versionshinweise.",
     github: "Auf GitHub ansehen",
     devTitle: "Entwicklungsversionen",
-    devDescription: "Vorabversionen mit den neuesten Änderungen. Sie sind weniger getestet als stabile Releases und können Fehler verursachen.",
+    devDescription:
+      "Vorabversionen mit den neuesten Änderungen. Sie sind weniger getestet als stabile Releases und können Fehler verursachen.",
     showDev: "Entwicklungsversionen anzeigen",
     devNone: "Es wurde keine Entwicklungsversion veröffentlicht.",
     manualTitle: "Manuell aktualisieren",
-    manualDescription: "Automatische Updates sind auf diesem Server nicht eingerichtet. Führen Sie diesen Befehl auf dem Server aus, um das neueste Release zu installieren; er richtet auch automatische Updates ein.",
+    manualDescription:
+      "Automatische Updates sind auf diesem Server nicht eingerichtet. Führen Sie diesen Befehl auf dem Server aus, um das neueste Release zu installieren; er richtet auch automatische Updates ein.",
     pending: (version: string) => `Update auf ${version} angefordert…`,
     running: (version: string) => `${version} wird installiert…`,
     restarting: "Der Hub wird neu gestartet…",
     progressHint: "Diese Seite lädt sich von selbst neu, sobald der Hub die neue Version ausführt.",
     failed: (version: string) => `Das Update auf ${version} ist fehlgeschlagen`,
-    failedHint: "Das Installationsprogramm hat keinen Grund angegeben. Prüfen Sie die Protokolle des Dienstes opencode-hub-update auf dem Server.",
+    failedHint:
+      "Das Installationsprogramm hat keinen Grund angegeben. Prüfen Sie die Protokolle des Dienstes opencode-hub-update auf dem Server.",
     confirmTitle: (version: string) => `Auf ${version} aktualisieren?`,
-    confirmDescription: "Der Hub lädt dieses Release herunter, prüft es, ersetzt sein Programm und startet neu. Chats und Maschinen werden kurz getrennt und verbinden sich dann wieder.",
+    confirmDescription:
+      "Der Hub lädt dieses Release herunter, prüft es, ersetzt sein Programm und startet neu. Chats und Maschinen werden kurz getrennt und verbinden sich dann wieder.",
     confirmDevTitle: (version: string) => `Entwicklungsversion ${version} installieren?`,
-    confirmDevWarning: "Dies ist eine Entwicklungsversion. Sie kann instabil sein, Fehler enthalten oder gespeicherte Daten so verändern, dass ein älteres Release sie nicht mehr lesen kann. Installieren Sie sie nur auf einem Hub, den Sie reparieren können.",
+    confirmDevWarning:
+      "Dies ist eine Entwicklungsversion. Sie kann instabil sein, Fehler enthalten oder gespeicherte Daten so verändern, dass ein älteres Release sie nicht mehr lesen kann. Installieren Sie sie nur auf einem Hub, den Sie reparieren können.",
     confirm: "Jetzt aktualisieren",
     confirmDev: "Trotzdem installieren",
     startFailed: "Das Update konnte nicht gestartet werden",
@@ -560,7 +571,8 @@ export default {
     later: "Später",
     openSettings: "Einstellungen öffnen",
     updateNow: "Jetzt aktualisieren",
-    promptManual: "Automatische Updates sind auf diesem Server nicht eingerichtet. Öffnen Sie die Einstellungen, um zu sehen, wie Sie ihn aktualisieren.",
+    promptManual:
+      "Automatische Updates sind auf diesem Server nicht eingerichtet. Öffnen Sie die Einstellungen, um zu sehen, wie Sie ihn aktualisieren.",
   },
   error: {
     unreachable: "Der Hub war nicht erreichbar.",

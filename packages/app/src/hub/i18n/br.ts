@@ -45,6 +45,7 @@ export default {
     open: "Abrir esta pasta",
     parent: "Pasta superior",
     noFolders: "Nenhuma pasta aqui",
+    needsMachine: "Disponível quando uma máquina for associada",
     detach: "Remover a máquina",
   },
   chat: {
@@ -67,8 +68,11 @@ export default {
     noProviders: "Nenhum modelo disponível ainda. Adicione um provedor primeiro.",
     openSettings: "Abrir configurações",
     placeholder: "Faça uma pergunta",
-    send: "Enviar",
     stop: "Parar",
+    placeholderMachine: "Pergunte qualquer coisa, / para comandos, @ para arquivos, ! para o shell",
+    running: (machine: string) => `Executando em ${machine}…`,
+    runFailed: "A execução na máquina falhou",
+    attachRejected: "Só é possível anexar imagens e PDFs, e apenas para um modelo que os leia.",
   },
   login: {
     title: "Entre no hub",
@@ -236,8 +240,7 @@ export default {
     deleteConfirm: "Excluir",
     deleting: (name: string) => `Excluindo ${name}`,
     newTitle: "Nova instância na nuvem",
-    newDescription:
-      "O servidor em nuvem clona uma máquina pronta, a inicia e a pareia com o hub. Leva alguns minutos.",
+    newDescription: "O servidor em nuvem clona uma máquina pronta, a inicia e a pareia com o hub. Leva alguns minutos.",
     name: "Nome",
     server: "Servidor em nuvem",
     cpu: "CPU",
@@ -270,8 +273,7 @@ export default {
     revoked: (name: string) => `${name} foi revogado`,
     revokeFailed: "Não foi possível revogar o servidor em nuvem",
     linkTitle: "Vincular um servidor em nuvem",
-    linkDescription:
-      "No servidor LXD, com o agent-hub-lxd instalado e configurado (veja o README dele):",
+    linkDescription: "No servidor LXD, com o agent-hub-lxd instalado e configurado (veja o README dele):",
     step1: "Entre no hub e depois digite este código de uso único quando solicitado",
     step2: "Em seguida, inicie o agente",
     codeFailed: "Não foi possível criar um código",
@@ -416,8 +418,7 @@ export default {
     title: "Conectores MCP",
     description:
       "Seus servidores MCP remotos. Suas máquinas os acessam pelo hub, que adiciona os cabeçalhos ou o login que você salvou aqui, criptografados com a sua própria chave. Cada um aparece em suas máquinas como o servidor MCP hub-<id>.",
-    lockedDescription:
-      "Suas máquinas recebem um erro do hub para estes conectores até você entrar novamente.",
+    lockedDescription: "Suas máquinas recebem um erro do hub para estes conectores até você entrar novamente.",
     add: "Adicionar conector",
     headersBadge: (count: number) => (count === 1 ? "1 cabeçalho" : `${count} cabeçalhos`),
     oauthConnected: "Conectado",
@@ -536,11 +537,13 @@ export default {
     noNotes: "Esta versão não tem notas.",
     github: "Ver no GitHub",
     devTitle: "Versões de desenvolvimento",
-    devDescription: "Pré-lançamentos com as mudanças mais recentes. São menos testados que as versões estáveis e podem apresentar falhas.",
+    devDescription:
+      "Pré-lançamentos com as mudanças mais recentes. São menos testados que as versões estáveis e podem apresentar falhas.",
     showDev: "Mostrar versões de desenvolvimento",
     devNone: "Nenhuma versão de desenvolvimento foi publicada.",
     manualTitle: "Atualizar manualmente",
-    manualDescription: "As atualizações automáticas não estão configuradas neste servidor. Execute este comando no servidor para instalar a versão mais recente; ele também configura as atualizações automáticas.",
+    manualDescription:
+      "As atualizações automáticas não estão configuradas neste servidor. Execute este comando no servidor para instalar a versão mais recente; ele também configura as atualizações automáticas.",
     pending: (version: string) => `Atualização para ${version} solicitada…`,
     running: (version: string) => `Instalando ${version}…`,
     restarting: "O hub está reiniciando…",
@@ -548,9 +551,11 @@ export default {
     failed: (version: string) => `A atualização para ${version} falhou`,
     failedHint: "O instalador não informou o motivo. Verifique os logs do serviço opencode-hub-update no servidor.",
     confirmTitle: (version: string) => `Atualizar para ${version}?`,
-    confirmDescription: "O hub baixa esta versão, a verifica, substitui seu programa e reinicia. Os chats e as máquinas se desconectam por um instante e depois se reconectam.",
+    confirmDescription:
+      "O hub baixa esta versão, a verifica, substitui seu programa e reinicia. Os chats e as máquinas se desconectam por um instante e depois se reconectam.",
     confirmDevTitle: (version: string) => `Instalar a versão de desenvolvimento ${version}?`,
-    confirmDevWarning: "Esta é uma versão de desenvolvimento. Ela pode ser instável, conter bugs ou alterar os dados salvos de um jeito que uma versão anterior não consegue ler. Instale-a somente em um hub que você consiga reparar.",
+    confirmDevWarning:
+      "Esta é uma versão de desenvolvimento. Ela pode ser instável, conter bugs ou alterar os dados salvos de um jeito que uma versão anterior não consegue ler. Instale-a somente em um hub que você consiga reparar.",
     confirm: "Atualizar agora",
     confirmDev: "Instalar mesmo assim",
     startFailed: "Não foi possível iniciar a atualização",
@@ -559,7 +564,8 @@ export default {
     later: "Mais tarde",
     openSettings: "Abrir configurações",
     updateNow: "Atualizar agora",
-    promptManual: "As atualizações automáticas não estão configuradas neste servidor. Abra as configurações para ver como atualizá-lo.",
+    promptManual:
+      "As atualizações automáticas não estão configuradas neste servidor. Abra as configurações para ver como atualizá-lo.",
   },
   error: {
     unreachable: "Não foi possível alcançar o hub.",

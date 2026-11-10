@@ -45,6 +45,7 @@ export default {
     open: "Bu bukjany aç",
     parent: "Ata bukjasy",
     noFolders: "Bu ýerde bukja ýok",
+    needsMachine: "Maşyn birikdirilenden soň elýeterli",
     detach: "Maşyny aýyr",
   },
   chat: {
@@ -66,8 +67,11 @@ export default {
     noProviders: "Entek elýeterli model ýok. Ilki bilen üpjün ediji goşuň.",
     openSettings: "Sazlamalary açmak",
     placeholder: "Sorag beriň",
-    send: "Ibermek",
     stop: "Duruzmak",
+    placeholderMachine: "Islendik zady soraň, buýruklar üçin /, faýllar üçin @, gabyk üçin !",
+    running: (machine: string) => `${machine} üstünde işleýär…`,
+    runFailed: "Maşynda işletmek şowsuz boldy",
+    attachRejected: "Diňe suratlary we PDF-leri goşup bolýar, ony hem diňe olary okaýan model üçin.",
   },
   login: {
     title: "Hub-a giriň",
@@ -177,7 +181,8 @@ export default {
     failed: "Çakylygy döredip bolmady",
     link: "Çakylyk baglanyşygy",
     resetLink: "Täzeden bellemek baglanyşygy",
-    linkHint: "Diňe bir gezek görkezilýär. Bu baglanyşygy alan her kim ony ulanyp biler, şonuň üçin ony ýeke-täk iberiň.",
+    linkHint:
+      "Diňe bir gezek görkezilýär. Bu baglanyşygy alan her kim ony ulanyp biler, şonuň üçin ony ýeke-täk iberiň.",
   },
   machines: {
     title: "Maşynlarym",
@@ -253,7 +258,8 @@ export default {
       "Agenti bu hub-yň her ulanyjysy üçin bulut nusgalaryny döredýän LXD serwerleri. Bu sanawy diňe administratorlar görýär.",
     link: "Serweri birikdirmek",
     empty: "Bulut serwerleri ýok",
-    emptyDescription: "Ulanyjylaryň bulut nusgalaryny döredip bilmegi üçin agent-hub-lxd işledýän LXD serwerini birikdiriň.",
+    emptyDescription:
+      "Ulanyjylaryň bulut nusgalaryny döredip bilmegi üçin agent-hub-lxd işledýän LXD serwerini birikdiriň.",
     capacity: (cpu: string, memory: string, disk: string, instances: string) =>
       `CPU ${cpu} · RAM ${memory} · disk ${disk} · ${instances} nusga`,
     load: (load: string) => `Ýüklenme ${load}`,
@@ -437,7 +443,8 @@ export default {
   },
   connector: {
     title: "Birleşdiriji goşmak",
-    description: "HTTP üstünden uzakdaky MCP serweri. Ýerli buýruk hökmünde işleýän serwerler her maşynda sazlanyp galýar.",
+    description:
+      "HTTP üstünden uzakdaky MCP serweri. Ýerli buýruk hökmünde işleýän serwerler her maşynda sazlanyp galýar.",
     name: "Ady",
     namePlaceholder: "GitHub",
     nameHint: "Maşynlaryňyzda hub-<id> ulanylýan id-si addan döredilýär.",
@@ -529,11 +536,13 @@ export default {
     noNotes: "Bu wersiýanyň bellikleri ýok.",
     github: "GitHub-da görmek",
     devTitle: "Ösüş wersiýalary",
-    devDescription: "Iň täze üýtgeşmeleri bolan deslapky wersiýalar. Olar durnukly wersiýalardan az synagdan geçirilýär we bozulyp biler.",
+    devDescription:
+      "Iň täze üýtgeşmeleri bolan deslapky wersiýalar. Olar durnukly wersiýalardan az synagdan geçirilýär we bozulyp biler.",
     showDev: "Ösüş wersiýalaryny görkezmek",
     devNone: "Hiç bir ösüş wersiýasy çap edilmedi.",
     manualTitle: "El bilen täzelemek",
-    manualDescription: "Bu serwerde awtomatik täzelenmeler sazlanmadyk. Iň täze wersiýany gurnamak üçin bu buýrugy serwerde işlediň; ol awtomatik täzelenmeleri hem sazlaýar.",
+    manualDescription:
+      "Bu serwerde awtomatik täzelenmeler sazlanmadyk. Iň täze wersiýany gurnamak üçin bu buýrugy serwerde işlediň; ol awtomatik täzelenmeleri hem sazlaýar.",
     pending: (version: string) => `${version} wersiýasyna täzelemek soraldy…`,
     running: (version: string) => `${version} gurnalýar…`,
     restarting: "Hub täzeden başlaýar…",
@@ -541,9 +550,11 @@ export default {
     failed: (version: string) => `${version} wersiýasyna täzelemek şowsuz boldy`,
     failedHint: "Gurnaýjy sebäbini görkezmedi. Serwerdäki opencode-hub-update hyzmatynyň ýazgylaryny barlaň.",
     confirmTitle: (version: string) => `${version} wersiýasyna täzelemelimi?`,
-    confirmDescription: "Hub bu wersiýany ýükleýär, barlaýar, öz programmasyny çalyşýar we täzeden başlaýar. Çatlar we maşynlar biraz wagtlyk aýrylýar, soňra täzeden birikýär.",
+    confirmDescription:
+      "Hub bu wersiýany ýükleýär, barlaýar, öz programmasyny çalyşýar we täzeden başlaýar. Çatlar we maşynlar biraz wagtlyk aýrylýar, soňra täzeden birikýär.",
     confirmDevTitle: (version: string) => `${version} ösüş wersiýasyny gurnamalymy?`,
-    confirmDevWarning: "Bu ösüş wersiýasy. Ol durnuksyz bolup, ýalňyşlyklary öz içine alyp ýa-da saklanan maglumatlary köne wersiýanyň okap bilmejek görnüşinde üýtgedip biler. Ony diňe abatlap bilýän hub-yňyzda gurnaň.",
+    confirmDevWarning:
+      "Bu ösüş wersiýasy. Ol durnuksyz bolup, ýalňyşlyklary öz içine alyp ýa-da saklanan maglumatlary köne wersiýanyň okap bilmejek görnüşinde üýtgedip biler. Ony diňe abatlap bilýän hub-yňyzda gurnaň.",
     confirm: "Häzir täzelemek",
     confirmDev: "Şonda-da gurnamak",
     startFailed: "Täzelemäni başlap bolmady",
@@ -552,7 +563,8 @@ export default {
     later: "Soňra",
     openSettings: "Sazlamalary açmak",
     updateNow: "Häzir täzelemek",
-    promptManual: "Bu serwerde awtomatik täzelenmeler sazlanmadyk. Ony nähili täzelemelidigini görmek üçin sazlamalary açyň.",
+    promptManual:
+      "Bu serwerde awtomatik täzelenmeler sazlanmadyk. Ony nähili täzelemelidigini görmek üçin sazlamalary açyň.",
   },
   error: {
     unreachable: "Hub-a ýetip bolmady.",

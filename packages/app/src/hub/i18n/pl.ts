@@ -45,6 +45,7 @@ export default {
     open: "Otwórz ten folder",
     parent: "Folder nadrzędny",
     noFolders: "Brak folderów",
+    needsMachine: "Dostępne po dołączeniu maszyny",
     detach: "Usuń maszynę",
   },
   chat: {
@@ -67,8 +68,11 @@ export default {
     noProviders: "Nie ma jeszcze dostępnego modelu. Najpierw dodaj dostawcę.",
     openSettings: "Otwórz ustawienia",
     placeholder: "Zadaj pytanie",
-    send: "Wyślij",
     stop: "Zatrzymaj",
+    placeholderMachine: "Zapytaj o cokolwiek, / dla poleceń, @ dla plików, ! dla powłoki",
+    running: (machine: string) => `Uruchamianie na ${machine}…`,
+    runFailed: "Uruchomienie na maszynie nie powiodło się",
+    attachRejected: "Można załączać tylko obrazy i pliki PDF, i to tylko dla modelu, który potrafi je odczytać.",
   },
   login: {
     title: "Zaloguj się do huba",
@@ -236,8 +240,7 @@ export default {
     deleteConfirm: "Usuń",
     deleting: (name: string) => `Usuwanie ${name}`,
     newTitle: "Nowa instancja w chmurze",
-    newDescription:
-      "Serwer chmurowy klonuje gotową maszynę, uruchamia ją i paruje z hubem. Zajmuje to kilka minut.",
+    newDescription: "Serwer chmurowy klonuje gotową maszynę, uruchamia ją i paruje z hubem. Zajmuje to kilka minut.",
     name: "Nazwa",
     server: "Serwer chmurowy",
     cpu: "CPU",
@@ -270,8 +273,7 @@ export default {
     revoked: (name: string) => `Serwer ${name} został unieważniony`,
     revokeFailed: "Nie udało się unieważnić serwera chmurowego",
     linkTitle: "Połącz serwer chmurowy",
-    linkDescription:
-      "Na serwerze LXD, z zainstalowanym i skonfigurowanym agent-hub-lxd (zobacz jego README):",
+    linkDescription: "Na serwerze LXD, z zainstalowanym i skonfigurowanym agent-hub-lxd (zobacz jego README):",
     step1: "Dołącz do huba, a następnie wpisz ten jednorazowy kod po wyświetleniu prośby",
     step2: "Następnie uruchom agenta",
     codeFailed: "Nie udało się utworzyć kodu",
@@ -416,8 +418,7 @@ export default {
     title: "Konektory MCP",
     description:
       "Twoje zdalne serwery MCP. Twoje maszyny łączą się z nimi przez huba, który dodaje zapisane tutaj nagłówki lub logowanie, zaszyfrowane Twoim własnym kluczem. Każdy z nich pojawia się na Twoich maszynach jako serwer MCP hub-<id>.",
-    lockedDescription:
-      "Twoje maszyny otrzymują od huba błąd dla tych konektorów, dopóki nie zalogujesz się ponownie.",
+    lockedDescription: "Twoje maszyny otrzymują od huba błąd dla tych konektorów, dopóki nie zalogujesz się ponownie.",
     add: "Dodaj konektor",
     headersBadge: (count: number) => (count === 1 ? "1 nagłówek" : `Nagłówków: ${count}`),
     oauthConnected: "Zalogowano",

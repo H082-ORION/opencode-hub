@@ -8,12 +8,19 @@ const POLL_EVERY = 2000
 /** Failed polls in a row before giving up: long enough for a machine to reconnect. */
 const MAX_POLL_FAILURES = 150
 const MAX_RESULT = 60_000
+const MAX_SHELL_OUTPUT = 20_000
+const MAX_FOUND = 50
+/** How long a shell command has to be refused before it is reported as running: the machine answers when it ends. */
+const SHELL_GRACE = 1000
+/** Polls in a row without the remote session working before a command that started no agent run counts as done. */
+const SETTLED_POLLS = 2
 /** The agent's own route for creating a folder. */
 const MKDIR = "/__hub/mkdir"
 
-const MACHINE = /^chat-machines\/([^/]+)\/(projects|directories)$/
-const TARGET = /^chat-targets\/([A-Za-z0-9_-]+)$/
+const MACHINE = /^chat-machines\/([^/]+)\/(projects|directories|commands|files)$/
+const TARGET = /^chat-targets\/([A-Za-z0-9_-]+)(?:\/(command|shell|run))?$/
 const FOLDER_NAME = /^(?!\.{1,2}$)[^/\\\0]{1,255}$/
+const COMMAND_NAME = /^[^\s/]\S{0,199}$/
 const DENIED_REPLY =
   "No one can approve this from the hub. Carry on without it, or say what you need in your final message."
 
@@ -47,15 +54,38 @@ const decodeAdmitted = Schema.decodeUnknownOption(
   Schema.fromJsonString(Schema.Struct({ data: Schema.Struct({ time: Schema.Struct({ created: Schema.Number }) }) })),
 )
 const Message = Schema.Struct({
+  id: Schema.optional(Schema.String),
   type: Schema.String,
   time: Schema.Struct({ created: Schema.Number }),
   outcome: Schema.optional(Schema.String),
   content: Schema.optional(Schema.Array(Schema.Struct({ type: Schema.String, text: Schema.optional(Schema.String) }))),
+  command: Schema.optional(Schema.String),
+  status: Schema.optional(Schema.String),
+  exit: Schema.optional(Schema.Number),
+  output: Schema.optional(Schema.Struct({ output: Schema.String, truncated: Schema.optional(Schema.Boolean) })),
 })
 const decodeMessages = Schema.decodeUnknownOption(Schema.fromJsonString(Schema.Struct({ data: Schema.Array(Message) })))
 const decodePermissions = Schema.decodeUnknownOption(
   Schema.fromJsonString(Schema.Struct({ data: Schema.Array(Schema.Struct({ id: Schema.String })) })),
 )
+const decodeCommands = Schema.decodeUnknownOption(
+  Schema.fromJsonString(
+    Schema.Struct({
+      data: Schema.Array(Schema.Struct({ name: Schema.String, description: Schema.optional(Schema.String) })),
+    }),
+  ),
+)
+const decodeCommandRun = Schema.decodeUnknownOption(
+  Schema.fromJsonString(Schema.Struct({ name: Schema.String, arguments: Schema.optional(Schema.String) })),
+)
+const decodeShellRun = Schema.decodeUnknownOption(Schema.fromJsonString(Schema.Struct({ command: Schema.String })))
+const decodeActive = Schema.decodeUnknownOption(
+  Schema.fromJsonString(Schema.Struct({ data: Schema.Record(Schema.String, Schema.Unknown) })),
+)
+const decodeTag = Schema.decodeUnknownOption(Schema.fromJsonString(Schema.Struct({ _tag: Schema.String })))
+
+type Call = (method: string, path: string, body?: unknown) => Promise<Response>
+type Task = { user: string; session: string; signal: AbortSignal }
 
 type Request_ = {
   user: string
@@ -75,9 +105,21 @@ export function create(input: {
   store: Store.Instance
   request: (request: Request_) => Promise<Response>
   online: (machine: string) => boolean
-  model: (user: string, session: string) => Promise<{ id: string; providerID: string } | undefined>
+  model: (user: string, session: string) => Promise<{ id: string; providerID: string; variant?: string } | undefined>
+  /** The data-URI files of the last user message of a chat session. */
+  files: (user: string, session: string) => Promise<readonly { uri: string; name?: string }[]>
+  /** Adds a message to a chat session without starting the model. */
+  record: (user: string, session: string, message: { text: string; description: string }) => Promise<unknown>
+  log?: (message: string) => void
+  /** Milliseconds between polls of a machine's session; tests shorten it. */
+  pollEvery?: number
 }) {
   const store = input.store
+  const pollEvery = input.pollEvery ?? POLL_EVERY
+  /** Commands and shell commands running from a chat session, by user and session. */
+  const runs = new Map<string, AbortController>()
+  /** Why the last one failed, by user and session, until the next one starts. */
+  const failures = new Map<string, string>()
 
   return {
     async handle(request: Request, route: string, current: Current) {
@@ -85,7 +127,7 @@ export function create(input: {
       const machine = MACHINE.exec(route)
       if (machine) return machines(request, user, decodeURIComponent(machine[1]!), machine[2]!)
       const target = TARGET.exec(route)
-      if (target) return targets(request, user, target[1]!)
+      if (target) return targets(request, user, target[1]!, target[2])
       return undefined
     },
 
@@ -106,7 +148,49 @@ export function create(input: {
     if (kind === "directories" && request.method === "GET")
       return directories(user, machine, new URL(request.url).searchParams.get("path") ?? undefined)
     if (kind === "directories" && request.method === "POST") return createDirectory(request, user, machine)
+    if (kind === "commands" && request.method === "GET") return commands(request, user, machine)
+    if (kind === "files" && request.method === "GET") return files(request, user, machine)
     return json(404, { error: "Not found." })
+  }
+
+  async function commands(request: Request, user: string, machine: string) {
+    const directory = new URL(request.url).searchParams.get("directory")
+    if (!directory?.startsWith("/")) return json(400, { error: "Expected an absolute directory." })
+    const response = await input.request({
+      user,
+      machine,
+      method: "GET",
+      path: `/api/command?${new URLSearchParams({ "location[directory]": directory })}`,
+    })
+    if (!response.ok) return passError(response)
+    const parsed = Option.getOrUndefined(decodeCommands(await response.text()))
+    return json(200, {
+      data: (parsed?.data ?? []).map((command) => ({
+        name: command.name,
+        ...(command.description === undefined ? {} : { description: command.description }),
+      })),
+    })
+  }
+
+  async function files(request: Request, user: string, machine: string) {
+    const search = new URL(request.url).searchParams
+    const directory = search.get("directory")
+    if (!directory?.startsWith("/")) return json(400, { error: "Expected an absolute directory." })
+    const query = new URLSearchParams({
+      query: search.get("query") ?? "",
+      type: "file",
+      limit: String(MAX_FOUND),
+      "location[directory]": directory,
+    })
+    const response = await input.request({ user, machine, method: "GET", path: `/api/fs/find?${query}` })
+    if (!response.ok) return passError(response)
+    const parsed = Option.getOrUndefined(decodeEntries(await response.text()))
+    return json(200, {
+      data: (parsed?.data ?? [])
+        .filter((entry) => entry.type === "file")
+        .map((entry) => entry.path)
+        .slice(0, MAX_FOUND),
+    })
   }
 
   async function projects(user: string, machine: string) {
@@ -167,10 +251,15 @@ export function create(input: {
     return json(200, { directory })
   }
 
-  async function targets(request: Request, user: string, session: string) {
+  async function targets(request: Request, user: string, session: string, action: string | undefined) {
+    if (action === "run" && request.method === "DELETE") return stop(user, session)
+    if (action !== undefined && request.method === "POST") return launch(request, user, session, action)
+    if (action !== undefined) return json(404, { error: "Not found." })
     if (request.method === "GET") {
       const target = store.chatTarget(user, session)
-      if (!target) return json(200, { target: null })
+      const failure = failures.get(runKey(user, session))
+      const state = { running: runs.has(runKey(user, session)), ...(failure === undefined ? {} : { error: failure }) }
+      if (!target) return json(200, { target: null, ...state })
       const machine = store.machine(target.machine_id)
       return json(200, {
         target: {
@@ -179,6 +268,7 @@ export function create(input: {
           directory: target.directory,
           online: input.online(target.machine_id),
         },
+        ...state,
       })
     }
     if (request.method === "PUT") {
@@ -198,14 +288,15 @@ export function create(input: {
   }
 
   /** Runs one request in the target's session on the machine and waits for its final message. */
-  async function run(task: { user: string; session: string; prompt: string; signal: AbortSignal }) {
-    const target = store.chatTarget(task.user, task.session)
-    if (!target)
-      throw new Error("No machine is attached to this conversation. Ask the user to attach one with the + button.")
-    const call = (method: string, path: string, body?: unknown) =>
-      input.request({ user: task.user, machine: target.machine_id, method, path, body, signal: task.signal })
-    const remote = target.remote_session ?? (await startSession(task, target, call))
-    const sent = await call("POST", `/api/session/${remote}/prompt`, { text: task.prompt })
+  async function run(task: Task & { prompt: string; images?: boolean }) {
+    const target = requireTarget(task)
+    const call = caller(task, target)
+    const remote = await prepareSession(task, target, call)
+    const files = task.images ? await input.files(task.user, task.session) : []
+    const sent = await call("POST", `/api/session/${remote}/prompt`, {
+      text: task.prompt,
+      ...(files.length > 0 ? { files } : {}),
+    })
     if (sent.status === 404 && target.remote_session) {
       // The session is gone from the machine: the conversation continues in a new one.
       store.setChatRemoteSession(task.user, task.session, null)
@@ -215,14 +306,135 @@ export function create(input: {
     const admitted = Option.getOrUndefined(decodeAdmitted(await sent.text()))
     if (!admitted) throw new Error("The machine did not accept the task.")
     task.signal.addEventListener("abort", () => void interrupt(task, target, remote), { once: true })
-    return wait(call, remote, admitted.data.time.created, task.signal)
+    return wait(call, remote, admitted.data.time.created, task.signal, false)
   }
 
-  async function startSession(
-    task: { user: string; session: string },
-    target: Store.ChatTarget,
-    call: (method: string, path: string, body?: unknown) => Promise<Response>,
-  ) {
+  /**
+   * Starts a slash command or a shell command in the background and answers once the machine has taken it: 202, or
+   * the refusal. Its result is added to the hub's conversation when it ends.
+   */
+  async function launch(request: Request, user: string, session: string, action: string) {
+    const body = await request.text()
+    const command = action === "command" ? Option.getOrUndefined(decodeCommandRun(body)) : undefined
+    const shell = action === "shell" ? Option.getOrUndefined(decodeShellRun(body))?.command.trim() : undefined
+    if (action === "command" && !(command && COMMAND_NAME.test(command.name)))
+      return json(400, { error: "Expected { name, arguments }." })
+    if (action === "shell" && !shell) return json(400, { error: "Expected { command }." })
+    const target = store.chatTarget(user, session)
+    if (!target) return json(404, { error: "No machine is attached to this conversation." })
+    if (!input.online(target.machine_id)) return json(409, { error: "This machine is not connected to the hub." })
+    const key = runKey(user, session)
+    if (runs.has(key)) return json(409, { error: "Something is already running in this conversation." })
+    const controller = new AbortController()
+    runs.set(key, controller)
+    failures.delete(key)
+    const machine = store.machine(target.machine_id)?.name ?? target.machine_id
+    const task = { user, session, signal: controller.signal }
+    const accepted = Promise.withResolvers<void>()
+    const title = command
+      ? `/${[command.name, command.arguments?.trim()].filter(Boolean).join(" ")} — ${machine}`
+      : `$ ${shell} — ${machine}`
+    if (shell) input.log?.(`hub chat: ${user} runs a shell command on ${machine} in ${target.directory}: ${shell}`)
+    const settled = (
+      command ? runCommand(task, command, accepted.resolve) : runShell(task, shell ?? "", accepted.resolve)
+    ).then(
+      (text) => ({ text }),
+      (error: unknown) => ({ error }),
+    )
+    const early = await Promise.race([accepted.promise.then(() => undefined), settled])
+    if (early && "error" in early) {
+      runs.delete(key)
+      return json(early.error instanceof Refusal ? early.error.status : 502, { error: describe(early.error) })
+    }
+    void settled.then(async (outcome) => {
+      const stopped = controller.signal.aborted
+      if ("error" in outcome && !stopped) failures.set(key, describe(outcome.error))
+      const result = stopped ? "Stopped." : "error" in outcome ? `Failed: ${describe(outcome.error)}` : outcome.text
+      await input.record(user, session, { description: title, text: `${title}\n\n${result}` }).catch(() => undefined)
+      runs.delete(key)
+    })
+    return json(202, { running: true })
+  }
+
+  async function stop(user: string, session: string) {
+    const controller = runs.get(runKey(user, session))
+    const target = store.chatTarget(user, session)
+    if (controller) controller.abort()
+    if (!controller && target?.remote_session) await interrupt({ user }, target, target.remote_session)
+    return new Response(null, { status: 204 })
+  }
+
+  async function runCommand(task: Task, command: { name: string; arguments?: string }, accept: () => void) {
+    const target = requireTarget(task)
+    const call = caller(task, target)
+    const remote = await prepareSession(task, target, call)
+    const since = await latestTime(call, remote)
+    const sent = await call("POST", `/api/session/${remote}/command`, {
+      name: command.name,
+      text: command.arguments ?? "",
+    })
+    if (sent.status === 404) {
+      const tag = Option.getOrUndefined(decodeTag(await sent.text()))?._tag
+      if (tag === "CommandNotFoundError") throw new Refusal(404, `The machine has no command /${command.name}.`)
+      if (tag === "SessionNotFoundError" && target.remote_session) {
+        store.setChatRemoteSession(task.user, task.session, null)
+        return runCommand(task, command, accept)
+      }
+      throw new Refusal(409, "Update the agent on this machine to run commands from the hub.")
+    }
+    if (!sent.ok) throw new Refusal(502, await failureText(sent))
+    accept()
+    task.signal.addEventListener("abort", () => void interrupt(task, target, remote), { once: true })
+    // A command may only run a callback and start no agent run: then it is done once the session stays quiet.
+    return wait(call, remote, since + 1, task.signal, true)
+  }
+
+  async function runShell(task: Task, command: string, accept: () => void): Promise<string> {
+    const target = requireTarget(task)
+    const call = caller(task, target)
+    const remote = target.remote_session ?? (await startSession(task, target, call))
+    const before = await shellIDs(call, remote)
+    const posting = call("POST", `/api/session/${remote}/shell`, { command })
+    // The machine answers once the command has ended, so only a quick answer can be a refusal.
+    const early = await Promise.race([posting, Bun.sleep(SHELL_GRACE)])
+    if (early && early.status === 404) {
+      const tag = Option.getOrUndefined(decodeTag(await early.text()))?._tag
+      if (tag === "SessionNotFoundError" && target.remote_session) {
+        store.setChatRemoteSession(task.user, task.session, null)
+        return runShell(task, command, accept)
+      }
+      throw new Refusal(409, "Update the agent on this machine to run shell commands from the hub.")
+    }
+    if (early && !early.ok) throw new Refusal(502, await failureText(early))
+    accept()
+    task.signal.addEventListener("abort", () => void interrupt(task, target, remote), { once: true })
+    const sent = early ?? (await posting)
+    if (!sent.ok) throw new Error(await failureText(sent))
+    return shellResult(call, remote, command, before, task.signal)
+  }
+
+  function requireTarget(task: Task) {
+    const target = store.chatTarget(task.user, task.session)
+    if (!target)
+      throw new Error("No machine is attached to this conversation. Ask the user to attach one with the + button.")
+    return target
+  }
+
+  function caller(task: Task, target: Store.ChatTarget): Call {
+    return (method, path, body) =>
+      input.request({ user: task.user, machine: target.machine_id, method, path, body, signal: task.signal })
+  }
+
+  /** The target's session on the machine, created on first use, otherwise switched to the chat's current model. */
+  async function prepareSession(task: Task, target: Store.ChatTarget, call: Call) {
+    if (!target.remote_session) return startSession(task, target, call)
+    const model = await input.model(task.user, task.session)
+    // Best effort: a session that is gone answers the prompt that follows with 404.
+    if (model) await call("POST", `/api/session/${target.remote_session}/model`, { model }).catch(() => undefined)
+    return target.remote_session
+  }
+
+  async function startSession(task: { user: string; session: string }, target: Store.ChatTarget, call: Call) {
     const model = await input.model(task.user, task.session)
     const response = await call("POST", "/api/session", {
       title: "Hub task",
@@ -250,36 +462,72 @@ export function create(input: {
       .catch(() => undefined)
   }
 
-  async function wait(
-    call: (method: string, path: string, body?: unknown) => Promise<Response>,
-    remote: string,
-    since: number,
-    signal: AbortSignal,
-  ) {
-    const failures = { count: 0 }
+  async function wait(call: Call, remote: string, since: number, signal: AbortSignal, settle: boolean) {
+    const counts = { missed: 0, quiet: 0 }
     while (!signal.aborted) {
-      await Bun.sleep(POLL_EVERY)
-      const response = await call("GET", `/api/session/${remote}/message?limit=30`).catch(() => undefined)
-      const messages = response?.ok ? Option.getOrUndefined(decodeMessages(await response.text())) : undefined
+      await Bun.sleep(pollEvery)
+      const messages = await readMessages(call, remote)
       if (!messages) {
-        failures.count += 1
-        if (failures.count >= MAX_POLL_FAILURES) throw new Error("The machine stopped answering while it was working.")
+        counts.missed += 1
+        if (counts.missed >= MAX_POLL_FAILURES) throw new Error("The machine stopped answering while it was working.")
         continue
       }
-      failures.count = 0
+      counts.missed = 0
       await rejectPermissions(call, remote)
-      const latest = messages.data[0]
-      if (latest?.type !== "idle" || latest.time.created < since) continue
-      return finalMessage(messages.data, latest.outcome)
+      const latest = messages[0]
+      if (latest?.type === "idle" && latest.time.created >= since) return finalMessage(messages, latest.outcome)
+      if (!settle) continue
+      counts.quiet = (await isActive(call, remote)) ? 0 : counts.quiet + 1
+      if (counts.quiet >= SETTLED_POLLS)
+        return finalMessage(
+          messages.filter((message) => message.time.created >= since),
+          undefined,
+        )
     }
     throw new Error("The task was interrupted.")
   }
 
+  async function shellResult(call: Call, remote: string, command: string, before: Set<string>, signal: AbortSignal) {
+    const counts = { missed: 0 }
+    while (!signal.aborted) {
+      const messages = await readMessages(call, remote)
+      counts.missed = messages ? 0 : counts.missed + 1
+      if (counts.missed >= MAX_POLL_FAILURES) throw new Error("The machine stopped answering while it was working.")
+      const shell = messages?.find(
+        (message) => message.type === "shell" && message.command === command && !before.has(message.id ?? ""),
+      )
+      if (shell && shell.status !== "running") return shellText(shell)
+      await Bun.sleep(pollEvery)
+    }
+    throw new Error("The command was interrupted.")
+  }
+
+  async function shellIDs(call: Call, remote: string) {
+    const messages = await readMessages(call, remote)
+    return new Set(messages?.flatMap((message) => (message.type === "shell" && message.id ? [message.id] : [])))
+  }
+
+  async function latestTime(call: Call, remote: string) {
+    const response = await call("GET", `/api/session/${remote}/message?limit=1`)
+    if (!response.ok && response.status !== 404) throw new Refusal(502, await failureText(response))
+    const messages = response.ok ? Option.getOrUndefined(decodeMessages(await response.text())) : undefined
+    return messages?.data[0]?.time.created ?? 0
+  }
+
+  async function readMessages(call: Call, remote: string) {
+    const response = await call("GET", `/api/session/${remote}/message?limit=30`).catch(() => undefined)
+    return response?.ok ? Option.getOrUndefined(decodeMessages(await response.text()))?.data : undefined
+  }
+
+  async function isActive(call: Call, remote: string) {
+    const response = await call("GET", "/api/session/active").catch(() => undefined)
+    const active = response?.ok ? Option.getOrUndefined(decodeActive(await response.text())) : undefined
+    // Unknown counts as working, so a machine that does not answer never ends a command early.
+    return active === undefined || remote in active.data
+  }
+
   /** Nobody can answer a permission prompt from the hub, and an unanswered one would stall the task forever. */
-  async function rejectPermissions(
-    call: (method: string, path: string, body?: unknown) => Promise<Response>,
-    remote: string,
-  ) {
+  async function rejectPermissions(call: Call, remote: string) {
     const response = await call("GET", `/api/session/${remote}/permission`).catch(() => undefined)
     if (!response?.ok) return
     const pending = Option.getOrUndefined(decodePermissions(await response.text()))
@@ -307,6 +555,33 @@ function finalMessage(messages: readonly (typeof Message.Type)[], outcome: strin
     return `The agent stopped before finishing (${outcome}).${text ? ` Its last message:\n\n${text}` : ""}`
   if (!text) return "The agent finished without a final message."
   return text.length > MAX_RESULT ? `${text.slice(0, MAX_RESULT)}\n\n[Truncated]` : text
+}
+
+function shellText(message: typeof Message.Type) {
+  const status = message.exit === undefined ? `Ended: ${message.status ?? "unknown"}.` : `Exit code ${message.exit}.`
+  const output = message.output?.output ?? ""
+  if (!output) return status
+  const clipped = output.length > MAX_SHELL_OUTPUT || message.output?.truncated === true
+  const shown = output.length > MAX_SHELL_OUTPUT ? output.slice(-MAX_SHELL_OUTPUT) : output
+  return `${status}\n\n${clipped ? "[Truncated]\n" : ""}\`\`\`\n${shown}\n\`\`\``
+}
+
+function runKey(user: string, session: string) {
+  return `${user}\n${session}`
+}
+
+function describe(error: unknown) {
+  return error instanceof Error ? error.message : String(error)
+}
+
+/** A run the machine refused before it started, answered to the browser with this status. */
+class Refusal extends Error {
+  constructor(
+    readonly status: number,
+    message: string,
+  ) {
+    super(message)
+  }
 }
 
 function baseName(file: string) {
