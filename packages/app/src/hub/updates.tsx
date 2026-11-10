@@ -8,7 +8,7 @@ import { Loader } from "@opencode/ui/loader"
 import { Switch } from "@opencode/ui/switch"
 import { createEffect, createSignal, For, on, onCleanup, onMount, Show } from "solid-js"
 import { CommandLine } from "./add-machine"
-import { errorText, hubApi, type HubRelease, type HubUpdates } from "./api"
+import { errorText, HubError, hubApi, type HubRelease, type HubUpdates } from "./api"
 import { copy } from "./copy"
 import type { Fail } from "./dashboard"
 
@@ -55,8 +55,9 @@ export function UpdatesSettings(props: { fail: Fail }) {
               setRestarting(false)
               setUpdates(next)
             },
-            // The hub cannot answer while it restarts.
-            () => setRestarting(true),
+            // The hub cannot answer while it restarts, then has forgotten the sign-in: reloading lands on the login.
+            (error: unknown) =>
+              error instanceof HubError && error.status === 401 ? location.reload() : setRestarting(true),
           ),
         POLL,
       )
@@ -411,8 +412,9 @@ function InstallDialog(props: { release: HubRelease; confirmed?: boolean; onUpda
               setMessage(updates.status.message || copy.updates.failedHint)
               setPhase("failed")
             },
-            // The hub cannot answer while it restarts.
-            () => setRestarting(true),
+            // The hub cannot answer while it restarts, then has forgotten the sign-in: reloading lands on the login.
+            (error: unknown) =>
+              error instanceof HubError && error.status === 401 ? location.reload() : setRestarting(true),
           ),
         POLL,
       )
