@@ -117,10 +117,16 @@ export function HubComposer(props: {
     const skills = [
       ...new Set([...prompt.flatMap((part) => (part.type === "skill" ? [String(part.name)] : [])), ...typed]),
     ]
+    // `/skill args` sends its arguments, or the skill's name alone, since a model may refuse an empty message.
     const request: HubSubmit =
       state.mode === "shell"
         ? { type: "shell", command: text }
-        : (command ?? { type: "prompt", text, files, skills: skills.length > 0 ? skills : undefined })
+        : (command ?? {
+            type: "prompt",
+            text: slash && typed.length > 0 ? slash.input || slash.name : text,
+            files,
+            skills: skills.length > 0 ? skills : undefined,
+          })
     clear()
     void props.onSubmit(request).then((sent) => {
       if (!sent) setState({ prompt, cursor: promptLength(prompt) })

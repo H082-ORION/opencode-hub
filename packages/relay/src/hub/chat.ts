@@ -5,6 +5,7 @@ import { Option, Schema } from "effect"
 import type { Local } from "../agent/index.js"
 import { Instances } from "../agent/instances.js"
 import { Skills } from "../skills.js"
+import type { ChatMachines } from "./chat-machines.js"
 import { json, type Current } from "./accounts.js"
 import { Store } from "./store.js"
 
@@ -228,11 +229,12 @@ export function create(input: {
     },
 
     /** Adds a message to a chat session for the model to read at its next prompt, without starting it. */
-    async record(user: string, session: string, message: { text: string; description: string }) {
+    async record(user: string, session: string, message: ChatMachines.Recorded) {
       if (!SESSION_ID.test(session)) return json(400, { error: "Invalid session." })
       return forward(await instance(user), "POST", `api/session/${session}/synthetic`, "", {
         text: message.text,
         description: message.description,
+        metadata: message.metadata,
         resume: false,
       })
     },

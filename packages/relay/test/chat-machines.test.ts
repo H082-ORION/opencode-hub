@@ -102,7 +102,7 @@ const chat = ChatMachines.create({
   log: (message) => logged.push(message),
   pollEvery: 5,
 })
-const recorded: { user: string; session: string; text: string; description: string }[] = []
+const recorded: ({ user: string; session: string } & ChatMachines.Recorded)[] = []
 const logged: string[] = []
 
 const current = { session: "s", user: { id: USER } } as unknown as Parameters<typeof chat.handle>[2]
@@ -310,7 +310,20 @@ describe("commands run from the chat", () => {
       body: { name: "review", text: "src" },
     })
     expect(recorded).toEqual([
-      { user: USER, session: SESSION, description: "/review src — m1", text: "/review src — m1\n\nReviewed" },
+      {
+        user: USER,
+        session: SESSION,
+        description: "/review src — m1",
+        text: "/review src — m1\n\nReviewed",
+        metadata: {
+          source: "hub-machine",
+          kind: "command",
+          machine: "m1",
+          command: "/review src",
+          state: "completed",
+          output: "Reviewed",
+        },
+      },
     ])
   })
 
@@ -326,6 +339,17 @@ describe("commands run from the chat", () => {
     })
     expect(logged).toEqual([expect.stringContaining("ls")])
     expect(recorded[0]!.text).toBe("$ ls — m1\n\nExit code 0.\n\n```\nREADME.md\n\n```")
+    // The hub's timeline shows the run as a shell command from this.
+    expect(recorded[0]!.metadata).toEqual({
+      source: "hub-machine",
+      kind: "shell",
+      machine: "m1",
+      command: "ls",
+      state: "completed",
+      output: "README.md\n",
+      exit: 0,
+      truncated: false,
+    })
   })
 
   test("needs an attached machine that is online", async () => {
@@ -350,6 +374,7 @@ describe("commands run from the chat", () => {
     expect(after.error).toBeUndefined()
     expect(machine.calls).toContainEqual({ method: "POST", path: "/api/session/ses_remote/interrupt", body: {} })
     expect(recorded[0]!.text).toContain("Stopped.")
+    expect(recorded[0]!.metadata).toMatchObject({ kind: "shell", command: "sleep 10", state: "cancelled" })
   })
 
   test("an agent without the route is asked to be updated", async () => {

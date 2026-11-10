@@ -10,6 +10,8 @@ const MAX_POLL_FAILURES = 150
 const MAX_RESULT = 60_000
 const MAX_SHELL_OUTPUT = 20_000
 const MAX_FOUND = 50
+/** `metadata.source` of the messages that record a command or shell command run on a machine from the hub's chat. */
+const RECORD_SOURCE = "hub-machine"
 /** How long a shell command has to be refused before it is reported as running: the machine answers when it ends. */
 const SHELL_GRACE = 1000
 /** Polls in a row without the remote session working before a command that started no agent run counts as done. */
@@ -86,6 +88,7 @@ const decodeTag = Schema.decodeUnknownOption(Schema.fromJsonString(Schema.Struct
 
 type Call = (method: string, path: string, body?: unknown) => Promise<Response>
 type Task = { user: string; session: string; signal: AbortSignal }
+export type Recorded = { text: string; description: string; metadata: Record<string, unknown> }
 
 type Request_ = {
   user: string
@@ -109,7 +112,7 @@ export function create(input: {
   /** The data-URI files of the last user message of a chat session. */
   files: (user: string, session: string) => Promise<readonly { uri: string; name?: string }[]>
   /** Adds a message to a chat session without starting the model. */
-  record: (user: string, session: string, message: { text: string; description: string }) => Promise<unknown>
+  record: (user: string, session: string, message: Recorded) => Promise<unknown>
   log?: (message: string) => void
   /** Milliseconds between polls of a machine's session; tests shorten it. */
   pollEvery?: number
@@ -331,14 +334,18 @@ export function create(input: {
     const machine = store.machine(target.machine_id)?.name ?? target.machine_id
     const task = { user, session, signal: controller.signal }
     const accepted = Promise.withResolvers<void>()
-    const title = command
-      ? `/${[command.name, command.arguments?.trim()].filter(Boolean).join(" ")} — ${machine}`
-      : `$ ${shell} — ${machine}`
+    const invoked = command ? `/${[command.name, command.arguments?.trim()].filter(Boolean).join(" ")}` : (shell ?? "")
+    const title = command ? `${invoked} — ${machine}` : `$ ${invoked} — ${machine}`
     if (shell) input.log?.(`hub chat: ${user} runs a shell command on ${machine} in ${target.directory}: ${shell}`)
     const settled = (
-      command ? runCommand(task, command, accepted.resolve) : runShell(task, shell ?? "", accepted.resolve)
+      command
+        ? runCommand(task, command, accepted.resolve).then((text) => ({ text, shown: { output: text } }))
+        : runShell(task, shell ?? "", accepted.resolve).then((message) => ({
+            text: shellText(message),
+            shown: { exit: message.exit, ...shellOutput(message) },
+          }))
     ).then(
-      (text) => ({ text }),
+      (result) => ({ result }),
       (error: unknown) => ({ error }),
     )
     const early = await Promise.race([accepted.promise.then(() => undefined), settled])
@@ -349,8 +356,20 @@ export function create(input: {
     void settled.then(async (outcome) => {
       const stopped = controller.signal.aborted
       if ("error" in outcome && !stopped) failures.set(key, describe(outcome.error))
-      const result = stopped ? "Stopped." : "error" in outcome ? `Failed: ${describe(outcome.error)}` : outcome.text
-      await input.record(user, session, { description: title, text: `${title}\n\n${result}` }).catch(() => undefined)
+      const failed = "error" in outcome ? `Failed: ${describe(outcome.error)}` : undefined
+      const text = stopped ? "Stopped." : (failed ?? ("result" in outcome ? outcome.result.text : ""))
+      // The model reads the text; the hub's timeline shows the run from the metadata.
+      const metadata = {
+        source: RECORD_SOURCE,
+        kind: command ? "command" : "shell",
+        machine,
+        command: invoked,
+        state: stopped ? "cancelled" : failed ? "error" : "completed",
+        ...("result" in outcome && !stopped ? outcome.result.shown : { output: text }),
+      }
+      await input
+        .record(user, session, { description: title, text: `${title}\n\n${text}`, metadata })
+        .catch(() => undefined)
       runs.delete(key)
     })
     return json(202, { running: true })
@@ -389,7 +408,7 @@ export function create(input: {
     return wait(call, remote, since + 1, task.signal, true)
   }
 
-  async function runShell(task: Task, command: string, accept: () => void): Promise<string> {
+  async function runShell(task: Task, command: string, accept: () => void): Promise<typeof Message.Type> {
     const target = requireTarget(task)
     const call = caller(task, target)
     const remote = target.remote_session ?? (await startSession(task, target, call))
@@ -496,7 +515,7 @@ export function create(input: {
       const shell = messages?.find(
         (message) => message.type === "shell" && message.command === command && !before.has(message.id ?? ""),
       )
-      if (shell && shell.status !== "running") return shellText(shell)
+      if (shell && shell.status !== "running") return shell
       await Bun.sleep(pollEvery)
     }
     throw new Error("The command was interrupted.")
@@ -559,11 +578,18 @@ function finalMessage(messages: readonly (typeof Message.Type)[], outcome: strin
 
 function shellText(message: typeof Message.Type) {
   const status = message.exit === undefined ? `Ended: ${message.status ?? "unknown"}.` : `Exit code ${message.exit}.`
+  const shown = shellOutput(message)
+  if (!shown.output) return status
+  return `${status}\n\n${shown.truncated ? "[Truncated]\n" : ""}\`\`\`\n${shown.output}\n\`\`\``
+}
+
+/** The end of a shell command's output, at most `MAX_SHELL_OUTPUT` characters. */
+function shellOutput(message: typeof Message.Type) {
   const output = message.output?.output ?? ""
-  if (!output) return status
-  const clipped = output.length > MAX_SHELL_OUTPUT || message.output?.truncated === true
-  const shown = output.length > MAX_SHELL_OUTPUT ? output.slice(-MAX_SHELL_OUTPUT) : output
-  return `${status}\n\n${clipped ? "[Truncated]\n" : ""}\`\`\`\n${shown}\n\`\`\``
+  return {
+    output: output.length > MAX_SHELL_OUTPUT ? output.slice(-MAX_SHELL_OUTPUT) : output,
+    truncated: output.length > MAX_SHELL_OUTPUT || message.output?.truncated === true,
+  }
 }
 
 function runKey(user: string, session: string) {

@@ -23,6 +23,7 @@ import { ChatContext, type ChatEventMap, type ChatState } from "./chat-context"
 import { ChatSidePanel } from "./chat-context-panel"
 import { ChatHeader } from "./chat-header"
 import { projectName } from "./chat-machine"
+import { showMachineRuns } from "./chat-machine-runs"
 import { useChatNotifications } from "./chat-notify"
 import { ChatSidebar } from "./chat-sidebar"
 import { HubComposer, type HubSubmit } from "./composer"
@@ -354,9 +355,11 @@ function ChatScreen(props: { session: HubSession; onSignedOut: () => void }) {
   const document = createMemo(() => {
     const id = active()
     if (!id) return undefined
+    // An undone turn stays in the history until the next prompt commits the revert; like OpenCode, it is hidden.
+    const boundary = current()?.revert?.messageID
     return {
       sessionID: id,
-      messages: messages(),
+      messages: showMachineRuns(boundary ? messages().filter((message) => message.id < boundary) : messages()),
       status: busy() ? ({ type: "busy" } as const) : ({ type: "idle" } as const),
       diffs: [],
     }
