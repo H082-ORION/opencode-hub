@@ -12,6 +12,13 @@ See `specs/remote-machines.md` for the design.
   - `*.hub.example.com` A (and AAAA)
 - An `opencode` binary for the server's architecture.
 
+Some DNS providers (OVH, for example) cannot create `*.hub.example.com`, only `*.example.com`. Install with
+`--machine-domain example.com` (the root `install.sh` also asks, right after the hub domain) to serve machines at
+`https://<machine-id>.example.com` instead: the DNS records are then `hub.example.com` and `*.example.com`, the
+Caddyfile serves `hub.example.com, *.example.com`, and the hub service runs `opencode hub --machine-domain example.com`.
+Names declared in the zone (`www`, `mail`…) take priority over the wildcard, so they never reach the hub. A re-run
+keeps the machines' domain unless `--machine-domain` gives a new one; `./install.sh --status` shows it.
+
 No DNS provider credentials are needed. Caddy issues one certificate per hostname on demand (HTTP-01 or TLS-ALPN), and
 asks the hub (`/hub/tls-allowed`) first, so only the hub host and enrolled machines get certificates.
 
@@ -136,6 +143,6 @@ From a source checkout (`bun run dev hub`, `bun run dev agent run`), the machine
 - The on-demand ask endpoint must answer 200 for hosts that should get a certificate:
   `curl -i "http://127.0.0.1:4800/hub/tls-allowed?domain=hub.example.com"`. A 404 for a machine host means that machine
   is not enrolled; Caddy then refuses the TLS handshake.
-- Certificate errors that mention DNS or a timeout usually mean `*.hub.example.com` does not point at this server, or
-  ports 80/443 are blocked by a cloud firewall.
+- Certificate errors that mention DNS or a timeout usually mean `*.hub.example.com` (or `*.<machine-domain>`) does not
+  point at this server, or ports 80/443 are blocked by a cloud firewall.
 - Validate the Caddy config with `caddy validate --config /etc/caddy/Caddyfile`.

@@ -35,6 +35,12 @@ export type Options = {
   port?: number
   /** Public base URL; its host is the routing domain. Defaults to `http://localhost:<port>`. */
   url?: string
+  /**
+   * The domain machines live under, as a bare host (`example.com`, or `localhost:4800` with a port): machine `abc`
+   * opens at `<scheme>://abc.example.com`. Defaults to the host of `url`, so `abc.hub.example.com`. The hub's own host
+   * stays the hub even when it sits under this domain.
+   */
+  machineDomain?: string
   /** Directory holding `hub.db` and the OPAQUE server key; kept owner-only. */
   data: string
   /** Milliseconds between tunnel PINGs. */
@@ -92,6 +98,8 @@ const decodeChatGPTComplete = Schema.decodeUnknownOption(
 )
 
 export async function start(options: Options) {
+  const requestedMachineDomain =
+    options.machineDomain === undefined ? undefined : parseMachineDomain(options.machineDomain)
   const setup = await Accounts.loadServerSetup(options.data)
   const store = Store.open(options.data)
   const auth = Auth.create()
@@ -154,9 +162,13 @@ export async function start(options: Options) {
 
   const base = new URL(options.url ?? `http://localhost:${server.port}`)
   const domain = base.host.toLowerCase()
+  const machineDomain = requestedMachineDomain ?? domain
   const origin = base.origin
   const secure = base.protocol === "https:"
-  const machineOrigin = (id: string) => `${base.protocol}//${id}.${domain}`
+  const machineOrigin = (id: string) => `${base.protocol}//${id}.${machineDomain}`
+  /** The machine label a host names, or undefined when it is not under the machine domain. */
+  const machineLabel = (host: string) =>
+    host !== domain && host.endsWith(`.${machineDomain}`) ? host.slice(0, -machineDomain.length - 1) : undefined
   store.setSetting(URL_KEY, origin)
   const egress = Egress.create({
     options: options.mcp,
@@ -259,8 +271,10 @@ export async function start(options: Options) {
   async function handle(request: Request, server: Server<Tunnel.SocketData>) {
     const url = new URL(request.url)
     const host = (request.headers.get("host") ?? url.host).toLowerCase()
+    // The hub's own host first: it may sit under the machine domain (`hub.example.com` with machines on `example.com`).
     if (host === domain) return hubRoute(request, url, server)
-    if (host.endsWith(`.${domain}`)) return machineRoute(request, url, server, host.slice(0, -domain.length - 1))
+    const label = machineLabel(host)
+    if (label !== undefined) return machineRoute(request, url, server, label)
     // Direct requests such as Caddy's on-demand TLS check reach the hub by IP address.
     if (url.pathname === "/hub/health" || url.pathname === "/hub/tls-allowed") return hubRoute(request, url, server)
     // The chat instances call these over the loopback; every request still needs an instance token.
@@ -682,7 +696,8 @@ export async function start(options: Options) {
     if (!next || next.protocol !== base.protocol) return redirect("/")
     const host = next.host.toLowerCase()
     if (host === domain) return redirect(`${next.pathname}${next.search}`)
-    const machine = host.endsWith(`.${domain}`) ? store.machine(host.slice(0, -domain.length - 1)) : undefined
+    const label = machineLabel(host)
+    const machine = label === undefined ? undefined : store.machine(label)
     if (!machine || !canOpen(current.user, machine)) return redirect("/")
     const ticket = auth.createTicket(current.session, machine.id)
     const target = new URL(SESSION_PATH, machineOrigin(machine.id))
@@ -920,12 +935,24 @@ export async function start(options: Options) {
 
   function tlsAllowed(url: URL) {
     const requested = (url.searchParams.get("domain") ?? "").toLowerCase()
-    const hostname = base.hostname.toLowerCase()
-    if (requested === hostname) return new Response("ok")
+    if (requested === base.hostname.toLowerCase()) return new Response("ok")
+    // Caddy asks with a bare hostname, so the machine domain's port is left out.
+    const hostname = new URL(`http://${machineDomain}`).hostname
     const label = requested.endsWith(`.${hostname}`) ? requested.slice(0, -hostname.length - 1) : ""
     if (LABEL.test(label) && store.machine(label)) return new Response("ok")
     return new Response("not allowed", { status: 404 })
   }
+}
+
+const HOST = /^(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)*[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?::\d{1,5})?$/
+
+/** A bare host such as `example.com` or `localhost:4800`, lowercased; anything else (a scheme, a path) throws. */
+function parseMachineDomain(value: string) {
+  const host = value.trim().toLowerCase()
+  if (HOST.test(host) && host.length <= 253) return host
+  throw new Error(
+    `Invalid machine domain "${value}": expected a bare host name such as example.com, without a scheme or path.`,
+  )
 }
 
 /**

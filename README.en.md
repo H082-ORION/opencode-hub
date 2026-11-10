@@ -85,13 +85,19 @@ It asks for administrator rights (`sudo`) when needed, then what you want to do:
 ### 1. The hub, on the VPS
 
 1. Point the hub's domain **and** its subdomains at the VPS: an A record (and AAAA for IPv6) for `hub.example.com` and
-   for `*.hub.example.com`.
+   for `*.hub.example.com`. If your DNS provider cannot create `*.hub.example.com` (OVH, for example), the installer can
+   place the machines at `<machine>.example.com`, which only needs `*.example.com`.
 2. Open ports **80** and **443** (the installer opens them in `ufw`; also check your host's firewall).
 3. On the VPS, run the command above and choose **Install a public hub on this server**. Give the domain
    (`hub.example.com`) and an e-mail address for the certificates; the other questions have default answers.
 4. At the end, the installer prints **once** the link that creates the administrator account. Open it to create the
    account. The first load takes a few seconds, while Caddy obtains the certificate.
 5. In **Settings › Providers**, add at least one model provider.
+
+> [!WARNING]
+> With `*.example.com`, a subdomain declared by name in the DNS (`www`, `mail`…) wins over the wildcard and does not
+> reach the hub: don't give a machine the name of such a subdomain. If `*.example.com` already points elsewhere, it
+> must point to the VPS.
 
 > [!TIP]
 > The hub must be served over HTTPS: on a plain `http://` address other than `localhost`, the browser blocks the
@@ -129,7 +135,7 @@ The published binaries cover Linux x64 and arm64 (glibc). Details on Caddy, DNS 
 ```
 browser ──https──> Caddy ──> opencode hub (127.0.0.1:4800)
                                ├─ hub.example.com            chat, settings, login, LLM and MCP proxy
-                               └─ <machine>.hub.example.com  proxy to the machine
+                               └─ <machine>.hub.example.com  proxy to the machine (domain configurable: --machine-domain)
                                          ▲
                        outgoing WebSocket tunnel (opened by the machine)
                                          │
@@ -161,7 +167,7 @@ is published with `./release.sh <version>` (for example `1.0.0-pre.4`, or `1.0.0
 
 | Command | Purpose |
 |---|---|
-| `opencode hub [--port 4800] [--url https://hub.example.com] [--data <folder>] [--mcp-private-network]` | Starts the hub (`--mcp-private-network`: MCP connectors may reach private and loopback addresses) |
+| `opencode hub [--port 4800] [--url https://hub.example.com] [--machine-domain example.com] [--data <folder>] [--mcp-private-network]` | Starts the hub (`--machine-domain`: machines at `<machine>.example.com` instead of `<machine>.hub.example.com`; `--mcp-private-network`: MCP connectors may reach private and loopback addresses) |
 | `opencode hub invite [--admin] [--data <folder>]` | Creates a one-time invitation and prints its link (`--admin` for an administrator) |
 | `opencode agent join <url> [--code <code>] [--name <name>] [--insecure]` | Enrolls this machine (without `--code`, the code is asked without echo or read from stdin) |
 | `opencode agent run` | Keeps the machine connected to the hub |

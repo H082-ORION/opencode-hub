@@ -553,6 +553,12 @@ const Root = Spec.make(typeof OPENCODE_CLI_NAME === "string" ? OPENCODE_CLI_NAME
           Flag.withDescription("Public base URL of the hub (default: http://localhost:<port>)"),
           Flag.optional,
         ),
+        machineDomain: Flag.String("machine-domain").pipe(
+          Flag.withDescription(
+            "Domain the machines live under, e.g. example.com for <machine>.example.com (default: the hub's own host)",
+          ),
+          Flag.optional,
+        ),
         data: Flag.String("data").pipe(
           Flag.withDescription("Data directory (default: <global data>/hub)"),
           Flag.optional,

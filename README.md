@@ -86,13 +86,19 @@ Elle demande les droits administrateur (`sudo`) quand il le faut, puis ce que vo
 ### 1. Le hub, sur le VPS
 
 1. Faire pointer le domaine du hub **et** ses sous-domaines vers le VPS : un enregistrement A (et AAAA en IPv6) pour
-   `hub.exemple.fr` et pour `*.hub.exemple.fr`.
+   `hub.exemple.fr` et pour `*.hub.exemple.fr`. Si l'hébergeur DNS ne sait pas créer `*.hub.exemple.fr` (OVH, par
+   exemple), l'installeur peut placer les machines sur `<machine>.exemple.fr`, qui ne demande que `*.exemple.fr`.
 2. Ouvrir les ports **80** et **443** (l'installeur les ouvre dans `ufw` ; vérifier aussi le pare-feu de l'hébergeur).
 3. Sur le VPS, lancer la commande ci-dessus et choisir **Installer un hub public sur ce serveur**. Indiquer le domaine
    (`hub.exemple.fr`) et une adresse e-mail pour les certificats ; les autres questions ont des réponses par défaut.
 4. À la fin, l'installeur affiche **une seule fois** le lien qui crée le compte administrateur. L'ouvrir pour créer le
    compte. Le premier chargement prend quelques secondes, le temps que Caddy obtienne le certificat.
 5. Dans **Paramètres › Fournisseurs**, ajouter au moins un fournisseur de modèles.
+
+> [!WARNING]
+> Avec `*.exemple.fr`, un sous-domaine déclaré par son nom dans le DNS (`www`, `mail`…) l'emporte sur le joker et
+> n'atteint pas le hub : ne donnez pas à une machine le nom d'un tel sous-domaine. Si `*.exemple.fr` pointe déjà
+> ailleurs, il doit pointer vers le VPS.
 
 > [!TIP]
 > Le hub doit être servi en HTTPS : sur une adresse en `http://` autre que `localhost`, le navigateur bloque le
@@ -130,7 +136,7 @@ Les binaires publiés couvrent Linux x64 et arm64 (glibc). Détails sur Caddy, l
 ```
 navigateur ──https──> Caddy ──> opencode hub (127.0.0.1:4800)
                                   ├─ hub.exemple.fr            chat, paramètres, connexion, proxy LLM et MCP
-                                  └─ <machine>.hub.exemple.fr  proxy vers la machine
+                                  └─ <machine>.hub.exemple.fr  proxy vers la machine (domaine réglable : --machine-domain)
                                             ▲
                          tunnel WebSocket sortant (initié par la machine)
                                             │
@@ -162,7 +168,7 @@ nouvelle version se publie avec `./release.sh <version>` (par exemple `1.0.0-pre
 
 | Commande | Rôle |
 |---|---|
-| `opencode hub [--port 4800] [--url https://hub.exemple.fr] [--data <dossier>] [--mcp-private-network]` | Lance le hub (`--mcp-private-network` : connecteurs MCP autorisés vers les adresses privées et de boucle locale) |
+| `opencode hub [--port 4800] [--url https://hub.exemple.fr] [--machine-domain exemple.fr] [--data <dossier>] [--mcp-private-network]` | Lance le hub (`--machine-domain` : machines sur `<machine>.exemple.fr` au lieu de `<machine>.hub.exemple.fr` ; `--mcp-private-network` : connecteurs MCP autorisés vers les adresses privées et de boucle locale) |
 | `opencode hub invite [--admin] [--data <dossier>]` | Crée une invitation à usage unique et affiche son lien (`--admin` pour un administrateur) |
 | `opencode agent join <url> [--code <code>] [--name <nom>] [--insecure]` | Enrôle cette machine (sans `--code`, le code est demandé sans affichage ou lu sur l'entrée standard) |
 | `opencode agent run` | Maintient la machine connectée au hub |

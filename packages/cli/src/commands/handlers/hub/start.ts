@@ -30,6 +30,7 @@ export default Runtime.handler(
           hostname: input.hostname,
           port: input.port,
           url: Option.getOrElse(input.url, () => `http://localhost:${input.port}`),
+          machineDomain: Option.getOrUndefined(input.machineDomain),
           data,
           ui: Option.getOrUndefined(ui),
           version: OPENCODE_VERSION,

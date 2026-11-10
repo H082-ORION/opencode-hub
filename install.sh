@@ -362,6 +362,8 @@ INSTALLER_CLIENT=0
 SERVICE_HUB=""
 SERVICE_CLIENT=""
 DOMAIN=""
+# Domaine des machines (<id>.<domaine>) : celui du hub par défaut.
+DOMAINE_MACHINES=""
 EMAIL=""
 PORT="4800"
 PORT_DONNE=0
@@ -412,6 +414,7 @@ aide() {
   aide_opt "--client" "$(t "relie cette machine à un hub (agent)" "connects this machine to a hub (agent)")"
   aide_titre "$(t "Caddy et hub" "Caddy and hub")"
   aide_opt "--domain $(t "<hôte>" "<host>")" "$(t "nom public du hub ; les machines sont sur <id>.<hôte>" "public hub hostname; machines are served at <id>.<host>")"
+  aide_opt "--machine-domain $(t "<dom>" "<dom>")" "$(t "machines sur <id>.<dom> au lieu de <id>.<hôte> (DNS *.<dom>, ex. chez OVH)" "machines at <id>.<dom> instead of <id>.<host> (DNS *.<dom>, e.g. with OVH)")"
   aide_opt "--email $(t "<adresse>" "<address>")" "$(t "compte ACME de Caddy pour les certificats" "Caddy ACME account for certificates")"
   aide_opt "--port <port>" "$(t "port local du hub (défaut : 4800)" "local hub port (default: 4800)")"
   aide_opt "--hub-url <url>" "$(t "URL publique du hub (sans Caddy ; défaut : http://localhost:<port>)" "public hub URL (without Caddy; default: http://localhost:<port>)")"
@@ -440,6 +443,7 @@ aide() {
   aide_titre "$(t "Exemples" "Examples")"
   echo "  sudo ./install.sh"
   echo "  sudo ./install.sh --caddy --hub --domain hub.example.com --email $(t "vous" "you")@example.com --service --yes"
+  echo "  sudo ./install.sh --caddy --hub --domain hub.example.com --machine-domain example.com --email $(t "vous" "you")@example.com --yes"
   echo "  sudo ./install.sh --client --client-url https://hub.example.com --code <code> --service"
   echo "  ./install.sh --status"
   echo "  sudo ./install.sh --uninstall --hub --client"
@@ -455,6 +459,7 @@ while [[ $# -gt 0 ]]; do
     --hub) INSTALLER_HUB=1; shift ;;
     --client) INSTALLER_CLIENT=1; shift ;;
     --domain) valeur "$@"; DOMAIN="$2"; shift 2 ;;
+    --machine-domain) valeur "$@"; DOMAINE_MACHINES="$2"; shift 2 ;;
     --email) valeur "$@"; EMAIL="$2"; shift 2 ;;
     --port) valeur "$@"; PORT="$2"; PORT_DONNE=1; shift 2 ;;
     --hub-url) valeur "$@"; HUB_URL="$2"; shift 2 ;;
@@ -505,6 +510,10 @@ RE_EMAIL='^[^[:space:]@]+@[^[:space:]@]+\.[^[:space:]@]+$'
 RE_PORT='^[0-9]{1,5}$'
 RE_URL='^https?://[^[:space:]/]+(/[^[:space:]]*)?$'
 RE_UTILISATEUR='^[a-z_][a-z0-9_-]*$'
+
+DOMAINE_MACHINES="${DOMAINE_MACHINES,,}"; DOMAINE_MACHINES="${DOMAINE_MACHINES%.}"
+[[ -z "$DOMAINE_MACHINES" || "$DOMAINE_MACHINES" =~ $RE_DOMAINE ]] ||
+  die "--machine-domain$DP$(t "un nom d'hôte nu, par exemple example.com" "a bare hostname, for example example.com") ($DOMAINE_MACHINES)"
 
 # ================================================================== Outils
 
@@ -585,10 +594,10 @@ pastille() {
 cle_unite() { sed -n "s/^$2=//p" "$1" 2>/dev/null | head -n1 || true; }
 option_unite() { grep -m1 '^ExecStart=' "$1" 2>/dev/null | grep -oE -- "$2 [^ ]+" | cut -d' ' -f2 || true; }
 
-# Domaine configuré dans le Caddyfile géré par ce script.
-domaine_caddy() {
+# Domaines du hub et des machines dans le Caddyfile géré par ce script (« hub.example.com example.com »), vide sinon.
+domaines_caddy() {
   grep -qF "$MARQUE" "$CADDYFILE" 2>/dev/null || return 0
-  grep -m1 -oE '^[a-z0-9.-]+, \*\.' "$CADDYFILE" | cut -d, -f1 || true
+  sed -n 's/^\([a-z0-9.-]*\), \*\.\([a-z0-9.-]*\) {$/\1 \2/p' "$CADDYFILE" | head -n1
 }
 
 ligne_etat() {
@@ -602,14 +611,14 @@ ligne_etat() {
 
 afficher_etat() {
   local -a l=()
-  local e d port url u dom sante etat_agent
+  local e d port url u dom machines sante etat_agent
 
   # Caddy
   if command -v caddy >/dev/null; then
     e="$(etat_unite caddy)"; [[ "$e" == absent ]] && e=installe
     d="$(caddy version 2>/dev/null | awk '{print $1}')"
-    dom="$(domaine_caddy)"
-    [[ -n "$dom" ]] && d+=" $S_SEP $dom $(t "et" "and") *.$dom"
+    read -r dom machines <<<"$(domaines_caddy)" || true
+    [[ -n "$dom" ]] && d+=" $S_SEP $dom $(t "et" "and") *.$machines"
     l+=("$(ligne_etat Caddy "$e" "$(auto_unite caddy && echo 1 || echo 0)" "$d")")
   else
     l+=("$(ligne_etat Caddy absent - "")")
@@ -622,6 +631,8 @@ afficher_etat() {
   else
     port="$(option_unite "$UNIT_HUB" --port)"; url="$(option_unite "$UNIT_HUB" --url)"
     d="${url:-?} $S_SEP port ${port:-?}"
+    machines="$(option_unite "$UNIT_HUB" --machine-domain)"
+    [[ -z "$machines" ]] || d+=" $S_SEP machines *.$machines"
     if [[ "$e" == actif && -n "$port" ]] && command -v curl >/dev/null; then
       if curl -fsS --max-time 2 "http://127.0.0.1:$port/hub/health" >/dev/null 2>&1; then sante="${green}$(t "répond" "responds")${reset}"
       else sante="${red}$(t "ne répond pas" "not responding")${reset}"; fi
@@ -831,10 +842,11 @@ if [[ "$MODE" == desinstaller ]]; then desinstaller; exit 0; fi
 # Une installation précédente de Caddy par ce script donne les valeurs par défaut : son domaine, son adresse e-mail et
 # le port du hub qu'il sert.
 CADDY_DOMAINE=""
+CADDY_MACHINES=""
 CADDY_EMAIL=""
 CADDY_PORT=""
 if [[ -f "$CADDYFILE" ]] && grep -qF "$MARQUE" "$CADDYFILE"; then
-  CADDY_DOMAINE="$(sed -n 's/^\([a-z0-9.-]*\), \*\.\1 {$/\1/p' "$CADDYFILE" | head -n1)"
+  read -r CADDY_DOMAINE CADDY_MACHINES <<<"$(domaines_caddy)" || true
   CADDY_EMAIL="$(sed -n 's/^[[:space:]]*email[[:space:]]\{1,\}\([^[:space:]]*\).*/\1/p' "$CADDYFILE" | head -n1)"
   CADDY_PORT="$(sed -n 's/^[[:space:]]*reverse_proxy 127\.0\.0\.1:\([0-9]*\).*/\1/p' "$CADDYFILE" | head -n1)"
 fi
@@ -891,10 +903,38 @@ if ((INSTALLER_CADDY || INSTALLER_HUB)); then
   ((PORT >= 1 && PORT <= 65535)) || die "$(t "port hors limites" "port out of range")${DP}$PORT"
 fi
 
+# Domaine des machines : l'option, sinon celui de l'installation précédente pour le même hub (Caddyfile, puis service),
+# sinon une question ; par défaut, celui du hub. Le second choix n'est proposé que sous un parent d'au moins deux
+# niveaux (example.fr, jamais fr).
+choisir_domaine_machines() {
+  local parent="${DOMAIN#*.}"
+  [[ -z "$DOMAINE_MACHINES" ]] || return 0
+  if [[ "$CADDY_DOMAINE" == "$DOMAIN" && -n "$CADDY_MACHINES" ]]; then
+    DOMAINE_MACHINES="$CADDY_MACHINES"
+  elif [[ "$(option_unite "$UNIT_HUB" --url)" == "https://$DOMAIN" ]]; then
+    DOMAINE_MACHINES="$(option_unite "$UNIT_HUB" --machine-domain)"
+  fi
+  if [[ -n "$DOMAINE_MACHINES" ]]; then
+    info "$(t "Adresse des machines" "Machine addresses")${DP}${bold}<machine>.$DOMAINE_MACHINES${reset} ${dim}$(t "(installation précédente ; --machine-domain pour la changer)" "(previous install; --machine-domain to change it)")${reset}"
+    return 0
+  fi
+  DOMAINE_MACHINES="$DOMAIN"
+  if [[ "$parent" != *.* ]] || ! interactif; then return 0; fi
+  echo
+  info "$(t "Le choix 2 sert aux fournisseurs DNS (OVH…) qui ne savent pas créer *.$DOMAIN. Les noms déclarés dans le DNS (www, mail…) y priment sur *.$parent." "Choice 2 is for DNS providers (OVH…) that cannot create *.$DOMAIN. Names declared in the DNS (www, mail…) then take priority over *.$parent.")"
+  menu "$(t "Adresse des machines" "Machine addresses")" \
+    "<machine>.$DOMAIN ${dim}$S_SEP DNS *.$DOMAIN $(t "(conseillé)" "(advised)")${reset}" \
+    "<machine>.$parent ${dim}$S_SEP DNS *.$parent $(t "(OVH… ; www, mail… priment)" "(OVH…; www, mail… take priority)")${reset}" ||
+    die "$(t "abandon." "aborted.")"
+  ((MENU_CHOIX == 1)) && DOMAINE_MACHINES="$parent"
+  return 0
+}
+
 if ((INSTALLER_CADDY)); then
   demander DOMAIN "$(t "Nom de domaine public du hub (ex. hub.example.com)" "Public hub domain name (e.g. hub.example.com)")" "$CADDY_DOMAINE" "$RE_DOMAINE" \
     "$(t "un nom d'hôte nu, sans http:// ni chemin, par exemple hub.example.com" "a bare hostname, without http:// or a path, for example hub.example.com")"
   DOMAIN="${DOMAIN,,}"; DOMAIN="${DOMAIN%.}"
+  choisir_domaine_machines
   demander EMAIL "$(t "Adresse e-mail pour les certificats (ACME)" "E-mail address for certificates (ACME)")" "$CADDY_EMAIL" "$RE_EMAIL" "$(t "adresse e-mail invalide" "invalid e-mail address")"
   HUB_URL="https://$DOMAIN"
 fi
@@ -904,6 +944,9 @@ if ((INSTALLER_HUB)); then
     if [[ -z "$HUB_URL" && -n "$DOMAIN" ]]; then HUB_URL="https://$DOMAIN"; fi
     demander HUB_URL "$(t "URL publique du hub" "Public hub URL")" "http://localhost:$PORT" "$RE_URL" "$(t "une URL du type https://hub.example.com" "a URL such as https://hub.example.com")"
     HUB_URL="${HUB_URL%/}"
+    if [[ -z "$DOMAINE_MACHINES" && "$(option_unite "$UNIT_HUB" --url)" == "$HUB_URL" ]]; then
+      DOMAINE_MACHINES="$(option_unite "$UNIT_HUB" --machine-domain)"
+    fi
     url_sure "$HUB_URL" || warn "$(t "URL publique en http:// : les machines devront s'enrôler avec --insecure, code et jetons en clair. Préférer Caddy (HTTPS)." "plain http:// public URL: machines will have to enroll with --insecure, code and tokens in clear text. Prefer Caddy (HTTPS).")"
     demander HUB_HOTE "$(t "Adresse d'écoute du hub" "Hub listen address")" "127.0.0.1"
   fi
@@ -1000,7 +1043,7 @@ SERVICE_CLIENT="${SERVICE_CLIENT:-0}"
 oui_txt() { if [[ "$1" == 1 ]]; then printf '%s%s%s' "$green" "$(t "oui" "yes")" "$reset"; else printf '%s%s%s' "$dim" "$(t "non" "no")" "$reset"; fi; }
 recap=()
 if ((INSTALLER_CADDY)); then
-  recap+=("${bold}Caddy${reset}   $DOMAIN $(t "et" "and") *.$DOMAIN ${dim}$S_SEP $EMAIL${reset}")
+  recap+=("${bold}Caddy${reset}   $DOMAIN $(t "et" "and") *.$DOMAINE_MACHINES ${dim}$S_SEP $EMAIL${reset}")
 fi
 if ((INSTALLER_HUB)); then
   recap+=("${bold}Hub${reset}     $HUB_URL ${dim}$S_SEP $(t "écoute" "listens on") $HUB_HOTE:$PORT $S_SEP $(t "utilisateur" "user") $HUB_UTILISATEUR${reset}")
@@ -1082,11 +1125,11 @@ verifier_dns() {
     return
   fi
   info "$(t "IPv4 publique" "Public IPv4")${DP}$ip"
-  for hote in "$DOMAIN" "dnscheck-$(openssl rand -hex 4).$DOMAIN"; do
+  for hote in "$DOMAIN" "dnscheck-$(openssl rand -hex 4).$DOMAINE_MACHINES"; do
     resolu="$({ getent ahostsv4 "$hote" 2>/dev/null || true; } | awk '{ print $1 }' | sort -u | tr '\n' ' ')"
     if [[ -z "$resolu" ]]; then
       if [[ "$hote" == "$DOMAIN" ]]; then warn "$(t "$DOMAIN ne se résout pas : ajouter un enregistrement A $DOMAIN → $ip" "$DOMAIN does not resolve: add an A record $DOMAIN → $ip")"
-      else warn "$(t "*.$DOMAIN ne se résout pas : ajouter un enregistrement A *.$DOMAIN → $ip" "*.$DOMAIN does not resolve: add an A record *.$DOMAIN → $ip")"; fi
+      else warn "$(t "*.$DOMAINE_MACHINES ne se résout pas : ajouter un enregistrement A *.$DOMAINE_MACHINES → $ip" "*.$DOMAINE_MACHINES does not resolve: add an A record *.$DOMAINE_MACHINES → $ip")"; fi
     elif ! grep -qwF -- "$ip" <<<"$resolu"; then
       warn "$(t "$hote pointe vers $resolu, pas vers ce serveur ($ip) : les certificats échoueront." "$hote points to $resolu, not to this server ($ip): certificates will fail.")"
     else
@@ -1123,7 +1166,7 @@ $MARQUE
 	}
 }
 
-$DOMAIN, *.$DOMAIN {
+$DOMAIN, *.$DOMAINE_MACHINES {
 	tls {
 		on_demand
 	}
@@ -1369,6 +1412,11 @@ WantedBy=paths.target
 EOF
 }
 
+# --machine-domain, seulement s'il diffère de l'hôte de l'URL publique (le hub prend celui-ci par défaut).
+OPTION_MACHINES=""
+hote_hub="${HUB_URL#*://}"; hote_hub="${hote_hub%%[:/]*}"
+[[ -z "$DOMAINE_MACHINES" || "$DOMAINE_MACHINES" == "$hote_hub" ]] || OPTION_MACHINES=" --machine-domain $DOMAINE_MACHINES"
+
 if ((INSTALLER_HUB)); then
   etape "Hub"
   if ((SERVICE_HUB)); then
@@ -1407,7 +1455,7 @@ Environment=XDG_CONFIG_HOME=$DATA_DIR/.config
 Environment=XDG_CACHE_HOME=$DATA_DIR/.cache
 Environment=XDG_STATE_HOME=$DATA_DIR/.local/state
 WorkingDirectory=$DATA_DIR
-ExecStart=$OPENCODE_BIN hub --hostname $HUB_HOTE --port $PORT --url $HUB_URL --data $DATA_DIR
+ExecStart=$OPENCODE_BIN hub --hostname $HUB_HOTE --port $PORT --url $HUB_URL$OPTION_MACHINES --data $DATA_DIR
 Restart=on-failure
 RestartSec=2
 
@@ -1458,7 +1506,7 @@ EOF
     fi
   else
     info "$(t "Sans service : lancer le hub à la main avec" "Without a service: start the hub by hand with")"
-    echo "  $OPENCODE_BIN hub --hostname $HUB_HOTE --port $PORT --url $HUB_URL"
+    echo "  $OPENCODE_BIN hub --hostname $HUB_HOTE --port $PORT --url $HUB_URL$OPTION_MACHINES"
     info "${dim}$(t "Sans compte, il affiche au premier démarrage le lien qui crée l'administrateur." "Without accounts, its first start prints the link that creates the administrator.")${reset}"
   fi
 fi
@@ -1535,7 +1583,8 @@ fi
 fin=()
 if ((INSTALLER_HUB || INSTALLER_CADDY)); then
   [[ -n "$HUB_URL" ]] && fin+=("$(pad "$(t "Tableau de bord" "Dashboard")" 16) $(lien "$HUB_URL")")
-  [[ -n "$DOMAIN" ]] && fin+=("$(pad "Machines" 16) https://<id>.$DOMAIN")
+  [[ -n "${DOMAINE_MACHINES:-$DOMAIN}" ]] && fin+=("$(pad "Machines" 16) https://<id>.${DOMAINE_MACHINES:-$DOMAIN}")
+  [[ -n "$DOMAIN" && -n "$DOMAINE_MACHINES" ]] && fin+=("$(pad "DNS" 16) $DOMAIN $(t "et" "and") *.$DOMAINE_MACHINES")
 fi
 ((INSTALLER_HUB && SERVICE_HUB)) && fin+=("$(pad "$(t "Journal du hub" "Hub logs")" 16) ${dim}journalctl -u opencode-hub -f${reset}")
 ((INSTALLER_CADDY)) && fin+=("$(pad "$(t "Journal Caddy" "Caddy logs")" 16) ${dim}journalctl -u caddy -f${reset}")
