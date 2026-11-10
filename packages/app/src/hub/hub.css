@@ -1041,6 +1041,13 @@
   white-space: nowrap;
 }
 
+/* A long path gives way at its start: its last folders are the ones that tell where the picker is. */
+.hub-chat-picker-current {
+  min-width: 0;
+  direction: rtl;
+  text-align: start;
+}
+
 .hub-chat-picker-toolbar {
   display: flex;
   align-items: center;

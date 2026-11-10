@@ -7,58 +7,128 @@
 
 <p align="center">
   A fork of <a href="https://github.com/anomalyco/opencode">OpenCode</a> that adds a <strong>hub</strong>:
-  a public instance, on a VPS, from which you drive coding sessions on several remote machines.
+  a public instance, on a VPS, with a chat that hands your tasks to the agents of all your machines.
 </p>
 
 <p align="center">
-  <img src="docs/hub/dashboard.png" alt="Hub dashboard: connected machines and LLM providers" width="860">
+  <img src="docs/hub/en/chat.png" alt="Hub chat: a task handed to the agent on the machine &quot;workshop&quot;, then its summary" width="860">
 </p>
 
 > [!IMPORTANT]
 > **Independent project.** opencode-hub is not built by the OpenCode team and is not affiliated with them in any way.
 > It is maintained separately; for questions or issues about the hub, use this repository, not the OpenCode project.
 
-> [!WARNING]
-> **Work in progress.** The hub works end to end locally, but has not been proven in production yet. The interfaces,
-> the protocol and the data format may still change.
+> [!NOTE]
+> **Tested and working on a VPS.** The hub runs on an Ubuntu 26.04 VPS behind Caddy, with Linux machines connected as
+> clients. The project is still evolving: the interfaces, the protocol and the data format may change from one
+> pre-release to the next.
 
 ## Why
 
 OpenCode runs on the machine that holds the code. This fork lets you install a main instance on a server reachable from
 the Internet and attach as many machines as you like to it (workstation, build server, compute machine…), even behind
-NAT, without opening any port on them. From the browser, you pick a machine, then a folder, and work as if you were in
-front of it.
+NAT, without opening any port on them. From a single chat, you hand a task to one of them, or open its full OpenCode
+interface to work as if you were in front of it.
 
 ## Features
 
+- **Hub chat**: the home page is a chat in OpenCode's style, with its sessions, search and model choice. Only your own
+  providers answer it, and it can neither read files nor run commands on the hub.
+- **Tasks on your machines**: the **+** button ties the conversation to a connected machine and one of its projects (or
+  a new folder created from the hub). That machine's agent does the work, and the chat summarizes it for you.
+- **Skills from the chat**: ask the chat to create a skill or to install those of a GitHub repository; they reach all of
+  your machines.
 - **Secure hub**: accounts created by invitation, OPAQUE sign-in (the password never leaves the browser), automatic
-  HTTPS (Let's Encrypt through Caddy), one session per browser.
-- **Remote machines**: each machine runs `opencode agent run`, which keeps an outgoing WebSocket tunnel to the hub
-  (heartbeat, automatic reconnection). No port to open; NAT and firewalls are not a problem.
+  HTTPS (Let's Encrypt through Caddy).
+- **Remote machines**: each machine runs `opencode agent run`, which keeps an outgoing WebSocket tunnel to the hub. No
+  port to open; NAT and firewalls are not a problem.
 - **Each machine's full interface**: `https://<machine>.hub.example.com` shows the OpenCode web interface of the
-  machine itself, through the tunnel (sessions, files, terminal, diffs, live streams).
-- **Simple enrollment**: a one-time code generated from the hub, one command to run on the machine. Each machine gets
-  its own token, revocable at any time.
-- **LLM proxy**: provider keys stay on the hub. Machines only hold a hub-specific token, which replaces the real key on
-  the way. Changing a key requires no action on the machines.
-- **MCP proxy**: each user's remote MCP connectors (secret headers, or an OAuth sign-in run by the hub) are stored
-  encrypted on the hub; machines reach them at `<hub>/mcp/<id>` with the same token, and the hub adds the secrets on
-  the way. They show up on the machines as the MCP servers `hub-<id>`.
-- **Provider catalog**: more than 200 providers from the OpenCode catalog, grouped by company, with the API URL already
-  filled in. Only the key remains to paste.
-- **ChatGPT subscription**: "Sign in with ChatGPT" on the hub, token renewed automatically *(not yet tested against the
-  real OpenAI service)*.
+  machine itself, through the tunnel (sessions, files, terminal, diffs).
+- **LLM proxy and MCP relay**: provider keys and MCP connector secrets stay encrypted on the hub. Machines only hold a
+  hub-specific token; changing a key requires nothing on the machines.
+- **Several users**: each has their own machines, providers and skills; organizations share their machines between
+  members.
+- **Provider catalog**: more than 200 providers from the OpenCode catalog, with the API URL already filled in. "Sign in
+  with ChatGPT" is available.
+- **All of OpenCode's languages**: the interface is translated into OpenCode's 62 languages.
+- **Cloud instances** *(experimental)*: LXD servers linked to the hub
+  ([`agent-hub-lxd`](https://github.com/h082-orion/agent-hub-lxd)), on which each user creates ready-to-use machines.
+  See [`specs/cloud.md`](specs/cloud.md).
 
 <p align="center">
-  <img src="docs/hub/add-machine.png" alt="Adding a machine with a one-time code" width="49%">
-  <img src="docs/hub/providers.png" alt="Choosing a provider in the catalog" width="49%">
+  <img src="docs/hub/en/attach-menu.png" alt="The + button: choosing a machine, connected ones first" width="49%">
+  <img src="docs/hub/en/project-picker.png" alt="Choosing the project on the machine, with folder creation" width="49%">
 </p>
+<p align="center">
+  <img src="docs/hub/en/settings-machines.png" alt="Settings: the machines connected to the hub" width="49%">
+  <img src="docs/hub/en/settings-providers.png" alt="Settings: the model providers" width="49%">
+</p>
+
+## Install
+
+One command, without cloning the repository. It asks its questions one by one, downloads the latest published version,
+and runs again as is to update:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/H082-ORION/opencode-hub/remote-machines/install.sh | bash
+```
+
+It asks for administrator rights (`sudo`) when needed, then what you want to do:
+
+| Choice | For |
+|---|---|
+| **Install a public hub on this server** | A VPS: Caddy and the hub, over HTTPS |
+| **Connect this machine to a hub** | Each machine that will work for the hub |
+| **Install a local hub, without HTTPS** | A trial on your computer |
+| **Choose the components one by one** | Other cases |
+
+### 1. The hub, on the VPS
+
+1. Point the hub's domain **and** its subdomains at the VPS: an A record (and AAAA for IPv6) for `hub.example.com` and
+   for `*.hub.example.com`.
+2. Open ports **80** and **443** (the installer opens them in `ufw`; also check your host's firewall).
+3. On the VPS, run the command above and choose **Install a public hub on this server**. Give the domain
+   (`hub.example.com`) and an e-mail address for the certificates; the other questions have default answers.
+4. At the end, the installer prints **once** the link that creates the administrator account. Open it to create the
+   account. The first load takes a few seconds, while Caddy obtains the certificate.
+5. In **Settings › Providers**, add at least one model provider.
+
+> [!TIP]
+> The hub must be served over HTTPS: on a plain `http://` address other than `localhost`, the browser blocks the
+> password encryption and creating the account fails. The order does not matter: installing Caddy or the hub first
+> leads to the same result, since the installer always ties one to the other.
+
+### 2. Each machine
+
+1. In the hub, **Settings › Machines › Add machine**: a one-time code is shown.
+2. On the machine, run the same command and choose **Connect this machine to a hub**. Give the hub's URL
+   (`https://hub.example.com`), then the code. Accept the systemd service so the machine stays connected across reboots.
+3. The machine shows up as connected in the hub. In the chat, **+** › **Machine** hands it tasks.
+
+### Update, status, uninstall
+
+| Command | Purpose |
+|---|---|
+| `curl … \| bash` | Update: choose the same installation again; the latest version is offered first |
+| `curl … \| bash -s -- --status` | Status of Caddy, the hub, the agent and the binary |
+| `curl … \| bash -s -- --uninstall` | Uninstall (`--purge` also deletes the data, the enrollment, Caddy and the binary) |
+| `curl … \| bash -s -- --help` | Every option, for an install without questions |
+
+Without any question, for example on a server provisioned by a script:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/H082-ORION/opencode-hub/remote-machines/install.sh \
+  | bash -s -- --caddy --hub --domain hub.example.com --email you@example.com --service --download --yes
+```
+
+The published binaries cover Linux x64 and arm64 (glibc). Details on Caddy, DNS and troubleshooting:
+[`script/hub/README.md`](script/hub/README.md).
 
 ## Architecture
 
 ```
 browser ──https──> Caddy ──> opencode hub (127.0.0.1:4800)
-                               ├─ hub.example.com            dashboard, login, enrollment, LLM and MCP proxy
+                               ├─ hub.example.com            chat, settings, login, LLM and MCP proxy
                                └─ <machine>.hub.example.com  proxy to the machine
                                          ▲
                        outgoing WebSocket tunnel (opened by the machine)
@@ -66,11 +136,12 @@ browser ──https──> Caddy ──> opencode hub (127.0.0.1:4800)
           machine: opencode agent ──> local opencode service (127.0.0.1)
 ```
 
-Each machine runs a full OpenCode server: Git, terminal, files and tools run locally. The hub only authenticates,
-routes and relays. The OpenCode core is not modified. The protocol is detailed in
+Each machine runs a full OpenCode server: Git, terminal, files and tools run locally. The hub authenticates, routes
+and relays. Its chat relies on one OpenCode instance per user, stripped of every tool but the hub's own (skills, tasks
+on the machines). The OpenCode core is not modified. The protocol is detailed in
 [`specs/remote-machines.md`](specs/remote-machines.md).
 
-## Try it locally
+## Develop
 
 Prerequisite: [Bun](https://bun.sh) (version given in `package.json`).
 
@@ -79,55 +150,12 @@ Prerequisite: [Bun](https://bun.sh) (version given in `package.json`).
 BIN=packages/cli/dist/cli-linux-x64/bin/opencode
 
 $BIN hub                      # http://localhost:4800; without accounts, prints the link that creates the administrator
-# In the dashboard: "Add machine", then on the machine:
-$BIN agent join http://localhost:4800      # asks for the code without echo
+$BIN agent join http://localhost:4800      # on a machine: asks for the code without echo
 $BIN agent run
-# The machine is reachable at http://<machine>.localhost:4800
 ```
 
-From source without a binary: `./build.sh --ui-only`, then `bun run dev hub` and `bun run dev agent run`.
-
-## Install
-
-Without cloning the repository, this single command installs or updates the hub, the client or Caddy. It asks what to
-install and downloads the latest published version:
-
-```bash
-curl -fsSL https://raw.githubusercontent.com/H082-ORION/opencode-hub/remote-machines/install.sh | bash
-```
-
-`install.sh`, at the root of the repository, installs and sets up the three components. On launch, a menu offers the
-language (French or English), then the components to check:
-
-- **Caddy**: HTTPS proxy in front of the hub, on-demand certificates for the hub and for each machine;
-- **Hub**: the dashboard;
-- **Client**: the agent that connects the machine to a hub.
-
-The hub and the client can be installed as systemd services started at boot.
-
-1. Point `hub.example.com` **and** `*.hub.example.com` at the VPS (A/AAAA records).
-2. On the VPS, from this repository:
-
-   ```bash
-   sudo ./install.sh                  # menu: language, components, settings
-   ```
-
-   The binary is taken from the machine, built from the repository (`./build.sh`) or given as a path. For a server
-   with another architecture: `./build.sh --target linux-x64` (or `linux-arm64`), then `--binary <path>`.
-3. On each machine to connect, after creating a code in the dashboard ("Add machine"):
-
-   ```bash
-   sudo ./install.sh --client --client-url https://hub.example.com --code XXXX-XXXX --service
-   ```
-
-| Command | Purpose |
-|---|---|
-| `./install.sh --status` | Status of Caddy, the hub, the agent and the binary |
-| `sudo ./install.sh --uninstall [--purge]` | Uninstall; `--purge` also deletes the data, the enrollment, Caddy and the binary |
-| `./install.sh --help` | Every option, for an install without questions (`--yes`) |
-| `--lang fr\|en` | Sets the language without the menu (`build.sh` accepts it too) |
-
-Details on Caddy, DNS and troubleshooting: [`script/hub/README.md`](script/hub/README.md).
+From source without a binary: `./build.sh --ui-only`, then `bun run dev hub` and `bun run dev agent run`. A new version
+is published with `./release.sh <version>` (for example `1.0.0-pre.4`, or `1.0.0` for a stable one).
 
 ## Commands
 
@@ -139,8 +167,6 @@ Details on Caddy, DNS and troubleshooting: [`script/hub/README.md`](script/hub/R
 | `opencode agent run` | Keeps the machine connected to the hub |
 | `opencode agent status` / `opencode agent leave` | Enrollment status / unenroll |
 
-<img src="docs/hub/provider-variants-phone.png" alt="Provider variants on a phone" width="260" align="right">
-
 ## Enrollment security
 
 The enrollment code, and the tokens the hub sends back to the machine, only travel over HTTPS: `opencode agent join`
@@ -151,9 +177,10 @@ Without `--code`, the code shows up neither in the process list nor in the shell
 
 ## Known limits
 
-- One user per hub.
 - An offline machine is not reachable: its sessions live on the machine.
-- No flow control in the tunnel (protocol v1).
+- During a task handed to a machine, the chat shows the running tool, without detailed progress; since nobody can
+  answer from the hub, the remote agent's permission requests are refused and reported in its answer.
+- The chat history is stored in clear on the hub, in each user's private folder.
 - Hub login sessions are kept in memory: restarting the hub logs the browser out.
 - Anthropic subscriptions cannot go through the hub: OpenCode only uses them through the `claude` CLI installed on each
   machine.
@@ -163,13 +190,12 @@ Without `--code`, the code shows up neither in the process list nor in the shell
 
 | Path | Content |
 |---|---|
-| `packages/relay` | Hub, tunnel protocol, agent, LLM proxy, MCP proxy, catalog, ChatGPT login |
-| `packages/app/hub.html`, `packages/app/src/hub` | Hub interface (`@opencode/ui` components) |
+| `packages/relay` | Hub, chat and its tools, tunnel protocol, agent, LLM proxy, MCP relay, catalog |
+| `packages/app/hub.html`, `packages/app/src/hub` | Hub interface (`@opencode/ui` and `@opencode/session-ui` components) |
 | `packages/cli/src/commands/handlers/{hub,agent}` | `opencode hub` and `opencode agent` commands |
-| `install.sh` | Install, status and uninstall (Caddy, hub, client, systemd services) |
-| `script/hub` | Previous VPS installer (Caddy + hub), deployment documentation |
-| `specs/remote-machines.md` | Specification |
-| `build.sh` | Full build |
+| `install.sh` | Install, update, status and uninstall (Caddy, hub, client, systemd services) |
+| `build.sh`, `release.sh` | Full build, publishing a version |
+| `specs/` | Specifications |
 
 ## OpenCode
 

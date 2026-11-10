@@ -151,8 +151,8 @@ function FolderBrowser(props: { machine: string; onPick: (directory: string) => 
     <>
       <DialogBody class="hub-dialog-body">
         <div class="hub-chat-picker-toolbar">
-          <span class="hub-chat-picker-current" dir="ltr">
-            {current()?.directory ?? ""}
+          <span class="hub-chat-picker-current" title={current()?.directory}>
+            <bdi dir="ltr">{current()?.directory ?? ""}</bdi>
           </span>
           <Button variant="outline" size="small" icon="plus" onClick={() => setNaming(true)}>
             {copy.attach.newFolder}

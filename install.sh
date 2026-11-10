@@ -34,6 +34,8 @@ if [[ ! -f "${BASH_SOURCE[0]:-}" ]]; then
     exit 1
   fi
   export OPENCODE_HUB_COPIE="$copie"
+  # Le reste du script est lu jusqu'au bout, sans quoi curl signale une écriture interrompue.
+  cat >/dev/null
   if (: </dev/tty) 2>/dev/null; then exec bash "$copie" "$@" </dev/tty; fi
   exec bash "$copie" "$@" </dev/null
 fi
@@ -362,6 +364,7 @@ SERVICE_CLIENT=""
 DOMAIN=""
 EMAIL=""
 PORT="4800"
+PORT_DONNE=0
 HUB_HOTE="127.0.0.1"
 HUB_URL=""
 HUB_UTILISATEUR="opencode"
@@ -448,7 +451,7 @@ while [[ $# -gt 0 ]]; do
     --client) INSTALLER_CLIENT=1; shift ;;
     --domain) valeur "$@"; DOMAIN="$2"; shift 2 ;;
     --email) valeur "$@"; EMAIL="$2"; shift 2 ;;
-    --port) valeur "$@"; PORT="$2"; shift 2 ;;
+    --port) valeur "$@"; PORT="$2"; PORT_DONNE=1; shift 2 ;;
     --hub-url) valeur "$@"; HUB_URL="$2"; shift 2 ;;
     --hub-user) valeur "$@"; HUB_UTILISATEUR="$2"; shift 2 ;;
     --client-url) valeur "$@"; CLIENT_URL="$2"; shift 2 ;;
@@ -790,7 +793,8 @@ if [[ "$MODE" == etat ]]; then afficher_etat; exit 0; fi
 
 # Droits administrateur : on propose de relancer avec sudo (la langue choisie suit).
 if [[ $EUID -ne 0 ]]; then
-  if command -v sudo >/dev/null 2>&1 && interactif &&
+  # Sans question (--yes), la relance se fait d'office : sudo demande au besoin le mot de passe sur le terminal.
+  if command -v sudo >/dev/null 2>&1 &&
     oui_non "$(t "Cette opération demande les droits administrateur. Relancer avec sudo ?" "This requires administrator rights. Run again with sudo?")"; then
     exec sudo env OPENCODE_HUB_SANS_BANNIERE=1 OPENCODE_HUB_LANG="$LANGUE" OPENCODE_HUB_COPIE="${OPENCODE_HUB_COPIE:-}" bash "$0" "${ARGS_ORIGINAUX[@]}"
   fi
@@ -803,8 +807,32 @@ if [[ "$MODE" == desinstaller ]]; then desinstaller; exit 0; fi
 
 # ------------------------------------------------------------------ Choix des composants
 
+# Une installation précédente de Caddy par ce script donne les valeurs par défaut : son domaine, son adresse e-mail et
+# le port du hub qu'il sert.
+CADDY_DOMAINE=""
+CADDY_EMAIL=""
+CADDY_PORT=""
+if [[ -f "$CADDYFILE" ]] && grep -qF "$MARQUE" "$CADDYFILE"; then
+  CADDY_DOMAINE="$(sed -n 's/^\([a-z0-9.-]*\), \*\.\1 {$/\1/p' "$CADDYFILE" | head -n1)"
+  CADDY_EMAIL="$(sed -n 's/^[[:space:]]*email[[:space:]]\{1,\}\([^[:space:]]*\).*/\1/p' "$CADDYFILE" | head -n1)"
+  CADDY_PORT="$(sed -n 's/^[[:space:]]*reverse_proxy 127\.0\.0\.1:\([0-9]*\).*/\1/p' "$CADDYFILE" | head -n1)"
+fi
+[[ -z "$CADDY_PORT" ]] || ((PORT_DONNE)) || PORT="$CADDY_PORT"
+
 if ((!INSTALLER_CADDY && !INSTALLER_HUB && !INSTALLER_CLIENT)); then
   interactif || die "$(t "préciser au moins un composant : --caddy, --hub ou --client (voir --help)." "specify at least one component: --caddy, --hub or --client (see --help).")"
+  menu "$(t "Que voulez-vous faire ?" "What do you want to do?")" \
+    "$(t "Installer un hub public sur ce serveur" "Install a public hub on this server") ${dim}$(t "(Caddy + hub en HTTPS, conseillé sur un VPS)" "(Caddy + hub over HTTPS, advised on a VPS)")${reset}" \
+    "$(t "Relier cette machine à un hub" "Connect this machine to a hub") ${dim}$(t "(client)" "(client)")${reset}" \
+    "$(t "Installer un hub local, sans HTTPS" "Install a local hub, without HTTPS") ${dim}$(t "(essai sur ce poste)" "(a trial on this computer)")${reset}" \
+    "$(t "Choisir les composants un par un" "Choose the components one by one")" || die "$(t "abandon." "aborted.")"
+  case "$MENU_CHOIX" in
+    0) INSTALLER_CADDY=1; INSTALLER_HUB=1 ;;
+    1) INSTALLER_CLIENT=1 ;;
+    2) INSTALLER_HUB=1 ;;
+  esac
+fi
+if ((!INSTALLER_CADDY && !INSTALLER_HUB && !INSTALLER_CLIENT)); then
   cocher "$(t "Que faut-il installer ?" "What should be installed?")" \
     "Caddy   ${dim}$(t "proxy HTTPS et certificats automatiques" "HTTPS proxy and automatic certificates")${reset}" \
     "Hub     ${dim}$(t "tableau de bord des machines" "machines dashboard")${reset}" \
@@ -820,6 +848,16 @@ choix=()
 ((INSTALLER_CLIENT)) && choix+=("Client")
 ok "$(t "Composants" "Components")${DP}${bold}${choix[*]}${reset}"
 
+# Caddy ne sert que le hub de ce serveur, et le hub doit connaître le domaine de Caddy : l'un ne va pas sans l'autre,
+# dans quelque ordre qu'on les installe.
+if ((INSTALLER_CADDY && !INSTALLER_HUB)); then
+  INSTALLER_HUB=1
+  info "$(t "Caddy sert le hub de ce serveur : le hub est installé ou mis à jour avec lui." "Caddy serves this server's hub: the hub is installed or updated with it.")"
+elif ((INSTALLER_HUB && !INSTALLER_CADDY)) && [[ -n "$CADDY_DOMAINE" && -z "$HUB_URL" ]]; then
+  INSTALLER_CADDY=1
+  info "$(t "Caddy sert déjà $CADDY_DOMAINE : le hub prend ce domaine, en HTTPS." "Caddy already serves $CADDY_DOMAINE: the hub takes this domain, over HTTPS.")"
+fi
+
 if ((INSTALLER_CADDY)); then
   command -v apt-get >/dev/null || die "$(t "l'installation de Caddy demande Debian ou Ubuntu (apt-get)." "installing Caddy requires Debian or Ubuntu (apt-get).")"
 fi
@@ -833,10 +871,10 @@ if ((INSTALLER_CADDY || INSTALLER_HUB)); then
 fi
 
 if ((INSTALLER_CADDY)); then
-  demander DOMAIN "$(t "Nom de domaine public du hub (ex. hub.example.com)" "Public hub domain name (e.g. hub.example.com)")" "" "$RE_DOMAINE" \
+  demander DOMAIN "$(t "Nom de domaine public du hub (ex. hub.example.com)" "Public hub domain name (e.g. hub.example.com)")" "$CADDY_DOMAINE" "$RE_DOMAINE" \
     "$(t "un nom d'hôte nu, sans http:// ni chemin, par exemple hub.example.com" "a bare hostname, without http:// or a path, for example hub.example.com")"
   DOMAIN="${DOMAIN,,}"; DOMAIN="${DOMAIN%.}"
-  demander EMAIL "$(t "Adresse e-mail pour les certificats (ACME)" "E-mail address for certificates (ACME)")" "" "$RE_EMAIL" "$(t "adresse e-mail invalide" "invalid e-mail address")"
+  demander EMAIL "$(t "Adresse e-mail pour les certificats (ACME)" "E-mail address for certificates (ACME)")" "$CADDY_EMAIL" "$RE_EMAIL" "$(t "adresse e-mail invalide" "invalid e-mail address")"
   HUB_URL="https://$DOMAIN"
 fi
 
