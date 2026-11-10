@@ -30,6 +30,7 @@ const decodeTask = Schema.decodeUnknownOption(
   Schema.Struct({ prompt: Schema.String, images: Schema.optional(Schema.Boolean) }),
 )
 const decodeName = Schema.decodeUnknownOption(Schema.Struct({ name: Schema.String }))
+const decodeNames = Schema.decodeUnknownOption(Schema.Struct({ names: Schema.Array(Schema.String) }))
 const decodeSave = Schema.decodeUnknownOption(
   Schema.Struct({
     name: Schema.String,
@@ -69,7 +70,7 @@ const TOOLS = [
   },
   {
     name: "skill_read",
-    description: "Read the files of one of the user's own skills.",
+    description: "Read the files of one of the user's skills, their own or one inherited from an organization.",
     inputSchema: {
       type: "object",
       properties: { name: { type: "string", description: "The skill's name." } },
@@ -94,6 +95,16 @@ const TOOLS = [
         replace: { type: "boolean", description: "Replace a skill of this name instead of refusing." },
       },
       required: ["name", "files"],
+    },
+  },
+  {
+    name: "skill_delete",
+    description:
+      "Delete some of the user's own skills, which also removes them from all of their machines. Only on the user's explicit request, after listing the skills to confirm the names. Skills of an organization cannot be deleted here.",
+    inputSchema: {
+      type: "object",
+      properties: { names: { type: "array", items: { type: "string" }, description: "The skills' names." } },
+      required: ["names"],
     },
   },
   {
@@ -179,8 +190,20 @@ export function create(input: {
     if (name === "skill_read") {
       const parsed = Option.getOrUndefined(decodeName(args))
       if (!parsed) return failure("Expected { name }.")
-      const skill = input.skills.own(user, parsed.name)
+      const skill = input.skills.find(user, parsed.name)
       return skill ? text(skill.files) : failure(`The user has no skill named ${parsed.name}.`)
+    }
+    if (name === "skill_delete") {
+      const parsed = Option.getOrUndefined(decodeNames(args))
+      if (!parsed || parsed.names.length === 0) return failure("Expected { names: [name, ...] }.")
+      const results = input.skills.removeOwn(user, parsed.names)
+      const report = results.map((result) => {
+        if ("deleted" in result) return `Deleted ${result.name}.`
+        if ("organization" in result)
+          return `${result.name} belongs to the organization ${result.organization}: only a hub administrator can delete it.`
+        return `The user has no skill named ${result.name}.`
+      })
+      return results.some((result) => "deleted" in result) ? text(report.join("\n")) : failure(report.join("\n"))
     }
     if (name === "skill_save") {
       const parsed = Option.getOrUndefined(decodeSave(args))

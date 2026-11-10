@@ -1,4 +1,4 @@
-import { Component } from "solid-js"
+import { Component, Show } from "solid-js"
 import { Select } from "@opencode/ui/select"
 import { Switch } from "@opencode/ui/switch"
 import { useLanguage } from "@/runtime/i18n/language"
@@ -59,7 +59,11 @@ const SoundSetting: Component<{
   )
 }
 
-export const SettingsNotifications: Component = () => {
+type NotificationRow = "agent" | "permissions" | "questions" | "errors" | "interface"
+
+/** `rows` limits the page to the rows a surface can act on; every row shows by default. */
+export const SettingsNotifications: Component<{ rows?: readonly NotificationRow[] }> = (props) => {
+  const shown = (row: NotificationRow) => !props.rows || props.rows.includes(row)
   const language = useLanguage()
   const settings = useSettings()
   const sounds = createSoundSettingsController()
@@ -81,77 +85,95 @@ export const SettingsNotifications: Component = () => {
         <div class="settings-section">
           <h3 class="settings-section-title">{language.t("settings.general.section.notifications")}</h3>
           <SettingsList>
-            <SettingsRow
-              title={language.t("settings.general.notifications.agent.title")}
-              description={language.t("settings.general.notifications.agent.description")}
-            >
-              <div data-action="settings-notifications-agent">
-                <Switch
-                  checked={settings.notifications.agent()}
-                  onChange={(checked) => settings.notifications.setAgent(checked)}
-                />
-              </div>
-            </SettingsRow>
+            <Show when={shown("agent")}>
+              <SettingsRow
+                title={language.t("settings.general.notifications.agent.title")}
+                description={language.t("settings.general.notifications.agent.description")}
+              >
+                <div data-action="settings-notifications-agent">
+                  <Switch
+                    checked={settings.notifications.agent()}
+                    onChange={(checked) => settings.notifications.setAgent(checked)}
+                  />
+                </div>
+              </SettingsRow>
+            </Show>
 
-            <SettingsRow
-              title={language.t("settings.general.notifications.permissions.title")}
-              description={language.t("settings.general.notifications.permissions.description")}
-            >
-              <div data-action="settings-notifications-permissions">
-                <Switch
-                  checked={settings.notifications.permissions()}
-                  onChange={(checked) => settings.notifications.setPermissions(checked)}
-                />
-              </div>
-            </SettingsRow>
+            <Show when={shown("permissions")}>
+              <SettingsRow
+                title={language.t("settings.general.notifications.permissions.title")}
+                description={language.t("settings.general.notifications.permissions.description")}
+              >
+                <div data-action="settings-notifications-permissions">
+                  <Switch
+                    checked={settings.notifications.permissions()}
+                    onChange={(checked) => settings.notifications.setPermissions(checked)}
+                  />
+                </div>
+              </SettingsRow>
+            </Show>
 
-            <SettingsRow
-              title={language.t("settings.general.notifications.questions.title")}
-              description={language.t("settings.general.notifications.questions.description")}
-            >
-              <div data-action="settings-notifications-questions">
-                <Switch
-                  hideLabel
-                  checked={settings.notifications.questions()}
-                  onChange={(checked) => settings.notifications.setQuestions(checked)}
-                >
-                  {language.t("settings.general.notifications.questions.title")}
-                </Switch>
-              </div>
-            </SettingsRow>
+            <Show when={shown("questions")}>
+              <SettingsRow
+                title={language.t("settings.general.notifications.questions.title")}
+                description={language.t("settings.general.notifications.questions.description")}
+              >
+                <div data-action="settings-notifications-questions">
+                  <Switch
+                    hideLabel
+                    checked={settings.notifications.questions()}
+                    onChange={(checked) => settings.notifications.setQuestions(checked)}
+                  >
+                    {language.t("settings.general.notifications.questions.title")}
+                  </Switch>
+                </div>
+              </SettingsRow>
+            </Show>
 
-            <SettingsRow
-              title={language.t("settings.general.notifications.errors.title")}
-              description={language.t("settings.general.notifications.errors.description")}
-            >
-              <div data-action="settings-notifications-errors">
-                <Switch
-                  checked={settings.notifications.errors()}
-                  onChange={(checked) => settings.notifications.setErrors(checked)}
-                />
-              </div>
-            </SettingsRow>
+            <Show when={shown("errors")}>
+              <SettingsRow
+                title={language.t("settings.general.notifications.errors.title")}
+                description={language.t("settings.general.notifications.errors.description")}
+              >
+                <div data-action="settings-notifications-errors">
+                  <Switch
+                    checked={settings.notifications.errors()}
+                    onChange={(checked) => settings.notifications.setErrors(checked)}
+                  />
+                </div>
+              </SettingsRow>
+            </Show>
           </SettingsList>
         </div>
 
         <div class="settings-section">
           <h3 class="settings-section-title">{language.t("settings.general.section.sounds")}</h3>
           <SettingsList>
-            <SoundSetting kind="agent" channel={sounds.agent} />
-            <SoundSetting kind="permissions" channel={sounds.permissions} />
-            <SoundSetting kind="questions" channel={sounds.questions} />
-            <SoundSetting kind="errors" channel={sounds.errors} />
-            <SettingsRow
-              title={language.t("settings.general.sounds.interface.title")}
-              description={language.t("settings.general.sounds.interface.description")}
-            >
-              <div data-action="settings-sounds-interface">
-                <Switch
-                  checked={settings.sounds.interfaceEnabled()}
-                  onChange={(checked) => settings.sounds.setInterfaceEnabled(checked)}
-                />
-              </div>
-            </SettingsRow>
+            <Show when={shown("agent")}>
+              <SoundSetting kind="agent" channel={sounds.agent} />
+            </Show>
+            <Show when={shown("permissions")}>
+              <SoundSetting kind="permissions" channel={sounds.permissions} />
+            </Show>
+            <Show when={shown("questions")}>
+              <SoundSetting kind="questions" channel={sounds.questions} />
+            </Show>
+            <Show when={shown("errors")}>
+              <SoundSetting kind="errors" channel={sounds.errors} />
+            </Show>
+            <Show when={shown("interface")}>
+              <SettingsRow
+                title={language.t("settings.general.sounds.interface.title")}
+                description={language.t("settings.general.sounds.interface.description")}
+              >
+                <div data-action="settings-sounds-interface">
+                  <Switch
+                    checked={settings.sounds.interfaceEnabled()}
+                    onChange={(checked) => settings.sounds.setInterfaceEnabled(checked)}
+                  />
+                </div>
+              </SettingsRow>
+            </Show>
           </SettingsList>
         </div>
       </div>

@@ -225,6 +225,7 @@ export async function start(options: Options) {
       llm: `http://${listen}:${server.port}/llm`,
       tools: `http://${listen}:${server.port}${ChatTools.PATH}`,
       note: (user, session) => chatMachines.note(user, session),
+      skills: (user) => skills.effective(user).skills,
     })
   const chatMachines: ChatMachines.Instance = ChatMachines.create({
     store,

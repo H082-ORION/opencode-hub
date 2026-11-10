@@ -1,0 +1,125 @@
+.hub-chat-header h1 {
+  flex: 1;
+  min-width: 0;
+}
+
+.hub-chat-title {
+  display: block;
+  width: fit-content;
+  max-width: 100%;
+  overflow: hidden;
+  padding: 6px 4px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: start;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  cursor: text;
+
+  &:hover {
+    background: var(--v2-overlay-simple-overlay-hover, var(--v2-background-bg-layer-1));
+  }
+
+  &:focus-visible {
+    outline: 2px solid var(--v2-border-border-focus, currentColor);
+    outline-offset: -2px;
+  }
+}
+
+.hub-chat-title-input {
+  flex: 1;
+  min-width: 0;
+  padding: 6px 4px;
+  border-radius: 6px;
+  background: var(--v2-background-bg-layer-1);
+  color: var(--v2-text-text-base);
+  font-size: 13px;
+  font-weight: 530;
+}
+
+.hub-chat-usage {
+  flex: none;
+  gap: 8px;
+  margin-inline-start: auto;
+  padding: 0 6px;
+  color: var(--v2-text-text-faint);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+
+  &[aria-expanded="true"] {
+    color: var(--v2-text-text-muted);
+  }
+}
+
+.hub-chat-panel {
+  display: flex;
+  flex: none;
+  flex-direction: column;
+  width: min(340px, 40vw);
+  min-height: 0;
+  margin: 8px 8px max(8px, env(safe-area-inset-bottom)) 0;
+  border-radius: 10px;
+  background: var(--v2-background-bg-base);
+  box-shadow: var(--v2-elevation-raised);
+  overflow: hidden;
+}
+
+.hub-chat-panel-header {
+  display: flex;
+  flex: none;
+  align-items: center;
+  justify-content: space-between;
+  min-height: 44px;
+  padding: 0 8px 0 16px;
+
+  h2 {
+    font-size: 13px;
+    font-weight: 530;
+  }
+}
+
+.hub-chat-panel-stats {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 16px;
+  margin: 0;
+  padding: 4px 16px 24px;
+  overflow-y: auto;
+
+  div {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    min-width: 0;
+  }
+
+  dt {
+    color: var(--v2-text-text-muted);
+    font-size: 12px;
+    line-height: 16px;
+  }
+
+  dd {
+    margin: 0;
+    overflow-wrap: anywhere;
+    color: var(--v2-text-text-base);
+    font-size: 12px;
+    font-weight: 530;
+    line-height: 16px;
+  }
+}
+
+@media (max-width: 768px) {
+  .hub-chat-panel {
+    position: absolute;
+    inset-block: 0;
+    inset-inline-end: 0;
+    z-index: 15;
+    width: min(340px, 100%);
+    margin: 0;
+    border-radius: 0;
+  }
+}

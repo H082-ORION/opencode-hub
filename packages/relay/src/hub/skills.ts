@@ -40,10 +40,29 @@ export function create(input: {
       return write(owner, skill, existing?.id)
     },
 
-    /** A user's own skill by name, with its files. */
-    own(user: string, name: string) {
-      const row = store.skills({ kind: "user", id: user }).find((candidate) => candidate.name === name)
-      return row ? present(row)[0] : undefined
+    /**
+     * Deletes some of a user's own skills by name, as the hub's chat tools do. A name that is not theirs is reported:
+     * unknown, or held by one of their organizations, which only hub administrators manage.
+     */
+    removeOwn(user: string, names: readonly string[]) {
+      const owner = { kind: "user" as const, id: user }
+      const rows = store.skills(owner)
+      const inherited = store
+        .membershipsOf(user)
+        .flatMap((org) => store.skills({ kind: "org", id: org.id }).map((row) => ({ name: row.name, org: org.name })))
+      const results = Array.from(new Set(names)).map((name) => {
+        const row = rows.find((candidate) => candidate.name === name)
+        if (row && store.deleteSkill(owner, row.id)) return { name, deleted: true as const }
+        const org = inherited.find((entry) => entry.name === name)?.org
+        return org === undefined ? { name, unknown: true as const } : { name, organization: org }
+      })
+      if (results.some((result) => "deleted" in result)) input.changed()
+      return results
+    },
+
+    /** One of a user's effective skills by name, own or inherited, with its files. */
+    find(user: string, name: string) {
+      return effective(user).skills.find((skill) => skill.name === name)
     },
 
     /** Handles `skills…` and `orgs/<id>/skills…` under `/hub/api/`; undefined for any other route. */

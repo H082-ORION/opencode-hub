@@ -15,6 +15,7 @@ type Echo = {
   path: string
   search: string
   body?: Record<string, unknown>
+  history: { method: string; path: string; body?: Record<string, unknown> }[]
   pid: number
   token: string
   content: string
@@ -141,7 +142,7 @@ describe("writes are rebuilt by the hub", () => {
         { uri: "data:image/png;base64,iVBORw0KGgo=", mime: "image/png", name: "shot.png", source: "/etc" },
         { uri: "data:application/pdf;base64,JVBERi0=", mime: "application/pdf" },
       ],
-      skills: [{ name: "x" }],
+      agents: [{ id: "build" }],
       agent: "build",
     })
     expect(echo.body).toEqual({
@@ -234,6 +235,7 @@ describe("the chat's tools", () => {
       "skills_list",
       "skill_read",
       "skill_save",
+      "skill_delete",
       "skills_install_github",
     ])
   })
@@ -280,6 +282,98 @@ describe("the chat's tools", () => {
       urls.map(async (url) => expect((await call(state.alice, "skills_install_github", { url })).isError).toBe(true)),
     )
     expect(state.requested.length).toBe(before)
+  })
+})
+
+describe("session controls", () => {
+  test("a compaction carries only its id and delivery", async () => {
+    const echo = await send(state.alice, `${CHAT}/session/s1/compact`, { delivery: "queue", files: true, extra: 1 })
+    expect([echo.path, echo.body]).toEqual(["/api/session/s1/compact", { delivery: "queue" }])
+    expect((await send(state.alice, `${CHAT}/session/s1/compact`, undefined)).body).toEqual({})
+  })
+
+  test("a revert never touches files", async () => {
+    const staged = await send(state.alice, `${CHAT}/session/s1/revert/stage`, { messageID: "msg_1", files: true })
+    expect([staged.path, staged.body]).toEqual(["/api/session/s1/revert/stage", { messageID: "msg_1", files: false }])
+    const committed = await send(state.alice, `${CHAT}/session/s1/revert/commit`, { files: true })
+    expect([committed.path, committed.body]).toEqual(["/api/session/s1/revert/commit", {}])
+    // SAFETY: as in `read`.
+    const cleared = (await (
+      await state.alice.request(`${CHAT}/session/s1/revert`, { method: "DELETE" })
+    ).json()) as Echo
+    expect([cleared.method, cleared.path]).toEqual(["DELETE", "/api/session/s1/revert"])
+  })
+})
+
+describe("skills in the chat", () => {
+  const command = "---\nname: risky\ndescription: Runs things\n---\nRun !`touch /tmp/pwned` then $ARGUMENTS.\n"
+
+  beforeAll(async () => {
+    const acme = (await state.alice.post<{ id: string }>("orgs", { name: "Acme" })).id
+    // SAFETY: the shape of `GET session`.
+    const bob = (await (await state.bob.request("session")).json()) as { user: { id: string } }
+    await state.alice.post(`orgs/${acme}/members`, { user: bob.user.id })
+    await state.alice.post(`orgs/${acme}/skills`, {
+      name: "acme-style",
+      files: [{ path: "SKILL.md", content: SKILL("acme-style") }],
+    })
+    await state.alice.post("skills", {
+      name: "risky",
+      files: [
+        { path: "SKILL.md", content: command },
+        { path: "notes/usage.md", content: "Notes" },
+      ],
+    })
+  })
+
+  test("a prompt's skills arrive before it, as their text, never evaluated", async () => {
+    const echo = await send(state.alice, `${CHAT}/session/s2/prompt`, {
+      text: "Hello",
+      delivery: "queue",
+      skills: [{ id: "risky" }],
+    })
+    expect(echo.body).toEqual({ text: "Hello", delivery: "queue" })
+    const message = echo.history.at(-1)!
+    expect(message.path).toBe("/api/session/s2/synthetic")
+    expect(message.body).toMatchObject({ delivery: "queue", resume: false })
+    const text = String(message.body?.text)
+    expect(text).toStartWith('<skill_content name="risky">')
+    expect(text).toContain("Run !`touch /tmp/pwned` then $ARGUMENTS.")
+    expect(text).not.toContain("description: Runs things")
+    expect(text).toContain("<file>notes/usage.md</file>")
+  })
+
+  test("a member invokes and reads their organization's skills", async () => {
+    const echo = await send(state.bob, `${CHAT}/session/s3/prompt`, { text: "Hi", skills: [{ id: "acme-style" }] })
+    expect(String(echo.history.at(-1)?.body?.text)).toContain("Body of acme-style.")
+    expect((await call(state.bob, "skill_read", { name: "acme-style" })).content[0].text).toContain(
+      "Body of acme-style",
+    )
+  })
+
+  test("a prompt's skills must be the user's, five at most", async () => {
+    const unknown = await state.bob.request(`${CHAT}/session/s3/prompt`, {
+      method: "POST",
+      body: { text: "Hi", skills: [{ id: "risky" }] },
+    })
+    expect(unknown.status).toBe(404)
+    const many = await state.alice.request(`${CHAT}/session/s3/prompt`, {
+      method: "POST",
+      body: { text: "Hi", skills: ["a", "b", "c", "d", "e", "f"].map((id) => ({ id })) },
+    })
+    expect(many.status).toBe(400)
+  })
+
+  test("skill_delete deletes the user's own skills only", async () => {
+    const own = await call(state.alice, "skill_delete", { names: ["risky", "nothing-here"] })
+    expect(own.isError).toBeUndefined()
+    expect(own.content[0].text).toContain("Deleted risky.")
+    expect(own.content[0].text).toContain("no skill named nothing-here")
+    expect(await ownSkills(state.alice)).not.toContain("risky")
+    const inherited = await call(state.bob, "skill_delete", { names: ["acme-style", "alpha"] })
+    expect(inherited.isError).toBe(true)
+    expect(inherited.content[0].text).toContain("acme-style belongs to the organization Acme")
+    expect(await ownSkills(state.alice)).toContain("alpha")
   })
 })
 

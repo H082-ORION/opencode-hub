@@ -1,0 +1,5 @@
+/* The chat column follows the Timeline width setting; "comfortable" keeps the hub's own 768px column. */
+:root[data-timeline-width="focused"] .hub-chat-timeline,
+:root[data-timeline-width="wide"] .hub-chat-timeline {
+  width: min(100%, var(--container-session));
+}

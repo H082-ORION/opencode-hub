@@ -108,7 +108,7 @@ export const ShellSetting: Component<{
   )
 }
 
-const FollowUpBehaviorSetting: Component = () => {
+export const FollowUpBehaviorSetting: Component = () => {
   const language = useLanguage()
   const settings = useSettings()
 

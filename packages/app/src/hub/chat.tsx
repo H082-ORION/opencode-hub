@@ -1,4 +1,4 @@
-import { OpenCode, type ModelInfo, type OpenCodeEvent } from "@opencode/client/promise"
+import { OpenCode, type ModelInfo } from "@opencode/client/promise"
 import { createClientConnection, createData } from "@opencode/client/solid"
 import { DataProvider } from "@opencode/session-ui/context/data"
 import { File } from "@opencode/session-ui/file"
@@ -8,21 +8,26 @@ import { FileComponentProvider } from "@opencode/ui/context/file"
 import { Icon } from "@opencode/ui/icon"
 import { IconButton } from "@opencode/ui/icon-button"
 import { Avatar } from "@opencode/ui/avatar"
-import { Logo, Mark } from "@opencode/ui/logo"
+import { Logo } from "@opencode/ui/logo"
 import { Spinner } from "@opencode/ui/spinner"
 import { showToast } from "@opencode/ui/toast"
 import { SessionID } from "@opencode/schema/session-id"
 import { createGlobalEmitter } from "@solid-primitives/event-bus"
-import { createEffect, createMemo, createResource, createSignal, For, on, onCleanup, onMount, Show } from "solid-js"
+import { createEffect, createMemo, createResource, createSignal, on, onCleanup, onMount, Show } from "solid-js"
 import { createStore } from "solid-js/store"
 import type { ComposerPersistedState } from "@/composer/types"
+import { useSettings } from "@/settings/model"
 import { errorText, hubApi, HubError, type HubChatTarget, type HubSession } from "./api"
+import { createChatCommands } from "./chat-commands"
+import { ChatContext, type ChatEventMap, type ChatState } from "./chat-context"
+import { ChatSidePanel } from "./chat-context-panel"
+import { ChatHeader } from "./chat-header"
 import { projectName } from "./chat-machine"
+import { useChatNotifications } from "./chat-notify"
+import { ChatSidebar } from "./chat-sidebar"
 import { HubComposer, type HubSubmit } from "./composer"
 import { copy } from "./copy"
 import { modelKey, readHiddenModels } from "./models"
-
-type EventMap = { [Type in OpenCodeEvent["type"]]: Extract<OpenCodeEvent, { type: Type }> }
 
 const MODEL_KEY = "hub.chat.model"
 const SIDEBAR_KEY = "hub.chat.sidebar"
@@ -55,7 +60,7 @@ function ChatScreen(props: { session: HubSession; onSignedOut: () => void }) {
     // The hub refuses a write without a JSON content type, even one with no body.
     headers: { "content-type": "application/json" },
   })
-  const emitter = createGlobalEmitter<EventMap>()
+  const emitter = createGlobalEmitter<ChatEventMap>()
   onCleanup(() => emitter.clear())
   const connection = createClientConnection(api, {
     flushInterval: 16,
@@ -85,7 +90,7 @@ function ChatScreen(props: { session: HubSession; onSignedOut: () => void }) {
   const [drawer, setDrawer] = createSignal(false)
   const [picked, setPicked] = createSignal(readStored(MODEL_KEY))
   const [folded, setFolded] = createSignal(readStored(SIDEBAR_KEY) === "closed")
-  const [search, setSearch] = createSignal("")
+  const [panelOpen, setPanelOpen] = createSignal(false)
   const fold = (value: boolean) => {
     setFolded(value)
     store(SIDEBAR_KEY, value ? "closed" : "open")
@@ -125,12 +130,6 @@ function ChatScreen(props: { session: HubSession; onSignedOut: () => void }) {
       .filter((session) => !session.parentID)
       .toSorted((a, b) => b.time.updated - a.time.updated),
   )
-  const matching = createMemo(() => {
-    const term = search().trim().toLowerCase()
-    return term
-      ? sessions().filter((session) => (session.title || copy.chat.untitled).toLowerCase().includes(term))
-      : sessions()
-  })
   onMount(() => {
     void api.session
       .list({ order: "desc", limit: 100 })
@@ -200,6 +199,7 @@ function ChatScreen(props: { session: HubSession; onSignedOut: () => void }) {
   }
   // A command or shell line running on the attached machine, polled until the hub reports it done.
   const [running, setRunning] = createSignal(false)
+  const settings = useSettings()
   createEffect(
     on(active, (id) => {
       setRunning(false)
@@ -280,6 +280,8 @@ function ChatScreen(props: { session: HubSession; onSignedOut: () => void }) {
             sessionID: id,
             text: request.text,
             files: request.files.length > 0 ? request.files : undefined,
+            skills: request.skills?.length ? request.skills.map((id) => ({ id })) : undefined,
+            delivery: settings.general.followUpBehavior(),
           })
         : request.type === "command"
           ? hubApi.runCommand(id, request.name, request.arguments)
@@ -312,12 +314,49 @@ function ChatScreen(props: { session: HubSession; onSignedOut: () => void }) {
 
   const signOut = () => hubApi.logout().then(props.onSignedOut, fail)
 
+  const messages = () => {
+    const id = active()
+    return id ? data.session.message.list(id) : []
+  }
+
+  const chat: ChatState = {
+    user: props.session.user,
+    api,
+    data,
+    emitter,
+    composer,
+    fail,
+    signOut,
+    active,
+    current,
+    messages,
+    sessions,
+    open,
+    remove,
+    busy,
+    models: () => models() ?? [],
+    modelsLoading: () => models.loading,
+    model,
+    chooseModel,
+    variant,
+    target,
+    running,
+    folded,
+    fold,
+    drawer,
+    setDrawer,
+    panelOpen,
+    setPanelOpen,
+  }
+  useChatNotifications(chat)
+  const chatCommands = createChatCommands(chat)
+
   const document = createMemo(() => {
     const id = active()
     if (!id) return undefined
     return {
       sessionID: id,
-      messages: data.session.message.list(id),
+      messages: messages(),
       status: busy() ? ({ type: "busy" } as const) : ({ type: "idle" } as const),
       diffs: [],
     }
@@ -370,6 +409,8 @@ function ChatScreen(props: { session: HubSession; onSignedOut: () => void }) {
         onVariant={chooseVariant}
         target={target()}
         commands={commands()}
+        clientCommands={chatCommands.clientCommands()}
+        skills={chatCommands.skills()}
         searchFiles={searchFiles}
         machines={machines() ?? []}
         onMachinesOpen={() => void refetchMachines()}
@@ -409,153 +450,78 @@ function ChatScreen(props: { session: HubSession; onSignedOut: () => void }) {
   )
 
   return (
-    <div class="hub-chat" data-drawer={drawer() ? "" : undefined} data-folded={folded() ? "" : undefined}>
-      <button
-        type="button"
-        class="hub-chat-scrim"
-        aria-label={copy.close}
-        tabindex="-1"
-        onClick={() => setDrawer(false)}
-      />
-      <aside class="hub-chat-sidebar" aria-label={copy.chat.sessions}>
-        <div class="hub-chat-brand">
-          <Mark class="hub-topbar-mark" />
-          <span class="hub-topbar-title">{copy.hub}</span>
-          <IconButton
-            icon={<Icon name="layout-left-full" />}
-            variant="ghost"
-            size="small"
-            class="hub-chat-fold"
-            aria-label={copy.chat.collapse}
-            onClick={() => fold(true)}
-          />
-        </div>
-        <Button variant="outline" icon="plus" class="hub-chat-new" onClick={() => open(undefined)}>
-          {copy.chat.newSession}
-        </Button>
-        <div class="hub-chat-search">
-          <Icon name="magnifying-glass" size="small" />
-          <input
-            type="search"
-            value={search()}
-            placeholder={copy.chat.search}
-            aria-label={copy.chat.search}
-            onInput={(event) => setSearch(event.currentTarget.value)}
-          />
-        </div>
-        <nav class="hub-chat-sessions" data-scrollable>
+    <ChatContext.Provider value={chat}>
+      <div
+        class="hub-chat"
+        data-drawer={drawer() ? "" : undefined}
+        data-folded={folded() ? "" : undefined}
+        data-panel={panelOpen() ? "" : undefined}
+      >
+        <button
+          type="button"
+          class="hub-chat-scrim"
+          aria-label={copy.close}
+          tabindex="-1"
+          onClick={() => setDrawer(false)}
+        />
+        <ChatSidebar />
+
+        <main class="hub-chat-main">
+          <ChatHeader />
+
+          <Show when={!props.session.unlocked}>
+            <p class="hub-chat-notice" role="status">
+              {copy.chat.locked}
+            </p>
+          </Show>
+
           <Show
-            when={matching().length > 0}
-            fallback={<p class="hub-chat-none">{search().trim() ? copy.chat.noMatch : copy.chat.noSessions}</p>}
+            when={document()}
+            fallback={
+              <div class="hub-chat-start">
+                <div class="hub-chat-start-content">
+                  <h2 class="sr-only">{copy.chat.emptyTitle}</h2>
+                  <div class="hub-chat-logo" aria-hidden="true">
+                    <Logo />
+                  </div>
+                  {composerBlock()}
+                </div>
+              </div>
+            }
           >
-            <For each={matching()}>
-              {(session) => (
-                <div class="hub-chat-session" data-active={session.id === active() ? "" : undefined}>
-                  <a
-                    href={`/s/${session.id}`}
-                    aria-current={session.id === active() ? "page" : undefined}
-                    onClick={(event) => {
-                      event.preventDefault()
-                      open(session.id)
+            {(doc) => (
+              <>
+                <div class="hub-chat-scroll" data-scrollable ref={scroller} onScroll={onScroll}>
+                  <div
+                    class="hub-chat-timeline"
+                    ref={(element) => {
+                      resize.observe(element)
+                      onCleanup(() => resize.unobserve(element))
                     }}
                   >
-                    <span class="hub-chat-session-title">{session.title || copy.chat.untitled}</span>
-                  </a>
-                  <IconButton
-                    icon={<Icon name="trash" />}
-                    variant="ghost"
-                    size="small"
-                    aria-label={copy.chat.deleteSession}
-                    onClick={() => remove(session.id)}
-                  />
+                    <DataProvider
+                      directory=""
+                      sessionID={doc().sessionID}
+                      agents={false}
+                      data={{
+                        session: sessions(),
+                        session_status: { [doc().sessionID]: doc().status },
+                        session_diff: {},
+                        provider: providerCatalog(models() ?? []),
+                      }}
+                    >
+                      <SessionTimeline document={doc()} />
+                    </DataProvider>
+                  </div>
                 </div>
-              )}
-            </For>
+                <div class="hub-chat-dock">{composerBlock()}</div>
+              </>
+            )}
           </Show>
-        </nav>
-        <footer class="hub-chat-footer">
-          <a class="hub-chat-link" href="/settings">
-            <Icon name="settings-gear" size="small" />
-            <span>{copy.chat.settings}</span>
-          </a>
-          <Button variant="ghost" size="small" onClick={signOut}>
-            {copy.signOut}
-          </Button>
-        </footer>
-      </aside>
-
-      <main class="hub-chat-main">
-        <header class="hub-chat-header">
-          <IconButton
-            icon={<Icon name="menu" />}
-            variant="ghost"
-            class="hub-chat-menu"
-            aria-label={copy.chat.sessions}
-            onClick={() => setDrawer(true)}
-          />
-          <Show when={folded()}>
-            <IconButton
-              icon={<Icon name="layout-left" />}
-              variant="ghost"
-              class="hub-chat-unfold"
-              aria-label={copy.chat.expand}
-              onClick={() => fold(false)}
-            />
-          </Show>
-          <h1>{current()?.title || (active() ? copy.chat.untitled : copy.chat.newSession)}</h1>
-        </header>
-
-        <Show when={!props.session.unlocked}>
-          <p class="hub-chat-notice" role="status">
-            {copy.chat.locked}
-          </p>
-        </Show>
-
-        <Show
-          when={document()}
-          fallback={
-            <div class="hub-chat-start">
-              <div class="hub-chat-start-content">
-                <h2 class="sr-only">{copy.chat.emptyTitle}</h2>
-                <div class="hub-chat-logo" aria-hidden="true">
-                  <Logo />
-                </div>
-                {composerBlock()}
-              </div>
-            </div>
-          }
-        >
-          {(doc) => (
-            <>
-              <div class="hub-chat-scroll" data-scrollable ref={scroller} onScroll={onScroll}>
-                <div
-                  class="hub-chat-timeline"
-                  ref={(element) => {
-                    resize.observe(element)
-                    onCleanup(() => resize.unobserve(element))
-                  }}
-                >
-                  <DataProvider
-                    directory=""
-                    sessionID={doc().sessionID}
-                    agents={false}
-                    data={{
-                      session: sessions(),
-                      session_status: { [doc().sessionID]: doc().status },
-                      session_diff: {},
-                      provider: providerCatalog(models() ?? []),
-                    }}
-                  >
-                    <SessionTimeline document={doc()} />
-                  </DataProvider>
-                </div>
-              </div>
-              <div class="hub-chat-dock">{composerBlock()}</div>
-            </>
-          )}
-        </Show>
-      </main>
-    </div>
+        </main>
+        <ChatSidePanel />
+      </div>
+    </ChatContext.Provider>
   )
 }
 

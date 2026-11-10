@@ -1,10 +1,14 @@
 import { useLanguage } from "@/runtime/i18n/language"
 import { SettingsAppearance } from "@/settings/appearance/appearance"
-import { LanguageSetting } from "@/settings/general/general"
+import { FollowUpBehaviorSetting, LanguageSetting } from "@/settings/general/general"
 import { SettingsList } from "@/settings/list"
+import { type TimelineWidth, useSettings } from "@/settings/model"
+import { SettingsNotifications } from "@/settings/notifications/notifications"
+import { SettingsRow } from "@/settings/row"
 import { Button } from "@opencode/ui/button"
 import { Icon } from "@opencode/ui/icon"
 import { Menu } from "@opencode/ui/menu"
+import { Select } from "@opencode/ui/select"
 import { Tabs } from "@opencode/ui/tabs"
 import { showToast } from "@opencode/ui/toast"
 import { createMemo, createSignal, For, onCleanup, onMount, Show, type ComponentProps, type JSX } from "solid-js"
@@ -20,6 +24,7 @@ import { Providers } from "./providers"
 import { Skills } from "./skills"
 import { UpdatesSettings } from "./updates"
 import { Users } from "./users"
+import "./settings.css"
 
 type Item = { value: string; label: string; icon: ComponentProps<typeof Icon>["name"] }
 
@@ -52,6 +57,7 @@ export function Dashboard(props: { session: HubSession; onSignedOut: () => void 
       items: [
         { value: "general", label: language.t("settings.general.section.general"), icon: "sliders" },
         { value: "appearance", label: language.t("settings.general.section.appearance"), icon: "appearance" },
+        { value: "notifications", label: language.t("settings.tab.notifications"), icon: "notifications" },
       ],
     },
     {
@@ -186,12 +192,18 @@ export function Dashboard(props: { session: HubSession; onSignedOut: () => void 
               <div class="settings-section">
                 <SettingsList>
                   <LanguageSetting />
+                  <TimelineWidthSetting />
+                  <FollowUpBehaviorSetting />
                 </SettingsList>
               </div>
             </div>
           </Page>
           <Page value="appearance">
             <SettingsAppearance />
+          </Page>
+          <Page value="notifications">
+            {/* The hub chat has no permission or question prompts, and no interface sounds. */}
+            <SettingsNotifications rows={["agent", "errors"]} />
           </Page>
           <Page value="providers">
             <div class="hub-content">
@@ -262,6 +274,36 @@ export function Dashboard(props: { session: HubSession; onSignedOut: () => void 
         </div>
       </Tabs>
     </div>
+  )
+}
+
+/** The chat column follows the app's timeline width (see settings.css). */
+function TimelineWidthSetting() {
+  const language = useLanguage()
+  const settings = useSettings()
+  const options = createMemo((): { value: TimelineWidth; label: string }[] => [
+    { value: "focused", label: language.t("settings.timeline.row.width.focused") },
+    { value: "comfortable", label: language.t("settings.timeline.row.width.comfortable") },
+    { value: "wide", label: language.t("settings.timeline.row.width.wide") },
+  ])
+
+  return (
+    <SettingsRow
+      title={language.t("settings.timeline.row.width.title")}
+      description={language.t("settings.timeline.row.width.description")}
+    >
+      <Select
+        data-action="settings-timeline-width"
+        aria-label={language.t("settings.timeline.row.width.title")}
+        options={options()}
+        current={options().find((option) => option.value === settings.general.timelineWidth())}
+        value={(option) => option.value}
+        label={(option) => option.label}
+        placement="bottom-end"
+        gutter={6}
+        onSelect={(option) => option && settings.general.setTimelineWidth(option.value)}
+      />
+    </SettingsRow>
   )
 }
 

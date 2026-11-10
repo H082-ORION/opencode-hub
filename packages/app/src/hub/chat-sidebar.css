@@ -1,0 +1,92 @@
+/* The session list's search button, its menu and rename, and the session search dialog. */
+
+.hub-chat-search-trigger {
+  width: 100%;
+  height: 32px;
+  border: 0;
+  font: inherit;
+  text-align: start;
+  cursor: default;
+
+  > span {
+    flex: 1;
+    min-width: 0;
+    overflow: hidden;
+    color: var(--v2-text-text-faint);
+    line-height: var(--line-height-base);
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  &:hover {
+    color: var(--v2-text-text-base);
+  }
+
+  &:focus-visible {
+    outline: 0;
+    box-shadow: 0 0 0 1px var(--v2-border-border-focus, var(--v2-text-text-muted));
+  }
+}
+
+.hub-chat-session {
+  &[data-menu] {
+    background: var(--v2-background-bg-layer-1);
+
+    a {
+      color: var(--v2-text-text-base);
+    }
+  }
+
+  &[data-menu] .hub-chat-session-options {
+    opacity: 1;
+  }
+}
+
+/* The menu opens where the row was right-clicked: this invisible point is its anchor. */
+.hub-chat-session-anchor {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  pointer-events: none;
+}
+
+.hub-chat-rename {
+  flex: 1;
+  min-width: 0;
+  height: 36px;
+  padding: 6px 8px;
+  border-radius: 6px;
+  color: var(--v2-text-text-base);
+  line-height: var(--line-height-base);
+  outline: 0;
+  box-shadow: 0 0 0 1px var(--v2-border-border-focus, var(--v2-text-text-muted));
+}
+
+[data-component="dialog-v2"][data-fit]:has(.hub-chat-search-body) [data-slot="dialog-container"] {
+  height: min(calc(100dvh - 24px), 480px);
+}
+
+.hub-chat-search-body {
+  min-height: 0;
+  padding-inline: 10px;
+
+  [data-component="search-list"] {
+    --search-list-surface: var(--v2-background-bg-layer-01);
+  }
+}
+
+.hub-chat-search-title {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  line-height: var(--line-height-base);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.hub-chat-search-time {
+  flex-shrink: 0;
+  color: var(--v2-text-text-faint);
+  font-size: 12px;
+  line-height: var(--line-height-compact);
+}
