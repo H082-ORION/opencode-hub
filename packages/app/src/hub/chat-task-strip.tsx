@@ -15,10 +15,12 @@ import "./chat-task-strip.css"
 export function ChatTaskStrip(props: { tasks: readonly HubTask[]; modelName: (reference: string) => string }) {
   const chat = useChat()
   const language = useLanguage()
+
   const cost = (task: HubTask) =>
     task.cost > 0
       ? new Intl.NumberFormat(language.locale(), { style: "currency", currency: "USD" }).format(task.cost)
       : undefined
+
   const stopAll = () => void Promise.all(props.tasks.map((task) => hubApi.stopTask(task.id))).catch(chat.fail)
 
   return (
