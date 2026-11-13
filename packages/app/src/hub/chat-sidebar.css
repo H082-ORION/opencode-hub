@@ -90,3 +90,69 @@
   font-size: 12px;
   line-height: var(--line-height-compact);
 }
+
+/* Tasks still at work, above the sessions: each opens its conversation and its panel. */
+.hub-chat-tasks {
+  display: flex;
+  flex: none;
+  flex-direction: column;
+  gap: 2px;
+  max-height: 40%;
+  overflow-y: auto;
+}
+
+.hub-chat-tasks-title {
+  padding: 4px 8px;
+  color: var(--v2-text-text-faint);
+  font-size: 12px;
+  font-weight: 530;
+  line-height: var(--line-height-compact);
+}
+
+.hub-chat-task {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  min-width: 0;
+  padding: 6px 8px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--v2-text-text-muted);
+  font: inherit;
+  text-align: start;
+
+  &:hover,
+  &[data-active] {
+    background: var(--v2-background-bg-layer-1);
+    color: var(--v2-text-text-base);
+  }
+
+  &:focus-visible {
+    outline: 2px solid var(--v2-border-border-focus, currentColor);
+    outline-offset: -2px;
+  }
+}
+
+.hub-chat-task-icon {
+  display: inline-flex;
+  flex: none;
+  color: var(--v2-icon-icon-muted, var(--v2-text-text-muted));
+}
+
+.hub-chat-task-text {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.hub-chat-task-meta {
+  overflow: hidden;
+  color: var(--v2-text-text-faint);
+  font-size: 12px;
+  line-height: var(--line-height-compact);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}

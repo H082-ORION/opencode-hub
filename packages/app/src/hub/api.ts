@@ -1,3 +1,4 @@
+import type { FormAnswer } from "@opencode/client/promise"
 import { copy } from "./copy"
 
 export type HubMachine = {
@@ -279,6 +280,29 @@ export type HubChatDirectories = { directory: string; parent: string | null; dir
 export type HubChatTargetState = { target: HubChatTarget | null; running?: boolean; error?: string }
 export type HubMachineCommand = { name: string; description?: string }
 
+export type HubTaskStatus = "starting" | "running" | "waiting" | "idle" | "failed" | "interrupted" | "offline" | "lost"
+/** A task the hub's chat handed to a machine, as `GET chat-tasks` and its `hub.task.updated` events describe it. */
+export type HubTask = {
+  id: string
+  session: string
+  machine: string
+  machineName: string
+  machineOnline: boolean
+  directory: string
+  remoteSession: string | null
+  title: string
+  agent: string | null
+  status: HubTaskStatus
+  createdAt: number
+  startedAt: number | null
+  endedAt: number | null
+  outcome: string | null
+  error: string | null
+  tokens: { input: number; output: number; reasoning: number; cache: { read: number; write: number } }
+  cost: number
+  pending: { permissions: number; questions: number }
+}
+
 const machineRoute = (machine: string, route: string, query: Record<string, string>) =>
   `chat-machines/${encodeURIComponent(machine)}/${route}?${new URLSearchParams(query)}`
 
@@ -315,6 +339,30 @@ export const hubApi = {
     }),
   clearChatTarget: (session: string) =>
     request<void>(`chat-targets/${encodeURIComponent(session)}`, { method: "DELETE" }),
+  tasks: (session?: string) =>
+    request<{ data: HubTask[] }>(
+      session === undefined ? "chat-tasks" : `chat-tasks?${new URLSearchParams({ session })}`,
+    ).then((response) => response.data),
+  stopTask: (task: string) => request<void>(`chat-tasks/${encodeURIComponent(task)}/run`, { method: "DELETE" }),
+  backgroundTask: (task: string) =>
+    request<void>(`chat-tasks/${encodeURIComponent(task)}/background`, { method: "POST" }),
+  promptTask: (task: string, text: string, delivery: "steer" | "queue") =>
+    request<void>(`chat-tasks/${encodeURIComponent(task)}/prompt`, { method: "POST", body: { text, delivery } }),
+  replyTaskPermission: (task: string, permission: string, decision: "once" | "always" | "reject", session: string) =>
+    request<void>(`chat-tasks/${encodeURIComponent(task)}/permission/${encodeURIComponent(permission)}`, {
+      method: "POST",
+      body: { decision, session },
+    }),
+  answerTask: (task: string, form: string, answer: FormAnswer, session: string) =>
+    request<void>(`chat-tasks/${encodeURIComponent(task)}/form/${encodeURIComponent(form)}`, {
+      method: "POST",
+      body: { answer, session },
+    }),
+  dismissTask: (task: string, form: string, session: string) =>
+    request<void>(`chat-tasks/${encodeURIComponent(task)}/form/${encodeURIComponent(form)}`, {
+      method: "DELETE",
+      body: { session },
+    }),
   session: () => request<HubSession>("session"),
   logout: () => request<object>("logout", { method: "POST" }),
   lock: () => request<{ unlocked: false }>("account/lock", { method: "POST" }),

@@ -1,4 +1,4 @@
-import type { HubCopy } from "../copy"
+import type { HubLocale } from "../copy"
 
 export default {
   title: "OpenCode Hub",
@@ -570,4 +570,4 @@ export default {
     unknown: "کچھ غلط ہو گیا۔",
     status: (status: number) => `ہب نے حالت ${status} کے ساتھ جواب دیا۔`,
   },
-} satisfies HubCopy
+} satisfies HubLocale

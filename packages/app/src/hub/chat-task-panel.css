@@ -1,0 +1,163 @@
+/* A task's panel: wider than the context panel, since it holds a whole session's timeline. */
+
+.hub-chat-panel.hub-task-panel {
+  width: clamp(360px, 42vw, 720px);
+}
+
+.hub-task-header {
+  display: flex;
+  flex: none;
+  flex-direction: column;
+  gap: 4px;
+  padding: 6px 8px 8px 16px;
+  border-bottom: 1px solid var(--v2-border-border-weak, transparent);
+}
+
+.hub-task-heading {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 32px;
+
+  h2 {
+    flex: 1;
+    min-width: 0;
+    overflow: hidden;
+    font-size: 13px;
+    font-weight: 530;
+    line-height: var(--line-height-base);
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+}
+
+.hub-task-indicator {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  color: var(--v2-icon-icon-muted, var(--v2-text-text-muted));
+
+  &:empty {
+    display: none;
+  }
+}
+
+.hub-task-meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 12px;
+  min-width: 0;
+  color: var(--v2-text-text-muted);
+  font-size: 12px;
+  line-height: var(--line-height-compact);
+}
+
+.hub-task-status {
+  color: var(--v2-text-text-base);
+  font-weight: 530;
+
+  &[data-status="failed"],
+  &[data-status="lost"] {
+    color: var(--v2-text-text-critical, var(--v2-text-text-base));
+  }
+
+  &[data-status="waiting"],
+  &[data-status="offline"] {
+    color: var(--v2-text-text-warning, var(--v2-text-text-base));
+  }
+}
+
+.hub-task-place {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+
+  > span:not(.hub-status) {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+}
+
+.hub-task-usage {
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.hub-task-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  margin-inline-start: auto;
+}
+
+.hub-task-notice {
+  flex: none;
+  margin: 8px 16px 0;
+  padding: 8px 12px;
+  border-radius: 8px;
+  background: var(--v2-background-bg-layer-1);
+  color: var(--v2-text-text-muted);
+  font-size: 12px;
+  line-height: var(--line-height-compact);
+}
+
+.hub-task-scroll {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+}
+
+.hub-task-timeline {
+  padding: 12px 16px;
+}
+
+.hub-task-empty {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  height: 100%;
+  min-height: 120px;
+  color: var(--v2-text-text-faint);
+}
+
+.hub-task-dock {
+  display: flex;
+  flex: none;
+  flex-direction: column;
+  gap: 8px;
+  padding: 8px 12px max(12px, env(safe-area-inset-bottom));
+}
+
+.hub-task-composer {
+  display: flex;
+  align-items: flex-end;
+  gap: 8px;
+
+  > [data-component="textarea-v2"] {
+    flex: 1;
+    min-width: 0;
+  }
+
+  textarea {
+    max-height: 160px;
+    resize: none;
+  }
+}
+
+@media (max-width: 768px) {
+  .hub-chat-panel.hub-task-panel {
+    position: absolute;
+    inset: 0;
+    /* Above the timeline's own layers, below the session drawer. */
+    z-index: 18;
+    width: 100%;
+    margin: 0;
+    border-radius: 0;
+  }
+}

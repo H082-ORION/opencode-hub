@@ -12,6 +12,17 @@ const HIDDEN_KEY = "hub.chat.models.hidden"
 
 export const modelKey = (model: Pick<ModelInfo, "providerID" | "id">) => `${model.providerID}/${model.id}`
 
+/** Models by provider, in the shape the session timeline names a message's model with. */
+export function providerCatalog(models: readonly ModelInfo[]) {
+  const all = new Map<string, { models: Record<string, { name: string }> }>()
+  models.forEach((model) => {
+    const provider = all.get(model.providerID) ?? { models: {} }
+    provider.models[model.id] = { name: model.name }
+    all.set(model.providerID, provider)
+  })
+  return { all, default: {}, connected: Array.from(all.keys()) }
+}
+
 /** The models left out of the chat's picker, in this browser. */
 export function readHiddenModels() {
   try {

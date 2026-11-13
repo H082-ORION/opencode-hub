@@ -59,3 +59,70 @@ export function showMachineRuns(messages: readonly SessionMessageInfo[]) {
     ]
   })
 }
+
+/** The tool the hub's chat starts a task on a machine with, as the engine names it. */
+const TASK_TOOL = "hub-tools_machine_task"
+const decodeHandle = Schema.decodeUnknownOption(Schema.fromJsonString(Schema.Struct({ task: Schema.String })))
+const decodeTaskInput = Schema.decodeUnknownOption(
+  Schema.Struct({ prompt: Schema.optional(Schema.String), machine: Schema.optional(Schema.String) }),
+)
+// What the relay records once a task's execution ended, for the model (packages/relay/src/hub/chat-tasks.ts).
+const decodeTaskEnd = Schema.decodeUnknownOption(
+  Schema.Struct({
+    source: Schema.Literal("hub-machine"),
+    kind: Schema.Literal("task"),
+    task: Schema.String,
+    machine: Schema.String,
+    title: Schema.String,
+    state: Schema.Literals(["completed", "error", "cancelled"]),
+  }),
+)
+
+/** How a task's card reads: its agent line and the line under it. */
+export type TaskLabel = { agent: string; description: string }
+
+/**
+ * For display only, OpenCode's subagent card stands for a task handed to a machine: the same card, progress and
+ * click, pointing at the task (its id takes the place of the subagent's session), so the hub opens the task's panel.
+ * The message that tells the model a task ended becomes the subagent's compact outcome notice, which opens it too.
+ */
+export function showMachineTasks(
+  messages: readonly SessionMessageInfo[],
+  label: (task: string | undefined, fallback: TaskLabel) => TaskLabel,
+) {
+  return messages.map((message): SessionMessageInfo => {
+    if (message.type === "synthetic") {
+      const ended = Option.getOrUndefined(decodeTaskEnd(message.metadata))
+      if (!ended) return message
+      return {
+        ...message,
+        description: ended.title,
+        metadata: { source: "subagent", agent: ended.machine, state: ended.state, childID: ended.task },
+      }
+    }
+    if (
+      message.type !== "assistant" ||
+      !message.content.some((part) => part.type === "tool" && part.name === TASK_TOOL)
+    )
+      return message
+    return {
+      ...message,
+      content: message.content.map((part) => {
+        if (part.type !== "tool" || part.name !== TASK_TOOL) return part
+        if (part.state.status === "streaming") return { ...part, name: "subagent" }
+        const input = Option.getOrUndefined(decodeTaskInput(part.state.input))
+        const text =
+          part.state.status === "running" ? undefined : part.state.content?.find((item) => item.type === "text")
+        const task = text?.type === "text" ? Option.getOrUndefined(decodeHandle(text.text))?.task : undefined
+        const shown = label(task, {
+          agent: input?.machine ?? "",
+          description: input?.prompt?.trim().split("\n")[0] ?? "",
+        })
+        const state = { ...part.state, input: { agent: shown.agent, description: shown.description } }
+        if (state.status === "running") return { ...part, name: "subagent", state }
+        const metadata: Record<string, string> = task ? { sessionID: task } : {}
+        return { ...part, name: "subagent", state: { ...state, metadata } }
+      }),
+    }
+  })
+}

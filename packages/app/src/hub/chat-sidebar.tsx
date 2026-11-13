@@ -8,6 +8,7 @@ import { InlineInput } from "@opencode/ui/inline-input"
 import { Keybind } from "@opencode/ui/keybind"
 import { Mark } from "@opencode/ui/logo"
 import { Menu } from "@opencode/ui/menu"
+import { Spinner } from "@opencode/ui/spinner"
 import { showToast } from "@opencode/ui/toast"
 import { makeEventListener } from "@solid-primitives/event-listener"
 import { createEffect, createSignal, For, onCleanup, onMount, Show, untrack } from "solid-js"
@@ -36,6 +37,7 @@ import {
 } from "@/session/delete-machine"
 import { errorText } from "./api"
 import { useChat } from "./chat-context"
+import { isActiveTask } from "./chat-tasks"
 import { ChatSearchDialog } from "./chat-search"
 import { copy } from "./copy"
 import "./chat-sidebar.css"
@@ -52,6 +54,8 @@ const TOUCH_CANCEL: HomeSessionRowEvent = { type: "touch.cancel" }
 /** The session list: new session, search, sessions with their menu, settings and sign-out. */
 export function ChatSidebar() {
   const chat = useChat()
+  // Tasks still at work in any conversation, so one waiting for an answer is never out of sight.
+  const activeTasks = () => chat.tasks.list().filter(isActiveTask)
   const dialog = useDialog()
   const language = useLanguage()
   // Lives at the list root, keyed by session ID, so the menu and rename survive a row remounting when the list reorders.
@@ -201,6 +205,40 @@ export function ChatSidebar() {
         <span>{language.t("common.search.placeholder")}</span>
         <Keybind keys={[IS_MAC ? "⌘" : "Ctrl", "K"]} variant="ghost" />
       </button>
+      <Show when={activeTasks().length > 0}>
+        <section class="hub-chat-tasks" aria-label={copy.task.tasks}>
+          <h2 class="hub-chat-tasks-title">{copy.task.tasks}</h2>
+          <For each={activeTasks()}>
+            {(task) => (
+              <button
+                type="button"
+                class="hub-chat-task"
+                data-active={chat.task() === task.id ? "" : undefined}
+                title={`${task.title} — ${task.machineName}`}
+                onClick={() => {
+                  chat.open(task.session)
+                  chat.openTask(task.id)
+                }}
+              >
+                <span class="hub-chat-task-icon" aria-hidden="true">
+                  <Show
+                    when={task.status === "running" || task.status === "starting"}
+                    fallback={<Icon name="warning" size="small" />}
+                  >
+                    <Spinner class="size-4" />
+                  </Show>
+                </span>
+                <span class="hub-chat-task-text">
+                  <span class="hub-chat-session-title">{task.title}</span>
+                  <span class="hub-chat-task-meta">
+                    {task.machineName} · {copy.task.status[task.status]}
+                  </span>
+                </span>
+              </button>
+            )}
+          </For>
+        </section>
+      </Show>
       <nav class="hub-chat-sessions" data-scrollable>
         <Show when={chat.sessions().length > 0} fallback={<p class="hub-chat-none">{copy.chat.noSessions}</p>}>
           <For each={chat.sessions()}>

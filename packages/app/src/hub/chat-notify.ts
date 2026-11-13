@@ -5,6 +5,8 @@ import { useSettings } from "@/settings/model"
 import { createNotificationCoordinator } from "@/shell/notifications/coordinator"
 import { playSoundById } from "@/shell/notifications/sound"
 import type { ChatState } from "./chat-context"
+import { isActiveTask } from "./chat-tasks"
+import { copy } from "./copy"
 
 /**
  * Announces a top-level session that finished or failed with the chosen sound and a system notification, as the app
@@ -44,6 +46,43 @@ export function useChatNotifications(chat: ChatState) {
     void coordinator.system(input.eventID, () => platform.notify(title, description, () => chat.open(input.sessionID)))
   }
 
+  // A task that ends, fails or starts waiting for the user, unless its panel is in front of them.
+  onCleanup(
+    chat.tasks.listen((task, previous) => {
+      if (!previous || previous.status === task.status) return
+      const outcome =
+        task.status === "waiting"
+          ? "waiting"
+          : !isActiveTask(previous)
+            ? undefined
+            : task.status === "idle"
+              ? "done"
+              : task.status === "failed" || task.status === "lost"
+                ? "failed"
+                : undefined
+      if (!outcome) return
+      if (document.visibilityState === "visible" && chat.task() === task.id) return
+      const failed = outcome === "failed"
+      const eventID = `${task.id}:${task.status}:${task.endedAt ?? task.startedAt ?? 0}`
+      const sound = failed
+        ? settings.sounds.errorsEnabled() && settings.sounds.errors()
+        : settings.sounds.agentEnabled() && settings.sounds.agent()
+      if (sound) void coordinator.sound(eventID, () => playSoundById(sound))
+      if (!(failed ? settings.notifications.errors() : settings.notifications.agent())) return
+      const title =
+        outcome === "done"
+          ? copy.task.notifyDone(task.title)
+          : outcome === "failed"
+            ? copy.task.notifyFailed(task.title)
+            : copy.task.notifyWaiting(task.title)
+      void coordinator.system(eventID, () =>
+        platform.notify(title, task.machineName, () => {
+          chat.open(task.session)
+          chat.openTask(task.id)
+        }),
+      )
+    }),
+  )
   onCleanup(
     chat.emitter.on("session.execution.succeeded", (event) =>
       announce({ sessionID: event.data.sessionID, eventID: event.id, failed: false }),

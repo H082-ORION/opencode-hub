@@ -16,6 +16,7 @@ import { createGlobalEmitter } from "@solid-primitives/event-bus"
 import { createEffect, createMemo, createResource, createSignal, on, onCleanup, onMount, Show } from "solid-js"
 import { createStore } from "solid-js/store"
 import type { ComposerPersistedState } from "@/composer/types"
+import { useLanguage } from "@/runtime/i18n/language"
 import { useSettings } from "@/settings/model"
 import { errorText, hubApi, HubError, type HubChatTarget, type HubSession } from "./api"
 import { createChatCommands } from "./chat-commands"
@@ -23,12 +24,14 @@ import { ChatContext, type ChatEventMap, type ChatState } from "./chat-context"
 import { ChatSidePanel } from "./chat-context-panel"
 import { ChatHeader } from "./chat-header"
 import { projectName } from "./chat-machine"
-import { showMachineRuns } from "./chat-machine-runs"
+import { showMachineRuns, showMachineTasks, type TaskLabel } from "./chat-machine-runs"
+import { ChatTaskPanel } from "./chat-task-panel"
+import { createTaskFeed, isActiveTask } from "./chat-tasks"
 import { useChatNotifications } from "./chat-notify"
 import { ChatSidebar } from "./chat-sidebar"
 import { HubComposer, type HubSubmit } from "./composer"
 import { copy } from "./copy"
-import { modelKey, readHiddenModels } from "./models"
+import { modelKey, providerCatalog, readHiddenModels } from "./models"
 
 const MODEL_KEY = "hub.chat.model"
 const SIDEBAR_KEY = "hub.chat.sidebar"
@@ -91,7 +94,17 @@ function ChatScreen(props: { session: HubSession; onSignedOut: () => void }) {
   const [drawer, setDrawer] = createSignal(false)
   const [picked, setPicked] = createSignal(readStored(MODEL_KEY))
   const [folded, setFolded] = createSignal(readStored(SIDEBAR_KEY) === "closed")
-  const [panelOpen, setPanelOpen] = createSignal(false)
+  // One panel at most beside the timeline: the session's context, or a task.
+  const [panel, setPanel] = createSignal<{ type: "none" } | { type: "context" } | { type: "task"; id: string }>({
+    type: "none",
+  })
+  const panelOpen = () => panel().type === "context"
+  const setPanelOpen = (value: boolean) => setPanel(value ? { type: "context" } : { type: "none" })
+  const taskPanel = () => {
+    const current = panel()
+    return current.type === "task" ? current.id : undefined
+  }
+  const tasks = createTaskFeed({ onError: fail })
   const fold = (value: boolean) => {
     setFolded(value)
     store(SIDEBAR_KEY, value ? "closed" : "open")
@@ -201,6 +214,7 @@ function ChatScreen(props: { session: HubSession; onSignedOut: () => void }) {
   // A command or shell line running on the attached machine, polled until the hub reports it done.
   const [running, setRunning] = createSignal(false)
   const settings = useSettings()
+  const language = useLanguage()
   createEffect(
     on(active, (id) => {
       setRunning(false)
@@ -348,6 +362,11 @@ function ChatScreen(props: { session: HubSession; onSignedOut: () => void }) {
     setDrawer,
     panelOpen,
     setPanelOpen,
+    tasks,
+    task: taskPanel,
+    openTask: (id) => setPanel({ type: "task", id }),
+    closeTask: () => setPanel({ type: "none" }),
+    machines: () => machines() ?? [],
   }
   useChatNotifications(chat)
   const chatCommands = createChatCommands(chat)
@@ -359,11 +378,38 @@ function ChatScreen(props: { session: HubSession; onSignedOut: () => void }) {
     const boundary = current()?.revert?.messageID
     return {
       sessionID: id,
-      messages: showMachineRuns(boundary ? messages().filter((message) => message.id < boundary) : messages()),
+      messages: showMachineTasks(
+        showMachineRuns(boundary ? messages().filter((message) => message.id < boundary) : messages()),
+        taskLabel,
+      ),
       status: busy() ? ({ type: "busy" } as const) : ({ type: "idle" } as const),
       diffs: [],
     }
   })
+
+  /** A task card's lines: the machine, and the task's title with what it cost so far. */
+  const taskLabel = (id: string | undefined, fallback: TaskLabel): TaskLabel => {
+    const task = id ? tasks.get(id) : undefined
+    if (!task) return fallback
+    const tokens =
+      task.tokens.input + task.tokens.output + task.tokens.reasoning + task.tokens.cache.read + task.tokens.cache.write
+    const usage =
+      tokens > 0 || task.cost > 0
+        ? copy.task.usage(
+            new Intl.NumberFormat(language.locale(), { notation: "compact", maximumFractionDigits: 1 }).format(tokens),
+            new Intl.NumberFormat(language.locale(), { style: "currency", currency: "USD" }).format(task.cost),
+          )
+        : undefined
+    return { agent: task.machineName, description: usage ? `${task.title} · ${usage}` : task.title }
+  }
+  // The open session's tasks, which its cards and notices show as working while they run.
+  const sessionTasks = createMemo(() => {
+    const id = active()
+    return id ? tasks.list().filter((task) => task.session === id) : []
+  })
+  const runningTasks = createMemo(() => sessionTasks().filter(isActiveTask))
+  const stopAllTasks = () => void Promise.all(runningTasks().map((task) => hubApi.stopTask(task.id))).catch(fail)
+  const openSession = (id: string) => (id.startsWith("tsk_") ? setPanel({ type: "task", id }) : open(id))
 
   let scroller: HTMLDivElement | undefined
   const stick = { value: true }
@@ -390,6 +436,15 @@ function ChatScreen(props: { session: HubSession; onSignedOut: () => void }) {
         <p class="hub-chat-notice" role="status">
           {copy.chat.noProviders} <a href="/settings">{copy.chat.openSettings}</a>
         </p>
+      </Show>
+      <Show when={runningTasks().length > 0}>
+        <div class="hub-chat-running" role="status">
+          <Spinner class="size-4" />
+          <span class="hub-chat-badge-text">{copy.task.tasks}</span>
+          <Button variant="ghost" size="small" onClick={stopAllTasks}>
+            {copy.task.stopAll}
+          </Button>
+        </div>
       </Show>
       <Show when={running() ? target() : undefined}>
         {(attached) => (
@@ -458,7 +513,7 @@ function ChatScreen(props: { session: HubSession; onSignedOut: () => void }) {
         class="hub-chat"
         data-drawer={drawer() ? "" : undefined}
         data-folded={folded() ? "" : undefined}
-        data-panel={panelOpen() ? "" : undefined}
+        data-panel={panel().type === "none" ? undefined : ""}
       >
         <button
           type="button"
@@ -506,9 +561,18 @@ function ChatScreen(props: { session: HubSession; onSignedOut: () => void }) {
                       directory=""
                       sessionID={doc().sessionID}
                       agents={false}
+                      onNavigateToSession={openSession}
                       data={{
                         session: sessions(),
-                        session_status: { [doc().sessionID]: doc().status },
+                        session_status: {
+                          ...Object.fromEntries(
+                            sessionTasks().map((task) => [
+                              task.id,
+                              isActiveTask(task) ? ({ type: "busy" } as const) : ({ type: "idle" } as const),
+                            ]),
+                          ),
+                          [doc().sessionID]: doc().status,
+                        },
                         session_diff: {},
                         provider: providerCatalog(models() ?? []),
                       }}
@@ -523,19 +587,12 @@ function ChatScreen(props: { session: HubSession; onSignedOut: () => void }) {
           </Show>
         </main>
         <ChatSidePanel />
+        <Show when={taskPanel()} keyed>
+          {(id) => <ChatTaskPanel task={id} />}
+        </Show>
       </div>
     </ChatContext.Provider>
   )
-}
-
-function providerCatalog(models: ModelInfo[]) {
-  const all = new Map<string, { models: Record<string, { name: string }> }>()
-  models.forEach((model) => {
-    const provider = all.get(model.providerID) ?? { models: {} }
-    provider.models[model.id] = { name: model.name }
-    all.set(model.providerID, provider)
-  })
-  return { all, default: {}, connected: Array.from(all.keys()) }
 }
 
 function readStored(key: string) {

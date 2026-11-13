@@ -1,4 +1,4 @@
-import type { HubCopy } from "../copy"
+import type { HubLocale } from "../copy"
 
 export default {
   title: "OpenCode Hub",
@@ -573,4 +573,4 @@ export default {
     unknown: "Valami hiba történt.",
     status: (status: number) => `A hub ${status} állapottal válaszolt.`,
   },
-} satisfies HubCopy
+} satisfies HubLocale

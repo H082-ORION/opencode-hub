@@ -8,6 +8,7 @@ import { IconButton } from "@opencode/ui/icon-button"
 import { createMemo, createResource, For, Show } from "solid-js"
 import { useLanguage } from "@/runtime/i18n/language"
 import { useChat } from "./chat-context"
+import { copy } from "./copy"
 import "./chat-context-panel.css"
 
 /** The open session's context stats, as OpenCode's Context tab shows them, beside the timeline while `panelOpen` is set. */
@@ -16,6 +17,8 @@ export function ChatSidePanel() {
   const usage = createChatUsage()
   const language = useLanguage()
   const formatter = createMemo(() => createSessionContextFormatter(language.locale()))
+  // What the session's tasks on machines cost, on top of the session itself.
+  const tasks = createMemo(() => chat.tasks.list().filter((task) => task.session === chat.active()))
 
   const counts = createMemo(() => {
     const all = chat.messages()
@@ -70,6 +73,16 @@ export function ChatSidePanel() {
               </div>
             )}
           </For>
+          <Show when={tasks().length > 0}>
+            <div>
+              <dt>{copy.task.cost}</dt>
+              <dd>
+                {new Intl.NumberFormat(language.locale(), { style: "currency", currency: "USD" }).format(
+                  tasks().reduce((total, task) => total + task.cost, 0),
+                )}
+              </dd>
+            </div>
+          </Show>
         </dl>
       </aside>
     </Show>

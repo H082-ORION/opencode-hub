@@ -1,4 +1,4 @@
-import type { HubCopy } from "../copy"
+import type { HubLocale } from "../copy"
 
 export default {
   title: "OpenCode Hub",
@@ -566,4 +566,4 @@ export default {
     unknown: "문제가 발생했습니다.",
     status: (status: number) => `허브가 상태 ${status}(으)로 응답했습니다.`,
   },
-} satisfies HubCopy
+} satisfies HubLocale

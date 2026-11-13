@@ -10,7 +10,8 @@ import type { GlobalEmitter } from "@solid-primitives/event-bus"
 import { createContext, useContext, type Accessor } from "solid-js"
 import type { SetStoreFunction, Store } from "solid-js/store"
 import type { ComposerPersistedState } from "@/composer/types"
-import type { HubChatTarget, HubSession } from "./api"
+import type { HubChatTarget, HubMachine, HubSession } from "./api"
+import type { TaskFeed } from "./chat-tasks"
 
 export type ChatEventMap = { [Type in OpenCodeEvent["type"]]: Extract<OpenCodeEvent, { type: Type }> }
 
@@ -55,8 +56,18 @@ export type ChatState = {
   fold: (value: boolean) => void
   drawer: Accessor<boolean>
   setDrawer: (value: boolean) => void
+  /** Whether the context panel shows beside the timeline. */
   panelOpen: Accessor<boolean>
   setPanelOpen: (value: boolean) => void
+
+  /** Every task the user handed to machines, kept live. */
+  tasks: TaskFeed
+  /** The task whose panel shows beside the timeline, in place of the context panel. */
+  task: Accessor<string | undefined>
+  openTask: (id: string) => void
+  closeTask: () => void
+  /** The user's machines, with their links. */
+  machines: Accessor<readonly HubMachine[]>
 }
 
 export const ChatContext = createContext<ChatState>()

@@ -1,4 +1,4 @@
-import type { HubCopy } from "../copy"
+import type { HubLocale } from "../copy"
 
 export default {
   title: "OpenCode Hub",
@@ -571,4 +571,4 @@ export default {
     unknown: "Diçka shkoi keq.",
     status: (status: number) => `Hub-i u përgjigj me statusin ${status}.`,
   },
-} satisfies HubCopy
+} satisfies HubLocale
