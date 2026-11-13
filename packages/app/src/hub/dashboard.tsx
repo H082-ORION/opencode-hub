@@ -22,6 +22,7 @@ import { HubModels } from "./models"
 import { Organizations } from "./orgs"
 import { Providers } from "./providers"
 import { Skills } from "./skills"
+import { Templates } from "./templates"
 import { UpdatesSettings } from "./updates"
 import { Users } from "./users"
 import "./settings.css"
@@ -74,6 +75,7 @@ export function Dashboard(props: { session: HubSession; onSignedOut: () => void 
         { value: "cloud", label: copy.settings.cloud, icon: "server" },
         { value: "connectors", label: copy.settings.connectors, icon: "extensions" },
         { value: "skills", label: copy.settings.skills, icon: "flask" },
+        { value: "templates", label: copy.settings.templates, icon: "agent" },
         { value: "account", label: copy.settings.account, icon: "lock" },
         ...(admin()
           ? ([
@@ -242,6 +244,11 @@ export function Dashboard(props: { session: HubSession; onSignedOut: () => void 
           <Page value="skills">
             <div class="hub-content">
               <Skills fail={fail} />
+            </div>
+          </Page>
+          <Page value="templates">
+            <div class="hub-content">
+              <Templates fail={fail} />
             </div>
           </Page>
           <Page value="account">

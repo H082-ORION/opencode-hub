@@ -108,6 +108,19 @@ export function ChatTaskPanel(props: { task: string }) {
   )
 
   const remote = () => task()?.remoteSession ?? undefined
+  // The subagent sessions opened from the timeline, newest last: the panel shows the last one, and Back pops it.
+  const [stack, setStack] = createSignal<string[]>([])
+  const shown = () => stack().at(-1) ?? remote()
+  const openChild = (id: string) => {
+    if (id === remote()) return setStack([])
+    setStack((current) => (current.at(-1) === id ? current : [...current, id]))
+    void Promise.all([data.session.sync(id), data.session.message.sync(id)]).catch(() => undefined)
+  }
+  const back = () => setStack((current) => current.slice(0, -1))
+  const childTitle = () => {
+    const id = stack().at(-1)
+    return id ? data.session.get(id)?.title || copy.task.subagent : undefined
+  }
 
   function run(effect: TaskPanelEffect) {
     const id = untrack(remote)
@@ -133,7 +146,7 @@ export function ChatTaskPanel(props: { task: string }) {
   )
 
   const document = createMemo(() => {
-    const id = remote()
+    const id = shown()
     if (!id) return undefined
     return {
       sessionID: id,
@@ -195,6 +208,15 @@ export function ChatTaskPanel(props: { task: string }) {
     )
   })
   const machineURL = () => chat.machines().find((machine) => machine.id === task()?.machine)?.url
+  /** The model's name as the hub lists it, for the task's `provider/model#variant`. */
+  const modelName = () => {
+    const reference = task()?.model
+    if (!reference) return undefined
+    const [ref, variant] = reference.split("#")
+    const found = chat.models().find((model) => `${model.providerID}/${model.id}` === ref)
+    const name = found?.name ?? ref?.split("/").slice(1).join("/") ?? reference
+    return variant ? `${name} (${variant})` : name
+  }
 
   // Follows the newest messages until the user scrolls up, as the chat does.
   const scroll = { element: undefined as HTMLDivElement | undefined, stick: true }
@@ -212,8 +234,17 @@ export function ChatTaskPanel(props: { task: string }) {
               <Spinner class="size-4" />
             </Show>
           </span>
-          <h2 dir="auto" title={task()?.title}>
-            {task()?.title ?? copy.task.label}
+          <Show when={childTitle()}>
+            <IconButton
+              icon={<Icon name="arrow-left" />}
+              variant="ghost"
+              size="small"
+              aria-label={copy.task.back}
+              onClick={back}
+            />
+          </Show>
+          <h2 dir="auto" title={childTitle() ?? task()?.title}>
+            {childTitle() ?? task()?.title ?? copy.task.label}
           </h2>
           <IconButton
             icon={<Icon name="close" />}
@@ -234,6 +265,15 @@ export function ChatTaskPanel(props: { task: string }) {
                 <Icon name="folder" size="small" />
                 <span>{projectName(current().directory)}</span>
               </span>
+              <Show when={modelName()}>
+                {(name) => (
+                  <span class="hub-task-model" title={task()?.model ?? undefined}>
+                    <Icon name="models" size="small" />
+                    <span>{name()}</span>
+                    <Show when={task()?.template}>{(template) => <span>· {template()}</span>}</Show>
+                  </span>
+                )}
+              </Show>
               <Show when={usage()}>
                 <span class="hub-task-usage">{usage()}</span>
               </Show>
@@ -309,6 +349,7 @@ export function ChatTaskPanel(props: { task: string }) {
                 directory={task()?.directory ?? ""}
                 sessionID={doc().sessionID}
                 agents={false}
+                onNavigateToSession={openChild}
                 data={{
                   session: sessions(),
                   session_status: statuses(),
@@ -332,7 +373,7 @@ export function ChatTaskPanel(props: { task: string }) {
         </Show>
         <TaskComposer
           task={task()}
-          disabled={!view().canSend || !remote()}
+          disabled={!view().canSend || !remote() || task()?.kind === "shell"}
           working={view().working}
           delivery={settings.general.followUpBehavior()}
         />

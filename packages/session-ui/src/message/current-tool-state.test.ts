@@ -92,7 +92,7 @@ describe("current tool state", () => {
     expect(currentToolOutput(tool)).toBeUndefined()
   })
 
-  test("shows the images a tool returned inline, but not a dropped payload or another file", () => {
+  test("shows the images a tool returned inline or by URL, but not a dropped payload, a local path or another file", () => {
     const tool = {
       type: "tool",
       id: "tool_screenshot",
@@ -105,11 +105,17 @@ describe("current tool state", () => {
           { type: "file", mime: "image/png", uri: "data:image/png;base64,iVBORw0KGgo=", name: "page.png" },
           { type: "file", mime: "image/png", uri: "data:image/png;base64," },
           { type: "file", mime: "text/plain", uri: "data:text/plain;base64,aGk=" },
+          { type: "file", mime: "image/jpeg", uri: "/hub/api/chat-tasks/tsk_1/image/0" },
+          { type: "file", mime: "image/png", uri: "file:///home/me/shot.png" },
+          { type: "file", mime: "text/html", uri: "https://example.com/page" },
         ],
       },
       time,
     } satisfies SessionMessageAssistantTool
 
-    expect(currentToolImages(tool)).toEqual([{ uri: "data:image/png;base64,iVBORw0KGgo=", name: "page.png" }])
+    expect(currentToolImages(tool)).toEqual([
+      { uri: "data:image/png;base64,iVBORw0KGgo=", name: "page.png" },
+      { uri: "/hub/api/chat-tasks/tsk_1/image/0", name: undefined },
+    ])
   })
 })

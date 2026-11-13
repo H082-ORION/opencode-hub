@@ -78,13 +78,14 @@ const decodeTaskEnd = Schema.decodeUnknownOption(
   }),
 )
 
-/** How a task's card reads: its agent line and the line under it. */
-export type TaskLabel = { agent: string; description: string }
+/** How a task's card reads: its agent line, the line under it, and the images its tools produced, by URL. */
+export type TaskLabel = { agent: string; description: string; images?: readonly { uri: string; name?: string }[] }
 
 /**
  * For display only, OpenCode's subagent card stands for a task handed to a machine: the same card, progress and
  * click, pointing at the task (its id takes the place of the subagent's session), so the hub opens the task's panel.
- * The message that tells the model a task ended becomes the subagent's compact outcome notice, which opens it too.
+ * The images the task produced show under the card as a tool's images do. The message that tells the model a task
+ * ended becomes the subagent's compact outcome notice, which opens it too.
  */
 export function showMachineTasks(
   messages: readonly SessionMessageInfo[],
@@ -121,7 +122,9 @@ export function showMachineTasks(
         const state = { ...part.state, input: { agent: shown.agent, description: shown.description } }
         if (state.status === "running") return { ...part, name: "subagent", state }
         const metadata: Record<string, string> = task ? { sessionID: task } : {}
-        return { ...part, name: "subagent", state: { ...state, metadata } }
+        const images = (shown.images ?? []).map((image) => ({ type: "file" as const, mime: "image/*", ...image }))
+        if (!state.content || images.length === 0) return { ...part, name: "subagent", state: { ...state, metadata } }
+        return { ...part, name: "subagent", state: { ...state, metadata, content: [...state.content, ...images] } }
       }),
     }
   })

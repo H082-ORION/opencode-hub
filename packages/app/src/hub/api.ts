@@ -276,11 +276,13 @@ export const post = <T>(route: string, body: unknown) => request<T>(route, { met
 export type HubChatTarget = { machine: string; machineName: string; directory: string; online: boolean }
 export type HubChatProject = { id: string; name: string; directory: string }
 export type HubChatDirectories = { directory: string; parent: string | null; directories: string[] }
-/** A chat session's machine and project, whether a command or shell run is going on there, and how the last one failed. */
-export type HubChatTargetState = { target: HubChatTarget | null; running?: boolean; error?: string }
+/** A chat session's machine and project. */
+export type HubChatTargetState = { target: HubChatTarget | null }
 export type HubMachineCommand = { name: string; description?: string }
 
 export type HubTaskStatus = "starting" | "running" | "waiting" | "idle" | "failed" | "interrupted" | "offline" | "lost"
+/** What a task runs: an agent prompt, a slash command or one shell command. */
+export type HubTaskKind = "prompt" | "command" | "shell"
 /** A task the hub's chat handed to a machine, as `GET chat-tasks` and its `hub.task.updated` events describe it. */
 export type HubTask = {
   id: string
@@ -292,6 +294,12 @@ export type HubTask = {
   remoteSession: string | null
   title: string
   agent: string | null
+  kind: HubTaskKind
+  /** `provider/model`, with `#variant` when one is chosen; null for the machine's default. */
+  model: string | null
+  template: string | null
+  /** How many images the task's tools had produced when its last execution ended. */
+  images: number
   status: HubTaskStatus
   createdAt: number
   startedAt: number | null
@@ -301,6 +309,33 @@ export type HubTask = {
   tokens: { input: number; output: number; reasoning: number; cache: { read: number; write: number } }
   cost: number
   pending: { permissions: number; questions: number }
+}
+
+/** A chat model as the hub lists it for sub-agents. */
+export type HubChatModel = {
+  id: string
+  providerID: string
+  name: string
+  capabilities: { tools?: boolean; input: string[] }
+  variants?: { id: string }[]
+}
+
+/** An agent template: a role a sub-agent takes, as a system prompt with a default model. Built-in ones are read-only. */
+export type HubTemplate = {
+  id: string
+  name: string
+  description: string
+  system: string
+  model: string | null
+  agent: string | null
+  builtin: boolean
+}
+export type TemplateDraft = {
+  name: string
+  description: string
+  system: string
+  model: string | null
+  agent: string | null
 }
 
 const machineRoute = (machine: string, route: string, query: Record<string, string>) =>
@@ -324,14 +359,20 @@ export const hubApi = {
     ),
   machineFiles: (machine: string, directory: string, query: string) =>
     request<{ data: string[] }>(machineRoute(machine, "files", { directory, query })).then((response) => response.data),
-  runCommand: (session: string, name: string, args: string) =>
-    request<object>(`chat-targets/${encodeURIComponent(session)}/command`, {
-      method: "POST",
-      body: { name, arguments: args },
+  /** Starts a task on the attached machine: a slash command or a shell line from the composer. */
+  startTask: (
+    session: string,
+    body: { kind: "command"; command: { name: string; arguments: string } } | { kind: "shell"; shell: string },
+  ) => request<HubTask>("chat-tasks", { method: "POST", body: { session, ...body } }),
+  /** The models the user can run, on the hub and on their machines. */
+  chatModels: () => request<{ data: HubChatModel[] }>("chat-models").then((response) => response.data),
+  templates: () => request<{ data: HubTemplate[] }>("chat-templates").then((response) => response.data),
+  saveTemplate: (body: TemplateDraft, id?: string) =>
+    request<HubTemplate>(id ? `chat-templates/${encodeURIComponent(id)}` : "chat-templates", {
+      method: id ? "PUT" : "POST",
+      body,
     }),
-  runShell: (session: string, command: string) =>
-    request<object>(`chat-targets/${encodeURIComponent(session)}/shell`, { method: "POST", body: { command } }),
-  stopRun: (session: string) => request<void>(`chat-targets/${encodeURIComponent(session)}/run`, { method: "DELETE" }),
+  deleteTemplate: (id: string) => request<void>(`chat-templates/${encodeURIComponent(id)}`, { method: "DELETE" }),
   setChatTarget: (session: string, target: Pick<HubChatTarget, "machine" | "directory">) =>
     request<object>(`chat-targets/${encodeURIComponent(session)}`, {
       method: "PUT",

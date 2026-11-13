@@ -70,6 +70,19 @@
   }
 }
 
+.hub-task-model {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+
+  > span {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+}
+
 .hub-task-place {
   display: inline-flex;
   align-items: center;

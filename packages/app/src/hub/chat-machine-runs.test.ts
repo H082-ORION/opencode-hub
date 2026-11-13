@@ -17,7 +17,9 @@ const call = (state: Record<string, unknown>) =>
   }) as unknown as SessionMessageInfo
 
 const label = (task: string | undefined, fallback: { agent: string; description: string }) =>
-  task === "tsk_1" ? { agent: "Laptop", description: "Fix the tests · $0.12" } : fallback
+  task === "tsk_1"
+    ? { agent: "Laptop", description: "Fix the tests · $0.12", images: [{ uri: "/hub/api/chat-tasks/tsk_1/image/0" }] }
+    : fallback
 
 describe("tasks in the hub's timeline", () => {
   test("a started task shows as a subagent card that opens it", () => {
@@ -40,7 +42,10 @@ describe("tasks in the hub's timeline", () => {
         state: {
           status: "completed",
           input: { agent: "Laptop", description: "Fix the tests · $0.12" },
-          content: [{ type: "text", text: JSON.stringify({ task: "tsk_1", status: "running" }) }],
+          content: [
+            { type: "text", text: JSON.stringify({ task: "tsk_1", status: "running" }) },
+            { type: "file", mime: "image/*", uri: "/hub/api/chat-tasks/tsk_1/image/0" },
+          ],
           metadata: { sessionID: "tsk_1" },
         },
         time: { created: 1 },

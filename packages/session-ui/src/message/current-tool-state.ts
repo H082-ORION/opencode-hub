@@ -31,6 +31,8 @@ export function currentToolOutput(tool: SessionMessageAssistantTool) {
 }
 
 const INLINE_IMAGE = /^data:image\/[A-Za-z0-9.+-]+;base64,./i
+/** An image a browser can fetch: an absolute `http(s)` URL or a path on the same origin. */
+const FETCHED_IMAGE = /^(?:https?:\/\/|\/(?!\/))/i
 
 /**
  * The images a tool returned inline, such as a browser's screenshots. A payload a client dropped to save memory leaves
@@ -39,7 +41,10 @@ const INLINE_IMAGE = /^data:image\/[A-Za-z0-9.+-]+;base64,./i
 export function currentToolImages(tool: SessionMessageAssistantTool) {
   if (!("content" in tool.state) || !tool.state.content) return undefined
   const images = tool.state.content.flatMap((item) =>
-    item.type === "file" && INLINE_IMAGE.test(item.uri) ? [{ uri: item.uri, name: item.name ?? undefined }] : [],
+    item.type === "file" &&
+    (INLINE_IMAGE.test(item.uri) || (FETCHED_IMAGE.test(item.uri) && item.mime.startsWith("image/")))
+      ? [{ uri: item.uri, name: item.name ?? undefined }]
+      : [],
   )
   return images.length > 0 ? images : undefined
 }

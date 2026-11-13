@@ -49,8 +49,6 @@ export type ChatState = {
   variant: Accessor<string>
 
   target: Accessor<HubChatTarget | undefined>
-  /** Whether a command or shell line is running on the attached machine. */
-  running: Accessor<boolean>
 
   folded: Accessor<boolean>
   fold: (value: boolean) => void

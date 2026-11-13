@@ -3,13 +3,11 @@ import { createClientConnection, createData } from "@opencode/client/solid"
 import { DataProvider } from "@opencode/session-ui/context/data"
 import { File } from "@opencode/session-ui/file"
 import { SessionTimeline } from "@opencode/session-ui/timeline"
-import { Button } from "@opencode/ui/button"
 import { FileComponentProvider } from "@opencode/ui/context/file"
 import { Icon } from "@opencode/ui/icon"
 import { IconButton } from "@opencode/ui/icon-button"
 import { Avatar } from "@opencode/ui/avatar"
 import { Logo } from "@opencode/ui/logo"
-import { Spinner } from "@opencode/ui/spinner"
 import { showToast } from "@opencode/ui/toast"
 import { SessionID } from "@opencode/schema/session-id"
 import { createGlobalEmitter } from "@solid-primitives/event-bus"
@@ -26,6 +24,7 @@ import { ChatHeader } from "./chat-header"
 import { projectName } from "./chat-machine"
 import { showMachineRuns, showMachineTasks, type TaskLabel } from "./chat-machine-runs"
 import { ChatTaskPanel } from "./chat-task-panel"
+import { ChatTaskStrip } from "./chat-task-strip"
 import { createTaskFeed, isActiveTask } from "./chat-tasks"
 import { useChatNotifications } from "./chat-notify"
 import { ChatSidebar } from "./chat-sidebar"
@@ -36,9 +35,10 @@ import { modelKey, providerCatalog, readHiddenModels } from "./models"
 const MODEL_KEY = "hub.chat.model"
 const SIDEBAR_KEY = "hub.chat.sidebar"
 const STICK_DISTANCE = 80
+/** Thumbnails under a task's card, at most; the panel shows the rest. */
+const MAX_CARD_IMAGES = 4
 const MACHINES_REFRESH = 15_000
 const MODELS_RETRY = 1500
-const RUN_POLL = 2000
 
 const sessionFromPath = () => /^\/s\/([^/]+)$/.exec(location.pathname)?.[1]
 
@@ -211,33 +211,17 @@ function ChatScreen(props: { session: HubSession; onSignedOut: () => void }) {
     const current = target()
     return current !== undefined && (machines()?.find((machine) => machine.id === current.machine)?.online ?? false)
   }
-  // A command or shell line running on the attached machine, polled until the hub reports it done.
-  const [running, setRunning] = createSignal(false)
   const settings = useSettings()
   const language = useLanguage()
   createEffect(
     on(active, (id) => {
-      setRunning(false)
       if (!id) return setTarget(undefined)
       void hubApi.chatTarget(id).then((response) => {
         if (active() !== id) return
         setTarget(response.target ?? undefined)
-        setRunning(response.running ?? false)
       }, fail)
     }),
   )
-  createEffect(() => {
-    const id = active()
-    if (!id || !running()) return
-    const timer = setInterval(() => {
-      void hubApi.chatTarget(id).then((response) => {
-        if (active() !== id || response.running) return
-        setRunning(false)
-        if (response.error) showToast({ variant: "error", title: copy.chat.runFailed, description: response.error })
-      }, fail)
-    }, RUN_POLL)
-    onCleanup(() => clearInterval(timer))
-  })
 
   const [machineCommands] = createResource(
     () => target(),
@@ -269,7 +253,10 @@ function ChatScreen(props: { session: HubSession; onSignedOut: () => void }) {
     if (id) void hubApi.clearChatTarget(id).catch(fail)
   }
 
-  /** Sends a prompt to the hub's model, or runs a command or shell line on the machine; false keeps the draft. */
+  /**
+   * Sends a prompt to the hub's model, or runs a command or shell line on the machine as a task followed live in its
+   * panel; false keeps the draft.
+   */
   const send = async (request: HubSubmit) => {
     const chosen = model()
     const existing = active()
@@ -289,35 +276,45 @@ function ChatScreen(props: { session: HubSession; onSignedOut: () => void }) {
       if (attached) await hubApi.setChatTarget(id, attached).catch(fail)
       open(id)
     }
-    const sent =
-      request.type === "prompt"
-        ? data.session.prompt({
-            sessionID: id,
-            text: request.text,
-            files: request.files.length > 0 ? request.files : undefined,
-            skills: request.skills?.length ? request.skills.map((id) => ({ id })) : undefined,
-            delivery: settings.general.followUpBehavior(),
-          })
-        : request.type === "command"
-          ? hubApi.runCommand(id, request.name, request.arguments)
-          : hubApi.runShell(id, request.command)
-    return sent.then(
-      () => {
-        if (request.type !== "prompt") setRunning(true)
-        return true
-      },
-      (error: unknown) => {
-        fail(error)
-        return false
-      },
-    )
+    if (request.type === "prompt")
+      return data.session
+        .prompt({
+          sessionID: id,
+          text: request.text,
+          files: request.files.length > 0 ? request.files : undefined,
+          skills: request.skills?.length ? request.skills.map((id) => ({ id })) : undefined,
+          delivery: settings.general.followUpBehavior(),
+        })
+        .then(
+          () => true,
+          (error: unknown) => {
+            fail(error)
+            return false
+          },
+        )
+    return hubApi
+      .startTask(
+        id,
+        request.type === "command"
+          ? { kind: "command", command: { name: request.name, arguments: request.arguments } }
+          : { kind: "shell", shell: request.command },
+      )
+      .then(
+        (task) => {
+          tasks.put(task)
+          setPanel({ type: "task", id: task.id })
+          return true
+        },
+        (error: unknown) => {
+          fail(error)
+          return false
+        },
+      )
   }
 
   const stop = () => {
     const id = active()
-    if (!id) return
-    if (running()) void hubApi.stopRun(id).then(() => setRunning(false), fail)
-    if (busy()) void api.session.interrupt({ sessionID: id }).catch(fail)
+    if (id && busy()) void api.session.interrupt({ sessionID: id }).catch(fail)
   }
 
   const remove = (id: string) => {
@@ -355,7 +352,6 @@ function ChatScreen(props: { session: HubSession; onSignedOut: () => void }) {
     chooseModel,
     variant,
     target,
-    running,
     folded,
     fold,
     drawer,
@@ -387,7 +383,10 @@ function ChatScreen(props: { session: HubSession; onSignedOut: () => void }) {
     }
   })
 
-  /** A task card's lines: the machine, and the task's title with what it cost so far. */
+  /**
+   * A task card's lines: the machine and the model (with the template's role), the task's title with what it cost so
+   * far, and the images it produced, served by the hub.
+   */
   const taskLabel = (id: string | undefined, fallback: TaskLabel): TaskLabel => {
     const task = id ? tasks.get(id) : undefined
     if (!task) return fallback
@@ -400,15 +399,33 @@ function ChatScreen(props: { session: HubSession; onSignedOut: () => void }) {
             new Intl.NumberFormat(language.locale(), { style: "currency", currency: "USD" }).format(task.cost),
           )
         : undefined
-    return { agent: task.machineName, description: usage ? `${task.title} · ${usage}` : task.title }
+    const role = [task.template, task.model ? modelName(task.model) : undefined].filter(Boolean).join(" · ")
+    return {
+      agent: role ? `${task.machineName} · ${role}` : task.machineName,
+      description: usage ? `${task.title} · ${usage}` : task.title,
+      images: Array.from({ length: Math.min(task.images, MAX_CARD_IMAGES) }, (_, index) => ({
+        uri: `/hub/api/chat-tasks/${encodeURIComponent(task.id)}/image/${index}`,
+      })),
+    }
   }
+  /** The model's name as the hub lists it, for a `provider/model#variant` reference; the reference otherwise. */
+  const modelName = (reference: string) => {
+    const [ref, variant] = reference.split("#")
+    const found = (models() ?? []).find((model) => modelKey(model) === ref)
+    const name = found?.name ?? ref?.split("/").slice(1).join("/") ?? reference
+    return variant ? `${name} (${variant})` : name
+  }
+  // The hub's cards stand for tasks the user follows: they stay their own rows, never folded into a tool group.
+  const timelineDetail = createMemo(() => ({
+    ...settings.general.timelineDetail(),
+    subagents: { placement: "separate" as const },
+  }))
   // The open session's tasks, which its cards and notices show as working while they run.
   const sessionTasks = createMemo(() => {
     const id = active()
     return id ? tasks.list().filter((task) => task.session === id) : []
   })
   const runningTasks = createMemo(() => sessionTasks().filter(isActiveTask))
-  const stopAllTasks = () => void Promise.all(runningTasks().map((task) => hubApi.stopTask(task.id))).catch(fail)
   const openSession = (id: string) => (id.startsWith("tsk_") ? setPanel({ type: "task", id }) : open(id))
 
   let scroller: HTMLDivElement | undefined
@@ -438,24 +455,7 @@ function ChatScreen(props: { session: HubSession; onSignedOut: () => void }) {
         </p>
       </Show>
       <Show when={runningTasks().length > 0}>
-        <div class="hub-chat-running" role="status">
-          <Spinner class="size-4" />
-          <span class="hub-chat-badge-text">{copy.task.tasks}</span>
-          <Button variant="ghost" size="small" onClick={stopAllTasks}>
-            {copy.task.stopAll}
-          </Button>
-        </div>
-      </Show>
-      <Show when={running() ? target() : undefined}>
-        {(attached) => (
-          <div class="hub-chat-running" role="status">
-            <Spinner class="size-4" />
-            <span class="hub-chat-badge-text">{copy.chat.running(attached().machineName)}</span>
-            <Button variant="ghost" size="small" onClick={stop}>
-              {copy.chat.stop}
-            </Button>
-          </div>
-        )}
+        <ChatTaskStrip tasks={runningTasks()} modelName={modelName} />
       </Show>
       <HubComposer
         store={composer}
@@ -476,7 +476,7 @@ function ChatScreen(props: { session: HubSession; onSignedOut: () => void }) {
         placeholder={
           target() ? copy.chat.placeholderMachine : active() ? copy.chat.placeholder : copy.chat.emptyDescription
         }
-        working={busy() || running()}
+        working={busy()}
         onSubmit={send}
         onStop={stop}
         onError={fail}
@@ -577,7 +577,7 @@ function ChatScreen(props: { session: HubSession; onSignedOut: () => void }) {
                         provider: providerCatalog(models() ?? []),
                       }}
                     >
-                      <SessionTimeline document={doc()} />
+                      <SessionTimeline document={doc()} timelineDetail={timelineDetail()} />
                     </DataProvider>
                   </div>
                 </div>

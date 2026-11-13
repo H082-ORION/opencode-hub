@@ -1,0 +1,95 @@
+/* The open conversation's running tasks, above the composer. */
+
+.hub-task-strip {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  min-width: 0;
+  padding: 0 4px 0 4px;
+  color: var(--v2-text-text-muted);
+
+  > [data-component="button-v2"] {
+    flex: none;
+    margin-top: 2px;
+    white-space: nowrap;
+  }
+}
+
+.hub-task-strip-list {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.hub-task-strip-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  min-width: 0;
+  min-height: 28px;
+  padding: 2px 8px;
+  border-radius: 6px;
+  color: var(--v2-text-text-muted);
+  font-size: 12px;
+  line-height: var(--line-height-compact);
+  text-align: start;
+  cursor: pointer;
+
+  &:hover,
+  &[data-active] {
+    background: var(--v2-background-background-weak, var(--v2-background-background-layer-1));
+  }
+
+  &[data-status="waiting"] .hub-task-strip-status,
+  &[data-status="offline"] .hub-task-strip-status {
+    color: var(--v2-text-text-warning, var(--v2-text-text-base));
+  }
+}
+
+.hub-task-strip-icon {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+}
+
+.hub-task-strip-title {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  color: var(--v2-text-text-base);
+  font-weight: 500;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.hub-task-strip-meta {
+  display: inline-flex;
+  flex: none;
+  gap: 8px;
+  max-width: 55%;
+  overflow: hidden;
+  white-space: nowrap;
+
+  > span {
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+}
+
+.hub-task-strip-status {
+  font-weight: 500;
+}
+
+@media (max-width: 767px) {
+  .hub-task-strip-meta > span:not(.hub-task-strip-status) {
+    display: none;
+  }
+}
