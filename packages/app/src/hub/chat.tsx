@@ -367,22 +367,6 @@ function ChatScreen(props: { session: HubSession; onSignedOut: () => void }) {
   useChatNotifications(chat)
   const chatCommands = createChatCommands(chat)
 
-  const document = createMemo(() => {
-    const id = active()
-    if (!id) return undefined
-    // An undone turn stays in the history until the next prompt commits the revert; like OpenCode, it is hidden.
-    const boundary = current()?.revert?.messageID
-    return {
-      sessionID: id,
-      messages: showMachineTasks(
-        showMachineRuns(boundary ? messages().filter((message) => message.id < boundary) : messages()),
-        taskLabel,
-      ),
-      status: busy() ? ({ type: "busy" } as const) : ({ type: "idle" } as const),
-      diffs: [],
-    }
-  })
-
   /**
    * A task card's lines: the machine and the model (with the template's role), the task's title with what it cost so
    * far, and the images it produced, served by the hub.
@@ -420,6 +404,22 @@ function ChatScreen(props: { session: HubSession; onSignedOut: () => void }) {
     ...settings.general.timelineDetail(),
     subagents: { placement: "separate" as const },
   }))
+  const document = createMemo(() => {
+    const id = active()
+    if (!id) return undefined
+    // An undone turn stays in the history until the next prompt commits the revert; like OpenCode, it is hidden.
+    const boundary = current()?.revert?.messageID
+    return {
+      sessionID: id,
+      messages: showMachineTasks(
+        showMachineRuns(boundary ? messages().filter((message) => message.id < boundary) : messages()),
+        taskLabel,
+      ),
+      status: busy() ? ({ type: "busy" } as const) : ({ type: "idle" } as const),
+      diffs: [],
+    }
+  })
+
   // The open session's tasks, which its cards and notices show as working while they run.
   const sessionTasks = createMemo(() => {
     const id = active()
