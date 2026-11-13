@@ -1,6 +1,7 @@
 import { gunzipSync } from "node:zlib"
 import { Option, Schema } from "effect"
 import { Skills } from "../skills.js"
+import { Refusal, type ChatTasks } from "./chat-tasks.js"
 import type { HubSkills } from "./skills.js"
 
 export * as ChatTools from "./chat-tools.js"
@@ -26,8 +27,55 @@ const decodeCall = Schema.decodeUnknownOption(
     _meta: Schema.optional(Schema.Record(Schema.String, Schema.Unknown)),
   }),
 )
+const WaitSeconds = Schema.optional(Schema.Number)
 const decodeTask = Schema.decodeUnknownOption(
-  Schema.Struct({ prompt: Schema.String, images: Schema.optional(Schema.Boolean) }),
+  Schema.Struct({
+    prompt: Schema.String,
+    images: Schema.optional(Schema.Boolean),
+    machine: Schema.optional(Schema.String),
+    directory: Schema.optional(Schema.String),
+    agent: Schema.optional(Schema.String),
+    continue: Schema.optional(Schema.String),
+    wait_seconds: WaitSeconds,
+  }),
+)
+const decodeScope = Schema.decodeUnknownOption(
+  Schema.Struct({ scope: Schema.optional(Schema.Literals(["session", "all"])) }),
+)
+const decodeTaskRef = Schema.decodeUnknownOption(Schema.Struct({ task: Schema.String, wait_seconds: WaitSeconds }))
+const decodeRead = Schema.decodeUnknownOption(
+  Schema.Struct({ task: Schema.String, limit: Schema.optional(Schema.Number) }),
+)
+const decodeSend = Schema.decodeUnknownOption(
+  Schema.Struct({
+    task: Schema.String,
+    text: Schema.String,
+    delivery: Schema.optional(Schema.Literals(["steer", "queue"])),
+  }),
+)
+const decodeReply = Schema.decodeUnknownOption(
+  Schema.Struct({
+    task: Schema.String,
+    request: Schema.String,
+    decision: Schema.Literals(["once", "always", "reject"]),
+    session: Schema.optional(Schema.String),
+  }),
+)
+const decodeAnswer = Schema.decodeUnknownOption(
+  Schema.Struct({
+    task: Schema.String,
+    question: Schema.String,
+    answer: Schema.optional(
+      Schema.Record(
+        Schema.String,
+        Schema.Union([Schema.String, Schema.Number, Schema.Boolean, Schema.Array(Schema.String)]),
+      ),
+    ),
+    session: Schema.optional(Schema.String),
+  }),
+)
+const decodeImage = Schema.decodeUnknownOption(
+  Schema.Struct({ task: Schema.String, index: Schema.optional(Schema.Number) }),
 )
 const decodeName = Schema.decodeUnknownOption(Schema.Struct({ name: Schema.String }))
 const decodeNames = Schema.decodeUnknownOption(Schema.Struct({ names: Schema.Array(Schema.String) }))
@@ -45,11 +93,18 @@ const decodeInstall = Schema.decodeUnknownOption(
 /** Where the engine names the session calling a tool. */
 const SESSION_META = "ai.opencode/sessionID"
 
+const TASK = { type: "string", description: "The task's id, as machine_task or machine_tasks_list gave it." }
+const WAIT = {
+  type: "number",
+  description:
+    "Seconds to wait for the task's execution to end before answering, 0 to 600. Leave it out to answer at once.",
+}
+
 const TOOLS = [
   {
     name: "machine_task",
     description:
-      "Hand a request to the coding agent on the machine and project attached to this conversation, and wait for its final message. It works in its own session: pass the whole request and any context it needs.",
+      "Hand a request to the coding agent on one of the user's machines. It starts a task in its own session there and answers at once with the task's handle; the task runs in the background, and you are told when it ends. By default it works on the machine and project attached to this conversation. The agent there sees nothing of this conversation: pass the whole request and any context it needs. Start several tasks to work in parallel, on other folders or machines.",
     inputSchema: {
       type: "object",
       properties: {
@@ -59,8 +114,122 @@ const TOOLS = [
           description:
             "Also hand over the images and PDFs attached to the user's last message, when the request is about them.",
         },
+        machine: { type: "string", description: "Another machine of the user, by name or id (see machines_list)." },
+        directory: { type: "string", description: "The absolute folder to work in; needed on another machine." },
+        agent: {
+          type: "string",
+          description:
+            "The opencode agent to run on the machine, such as build or plan; the machine's default otherwise.",
+        },
+        continue: {
+          type: "string",
+          description: "An earlier task's id, to send this prompt to the same session instead of starting a new one.",
+        },
+        wait_seconds: WAIT,
       },
       required: ["prompt"],
+    },
+  },
+  {
+    name: "machine_tasks_list",
+    description:
+      "List the tasks handed to machines, from this conversation (default) or from all of the user's conversations.",
+    inputSchema: {
+      type: "object",
+      properties: { scope: { type: "string", enum: ["session", "all"] } },
+    },
+  },
+  {
+    name: "machine_task_status",
+    description:
+      "Where a task of this conversation stands: its status, its tokens and cost, and the permissions and questions it waits on. Check it before telling the user a task is done.",
+    inputSchema: { type: "object", properties: { task: TASK, wait_seconds: WAIT }, required: ["task"] },
+  },
+  {
+    name: "machine_task_read",
+    description: "Read a task's latest messages: what its agent said, the tools it ran and their outcomes.",
+    inputSchema: {
+      type: "object",
+      properties: { task: TASK, limit: { type: "number", description: "How many messages, 1 to 100; 20 by default." } },
+      required: ["task"],
+    },
+  },
+  {
+    name: "machine_task_send",
+    description:
+      "Send a message to a task's agent: steer it while it works (delivery steer, the default while it runs), or queue a follow-up for when it is done (queue). A task that ended starts again.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        task: TASK,
+        text: { type: "string" },
+        delivery: { type: "string", enum: ["steer", "queue"] },
+      },
+      required: ["task", "text"],
+    },
+  },
+  {
+    name: "machine_task_stop",
+    description: "Stop a task's current execution. Its session stays, and machine_task_send starts it again.",
+    inputSchema: { type: "object", properties: { task: TASK }, required: ["task"] },
+  },
+  {
+    name: "machines_list",
+    description:
+      "List the user's machines, with whether each is connected to the hub, and the machine and folder attached to this conversation.",
+    inputSchema: { type: "object", properties: {} },
+  },
+  {
+    name: "machine_task_permissions",
+    description: "List the permission requests and questions a task's agent waits on.",
+    inputSchema: { type: "object", properties: { task: TASK }, required: ["task"] },
+  },
+  {
+    name: "machine_task_reply_permission",
+    description:
+      "Answer a permission request of a task's agent. Only when the user asked you to pilot that task or to answer its requests; otherwise tell the user it waits for them.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        task: TASK,
+        request: { type: "string", description: "The request's id, from machine_task_permissions." },
+        decision: { type: "string", enum: ["once", "always", "reject"] },
+        session: { type: "string", description: "The session the request belongs to, when it is a subagent's." },
+      },
+      required: ["task", "request", "decision"],
+    },
+  },
+  {
+    name: "machine_task_answer",
+    description:
+      "Answer a question of a task's agent, or dismiss it by leaving out answer. Only when the user asked you to pilot that task or to answer its questions.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        task: TASK,
+        question: { type: "string", description: "The question's id, from machine_task_permissions." },
+        answer: {
+          type: "object",
+          description: "The answer, by field key: a string, or for a multiple choice an array of the chosen values.",
+        },
+        session: { type: "string", description: "The session the question belongs to, when it is a subagent's." },
+      },
+      required: ["task", "question"],
+    },
+  },
+  {
+    name: "machine_task_images",
+    description: "List the images a task's tools produced, such as screenshots, newest first.",
+    inputSchema: { type: "object", properties: { task: TASK }, required: ["task"] },
+  },
+  {
+    name: "machine_task_image",
+    description:
+      "Look at one of a task's images, by its index in machine_task_images (0, the newest, by default). Only a model that reads images sees it; otherwise you get its description.",
+    inputSchema: {
+      type: "object",
+      properties: { task: TASK, index: { type: "number" } },
+      required: ["task"],
     },
   },
   {
@@ -131,14 +300,11 @@ const TOOLS = [
 export function create(input: {
   owner: (token: string) => string | undefined
   skills: HubSkills.Instance
-  /** Runs a request on the machine attached to a chat session and resolves to its final message. */
-  runTask: (input: {
-    user: string
-    session: string
-    prompt: string
-    images?: boolean
-    signal: AbortSignal
-  }) => Promise<string>
+  tasks: ChatTasks.Instance
+  /** The machines a user may open, with the machine and folder attached to a chat session. */
+  machines: (user: string, session: string) => unknown
+  /** Whether a chat session's model reads images. */
+  vision: (user: string, session: string) => Promise<boolean>
   fetch?: typeof fetch
 }) {
   return {
@@ -163,7 +329,8 @@ export function create(input: {
       if (message.method !== "tools/call") return rpcError(id, -32601, "Unknown method.")
       const call = Option.getOrUndefined(decodeCall(message.params))
       if (!call) return rpcError(id, -32602, "Expected { name, arguments }.")
-      const context = { session: call._meta?.[SESSION_META], signal: request.signal }
+      // A task outlives the call that started it: closing the call never stops it.
+      const context = { session: call._meta?.[SESSION_META] }
       const result = await run(user, call.name, call.arguments, context).catch((error: unknown) =>
         failure(describe(error)),
       )
@@ -171,20 +338,10 @@ export function create(input: {
     },
   }
 
-  async function run(user: string, name: string, args: unknown, context: { session: unknown; signal: AbortSignal }) {
-    if (name === "machine_task") {
-      const parsed = Option.getOrUndefined(decodeTask(args))
-      if (!parsed) return failure("Expected { prompt, images? }.")
+  async function run(user: string, name: string, args: unknown, context: { session: unknown }) {
+    if (name.startsWith("machine")) {
       if (typeof context.session !== "string") return failure("This tool needs a chat session.")
-      return text(
-        await input.runTask({
-          user,
-          session: context.session,
-          prompt: parsed.prompt,
-          images: parsed.images === true,
-          signal: context.signal,
-        }),
-      )
+      return machine(user, context.session, name, args).catch((error: unknown) => failure(describe(error)))
     }
     if (name === "skills_list") return list(user)
     if (name === "skill_read") {
@@ -216,6 +373,122 @@ export function create(input: {
       if (!parsed) return failure("Expected { url, replace? }.")
       return install(user, parsed.url, parsed.replace === true)
     }
+    return failure(`Unknown tool ${name}.`)
+  }
+
+  async function machine(user: string, session: string, name: string, args: unknown) {
+    const tasks = input.tasks
+    if (name === "machine_task") {
+      const parsed = Option.getOrUndefined(decodeTask(args))
+      if (!parsed)
+        return failure("Expected { prompt, images?, machine?, directory?, agent?, continue?, wait_seconds? }.")
+      const task = await tasks.start({
+        user,
+        session,
+        prompt: parsed.prompt,
+        images: parsed.images === true,
+        machine: parsed.machine,
+        directory: parsed.directory,
+        agent: parsed.agent,
+        continue: parsed.continue,
+      })
+      const state = await tasks.status(task, parsed.wait_seconds ?? 0)
+      return text({
+        task: task.id,
+        remoteSession: task.remote_session,
+        machine: state.machineName,
+        directory: task.directory,
+        status: state.status,
+        ...("result" in state
+          ? { result: state.result }
+          : { note: "The task runs in the background. You will be told when it ends; do not wait for it." }),
+      })
+    }
+    if (name === "machine_tasks_list") {
+      const parsed = Option.getOrUndefined(decodeScope(args ?? {}))
+      return text(
+        tasks.list(user, parsed?.scope === "all" ? undefined : session).map((task) => ({
+          task: task.id,
+          title: task.title,
+          machine: task.machineName,
+          directory: task.directory,
+          status: task.status,
+          ...(task.session === session ? {} : { otherConversation: true }),
+          cost: task.cost,
+        })),
+      )
+    }
+    if (name === "machines_list") return text(input.machines(user, session))
+    if (name === "machine_task_reply_permission") {
+      const parsed = Option.getOrUndefined(decodeReply(args))
+      if (!parsed) return failure("Expected { task, request, decision, session? }.")
+      const task = tasks.find(user, session, parsed.task)
+      if (!task) return failure(`This conversation has no task ${parsed.task}.`)
+      return done(
+        await tasks.replyPermission(task, parsed.request, parsed.decision, parsed.session, "model"),
+        "Answered.",
+      )
+    }
+    if (name === "machine_task_answer") {
+      const parsed = Option.getOrUndefined(decodeAnswer(args))
+      if (!parsed) return failure("Expected { task, question, answer?, session? }.")
+      const task = tasks.find(user, session, parsed.task)
+      if (!task) return failure(`This conversation has no task ${parsed.task}.`)
+      return done(
+        await tasks.answer(task, parsed.question, parsed.answer, parsed.session, "model"),
+        parsed.answer ? "Answered." : "Dismissed.",
+      )
+    }
+    if (name === "machine_task_read") {
+      const parsed = Option.getOrUndefined(decodeRead(args))
+      if (!parsed) return failure("Expected { task, limit? }.")
+      const task = tasks.find(user, session, parsed.task)
+      if (!task) return failure(`This conversation has no task ${parsed.task}.`)
+      return text(await tasks.read(task, parsed.limit))
+    }
+    if (name === "machine_task_send") {
+      const parsed = Option.getOrUndefined(decodeSend(args))
+      if (!parsed || !parsed.text.trim()) return failure("Expected { task, text, delivery? }.")
+      const task = tasks.find(user, session, parsed.task)
+      if (!task) return failure(`This conversation has no task ${parsed.task}.`)
+      return done(await tasks.send(task, parsed.text, parsed.delivery), "Sent.")
+    }
+    if (name === "machine_task_image") {
+      const parsed = Option.getOrUndefined(decodeImage(args))
+      if (!parsed) return failure("Expected { task, index? }.")
+      const task = tasks.find(user, session, parsed.task)
+      if (!task) return failure(`This conversation has no task ${parsed.task}.`)
+      const found = await tasks.image(task, parsed.index ?? 0)
+      if (found instanceof Refusal) return failure(found.message)
+      const described = `Image ${parsed.index ?? 0} of task ${task.id}: ${found.name} (${found.mime}, ${found.bytes.byteLength} bytes).`
+      // Only a model that reads images gets the bytes; the others would choke on them.
+      if (!(await input.vision(user, session)))
+        return text(
+          `${described} This conversation's model does not read images: describe it to the user from the task's messages, or ask them to look at it in the task's panel.`,
+        )
+      return {
+        content: [
+          { type: "text", text: described },
+          { type: "image", data: Buffer.from(found.bytes).toString("base64"), mimeType: found.mime },
+        ],
+      }
+    }
+    const parsed = Option.getOrUndefined(decodeTaskRef(args))
+    if (!parsed) return failure("Expected { task }.")
+    const task = tasks.find(user, session, parsed.task)
+    if (!task) return failure(`This conversation has no task ${parsed.task}.`)
+    if (name === "machine_task_status") return text(await tasks.status(task, parsed.wait_seconds ?? 0))
+    if (name === "machine_task_stop") return done(await tasks.stop(task, "model"), "Stopping.")
+    if (name === "machine_task_permissions") return text(await tasks.pending(task))
+    if (name === "machine_task_images")
+      return text(
+        (await tasks.images(task)).map((image, index) => ({
+          index,
+          name: image.name,
+          mime: image.mime,
+          tool: image.tool,
+        })),
+      )
     return failure(`Unknown tool ${name}.`)
   }
 
@@ -253,6 +526,10 @@ export type Instance = ReturnType<typeof create>
 
 function text(value: unknown) {
   return { content: [{ type: "text", text: typeof value === "string" ? value : JSON.stringify(value, null, 2) }] }
+}
+
+function done(refused: Refusal | undefined, message: string) {
+  return refused ? failure(refused.message) : text(message)
 }
 
 function failure(message: string) {

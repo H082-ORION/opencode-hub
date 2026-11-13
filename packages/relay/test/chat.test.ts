@@ -225,13 +225,24 @@ describe("the chat's tools", () => {
     expect(response.status).toBe(401)
   })
 
-  test("offer only the skill tools", async () => {
+  test("offer only the skill and machine tools", async () => {
     // SAFETY: the shape of an MCP `tools/list` answer.
     const body = (await (await rpc(await token(state.alice), "tools/list")).json()) as {
       result: { tools: { name: string }[] }
     }
     expect(body.result.tools.map((tool) => tool.name)).toEqual([
       "machine_task",
+      "machine_tasks_list",
+      "machine_task_status",
+      "machine_task_read",
+      "machine_task_send",
+      "machine_task_stop",
+      "machines_list",
+      "machine_task_permissions",
+      "machine_task_reply_permission",
+      "machine_task_answer",
+      "machine_task_images",
+      "machine_task_image",
       "skills_list",
       "skill_read",
       "skill_save",

@@ -52,9 +52,6 @@ const decodeProjects = Schema.decodeUnknownOption(
 const decodeCreated = Schema.decodeUnknownOption(
   Schema.fromJsonString(Schema.Struct({ data: Schema.Struct({ id: Schema.String }) })),
 )
-const decodeAdmitted = Schema.decodeUnknownOption(
-  Schema.fromJsonString(Schema.Struct({ data: Schema.Struct({ time: Schema.Struct({ created: Schema.Number }) }) })),
-)
 const Message = Schema.Struct({
   id: Schema.optional(Schema.String),
   type: Schema.String,
@@ -88,7 +85,18 @@ const decodeTag = Schema.decodeUnknownOption(Schema.fromJsonString(Schema.Struct
 
 type Call = (method: string, path: string, body?: unknown) => Promise<Response>
 type Task = { user: string; session: string; signal: AbortSignal }
-export type Recorded = { text: string; description: string; metadata: Record<string, unknown> }
+/**
+ * A message the hub adds to a chat session. Without `resume` it waits for the user's next prompt; with it, the model
+ * answers it now, after anything already queued when `delivery` is `queue`. A known `id` is not added twice.
+ */
+export type Recorded = {
+  text: string
+  description: string
+  metadata: Record<string, unknown>
+  id?: string
+  delivery?: "steer" | "queue"
+  resume?: boolean
+}
 
 type Request_ = {
   user: string
@@ -109,8 +117,6 @@ export function create(input: {
   request: (request: Request_) => Promise<Response>
   online: (machine: string) => boolean
   model: (user: string, session: string) => Promise<{ id: string; providerID: string; variant?: string } | undefined>
-  /** The data-URI files of the last user message of a chat session. */
-  files: (user: string, session: string) => Promise<readonly { uri: string; name?: string }[]>
   /** Adds a message to a chat session without starting the model. */
   record: (user: string, session: string, message: Recorded) => Promise<unknown>
   log?: (message: string) => void
@@ -140,10 +146,8 @@ export function create(input: {
       if (!target || target.announced) return undefined
       store.setChatAnnounced(user, session)
       const machine = store.machine(target.machine_id)
-      return `The user attached the machine "${machine?.name ?? target.machine_id}" to this conversation, on the project in ${target.directory}. Use machine_task for requests about that project or machine.`
+      return `The user attached the machine "${machine?.name ?? target.machine_id}" to this conversation, on the project in ${target.directory}. Use machine_task for requests about that project or machine: it works there by default.`
     },
-
-    run,
   }
 
   async function machines(request: Request, user: string, machine: string, kind: string) {
@@ -288,28 +292,6 @@ export function create(input: {
       return new Response(null, { status: 204 })
     }
     return json(404, { error: "Not found." })
-  }
-
-  /** Runs one request in the target's session on the machine and waits for its final message. */
-  async function run(task: Task & { prompt: string; images?: boolean }) {
-    const target = requireTarget(task)
-    const call = caller(task, target)
-    const remote = await prepareSession(task, target, call)
-    const files = task.images ? await input.files(task.user, task.session) : []
-    const sent = await call("POST", `/api/session/${remote}/prompt`, {
-      text: task.prompt,
-      ...(files.length > 0 ? { files } : {}),
-    })
-    if (sent.status === 404 && target.remote_session) {
-      // The session is gone from the machine: the conversation continues in a new one.
-      store.setChatRemoteSession(task.user, task.session, null)
-      return run(task)
-    }
-    if (!sent.ok) throw new Error(await failureText(sent))
-    const admitted = Option.getOrUndefined(decodeAdmitted(await sent.text()))
-    if (!admitted) throw new Error("The machine did not accept the task.")
-    task.signal.addEventListener("abort", () => void interrupt(task, target, remote), { once: true })
-    return wait(call, remote, admitted.data.time.created, task.signal, false)
   }
 
   /**
@@ -563,7 +545,8 @@ export function create(input: {
 
 export type Instance = ReturnType<typeof create>
 
-function finalMessage(messages: readonly (typeof Message.Type)[], outcome: string | undefined) {
+/** What an agent's run on a machine came to: its last text, or why it stopped, bounded for the model. */
+export function finalMessage(messages: readonly (typeof Message.Type)[], outcome: string | undefined) {
   const text = messages
     .find(
       (message) => message.type === "assistant" && message.content?.some((part) => part.type === "text" && part.text),

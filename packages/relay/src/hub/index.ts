@@ -9,7 +9,9 @@ import { Auth } from "./auth.js"
 import { Catalog } from "./catalog.js"
 import { Chat } from "./chat.js"
 import { ChatMachines } from "./chat-machines.js"
+import { ChatTasks } from "./chat-tasks.js"
 import { ChatTools } from "./chat-tools.js"
+import { ChatWatch } from "./chat-watch.js"
 import { ChatGPT } from "./chatgpt.js"
 import { Cloud } from "./cloud.js"
 import { Connectors } from "./connectors.js"
@@ -65,6 +67,8 @@ type Listener = { session: string; user: string; send: (text: string) => void; c
 
 /** The public URL the hub last started with, so `opencode hub invite` can print a full link. */
 const URL_KEY = "url"
+/** The tag of a stream the hub opened itself on behalf of a user, followed by the user's id. */
+const HUB_STREAM = "hub-user:"
 const DEFAULT_URL = "http://localhost:4800"
 // The machine's web app installs a service worker that answers every navigation with its own index.html except under
 // /api and /auth, so the handoff has to live under /auth to reach the hub once that worker is installed.
@@ -226,19 +230,54 @@ export async function start(options: Options) {
       tools: `http://${listen}:${server.port}${ChatTools.PATH}`,
       note: (user, session) => chatMachines.note(user, session),
       skills: (user) => skills.effective(user).skills,
+      deleted: (user, session) => {
+        chatTasks.forget(user, session)
+        store.deleteChatTarget(user, session)
+      },
     })
   const chatMachines: ChatMachines.Instance = ChatMachines.create({
     store,
     request: machineRequest,
     online: (machine) => tunnels.has(machine),
     model: (user, session) => chat?.sessionModel(user, session) ?? Promise.resolve(undefined),
-    files: (user, session) => chat?.lastFiles(user, session) ?? Promise.resolve([]),
     record: (user, session, message) => chat?.record(user, session, message) ?? Promise.resolve(undefined),
     // Shell commands run on a user's machine from the hub leave a trace in the hub's log.
     log: (message) => console.info(message),
   })
+  const chatWatch = ChatWatch.create({ request: machineRequest })
+  const chatTasks: ChatTasks.Instance = ChatTasks.create({
+    store,
+    request: machineRequest,
+    watch: chatWatch,
+    online: (machine) => tunnels.has(machine),
+    machines: (user) =>
+      store
+        .machinesFor(user)
+        .map((machine) => ({ id: machine.id, name: machine.name, online: tunnels.has(machine.id) })),
+    model: (user, session) => chat?.sessionModel(user, session) ?? Promise.resolve(undefined),
+    files: (user, session) => chat?.lastFiles(user, session) ?? Promise.resolve([]),
+    record: (user, session, message) => chat?.record(user, session, message) ?? Promise.resolve(undefined),
+    // Answers given to a machine's permission requests leave a trace in the hub's log.
+    log: (message) => console.info(message),
+  })
   const chatTools: ChatTools.Instance | undefined =
-    chat && ChatTools.create({ owner: chat.owner, skills, runTask: chatMachines.run, fetch: options.chat?.fetch })
+    chat &&
+    ChatTools.create({
+      owner: chat.owner,
+      skills,
+      tasks: chatTasks,
+      machines: (user, session) => {
+        const target = store.chatTarget(user, session)
+        return {
+          machines: store
+            .machinesFor(user)
+            .map((machine) => ({ id: machine.id, name: machine.name, online: tunnels.has(machine.id) })),
+          attached: target ? { machine: target.machine_id, directory: target.directory } : null,
+        }
+      },
+      vision: (user, session) => chat.vision(user, session),
+      fetch: options.chat?.fetch,
+    })
 
   const cloud = Cloud.create({
     store,
@@ -264,6 +303,8 @@ export async function start(options: Options) {
     createEnrollmentCode: (user: string, org?: string) => auth.createCode(user, org),
     async stop() {
       pings.forEach((timer) => clearInterval(timer))
+      chatTasks.close()
+      chatWatch.stop()
       await chat?.stop()
       cloud.stop()
       listeners.forEach((listener) => listener.close())
@@ -332,6 +373,8 @@ export async function start(options: Options) {
     const user = current.user
     const chatted = await chat?.handle(request, route, current)
     if (chatted) return chatted
+    const tasks = chat && (await chatTasks.handle(request, route, current))
+    if (tasks) return tasks
     const attached = chat && (await chatMachines.handle(request, route, current))
     if (attached) return attached
     // Before `orgs`, which owns every other `orgs/…` route.
@@ -606,6 +649,9 @@ export async function start(options: Options) {
     tunnels.forEach((tunnel) => {
       const machine = store.machine(tunnel.machine.id)
       tunnel.drop((session) => {
+        // The hub's own streams stand for a user, not a browser session: they live as long as that user's access.
+        if (session.startsWith(HUB_STREAM))
+          return machine !== undefined && mayOpen(session.slice(HUB_STREAM.length), machine)
         const current = accounts.active(auth.session(session))
         return current !== undefined && machine !== undefined && canOpen(current.user, machine)
       })
@@ -798,12 +844,8 @@ export async function start(options: Options) {
   }
 
   /**
-   * The user's instance on a machine they may open, created at their first request. Its configuration and a new
-   * token go to the agent first, unless it already holds them on this connection.
-   */
-  /**
-   * An HTTP request from the hub itself to a user's instance on a machine, checked like one from their browser. There
-   * is no browser session behind it, so a stream cut when access changes is simply not retried.
+   * An HTTP request from the hub itself to a user's instance on a machine, checked like one from their browser. Its
+   * stream is tagged with the user, so it stays open as long as they may open the machine, however long it lasts.
    */
   async function machineRequest(input: {
     user: string
@@ -811,6 +853,7 @@ export async function start(options: Options) {
     method: string
     path: string
     body?: unknown
+    headers?: [string, string][]
     signal?: AbortSignal
   }) {
     const machine = store.machine(input.machine)
@@ -818,7 +861,10 @@ export async function start(options: Options) {
     const tunnel = tunnels.get(machine.id)
     if (!tunnel) return json(503, { error: "This machine is not connected to the hub." })
     const instance = openInstance(tunnel, machine, input.user)
-    const headers: [string, string][] = input.body === undefined ? [] : [["content-type", "application/json"]]
+    const headers: [string, string][] = [
+      ...(input.headers ?? []),
+      ...(input.body === undefined ? [] : [["content-type", "application/json"] as [string, string]]),
+    ]
     return tunnel.http(
       new Request("http://hub.invalid/", {
         method: input.method,
@@ -829,10 +875,14 @@ export async function start(options: Options) {
       instance,
       input.path,
       headers,
-      `hub:${input.user}`,
+      `${HUB_STREAM}${input.user}`,
     )
   }
 
+  /**
+   * The user's instance on a machine they may open, created at their first request. Its configuration and a new
+   * token go to the agent first, unless it already holds them on this connection.
+   */
   function openInstance(tunnel: Tunnel.Instance, machine: Store.Machine, user: string) {
     const instance = store.ensureInstance(machine.id, user)
     if (!tunnel.held.has(instance.id)) sendInstance(tunnel, instance)

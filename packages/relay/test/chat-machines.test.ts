@@ -97,7 +97,6 @@ const chat = ChatMachines.create({
   },
   online: () => machine.online,
   model: async () => ({ id: "m", providerID: "p", variant: "high" }),
-  files: async () => [{ uri: "data:image/png;base64,AAAA", name: "shot.png" }],
   record: async (user, session, message) => recorded.push({ user, session, ...message }),
   log: (message) => logged.push(message),
   pollEvery: 5,
@@ -116,7 +115,6 @@ const finished = (text: string, outcome = "succeeded") => [
   { type: "idle", time: { created: 200 }, outcome },
   { type: "assistant", time: { created: 150 }, content: [{ type: "text", text }] },
 ]
-const task = (signal = new AbortController().signal) => ({ user: USER, session: SESSION, prompt: "Do it", signal })
 
 beforeEach(() => {
   machine.calls = []
@@ -181,86 +179,6 @@ describe("attaching a machine", () => {
 
   test("needs an absolute folder", async () => {
     expect((await api(`chat-targets/${SESSION}`, "PUT", { machine: "m1", directory: "app" }))!.status).toBe(400)
-  })
-})
-
-describe("a task", () => {
-  const attach = () => store.setChatTarget(USER, SESSION, "m1", "/home/me/app")
-
-  test("needs an attached machine", async () => {
-    await expect(chat.run(task())).rejects.toThrow("No machine is attached")
-  })
-
-  test("runs in a session in the target folder, with the chat's model, and returns the final message", async () => {
-    attach()
-    expect(await chat.run(task())).toBe("All done")
-    expect(machine.calls[0]).toEqual({
-      method: "POST",
-      path: "/api/session",
-      body: {
-        title: "Hub task",
-        location: { directory: "/home/me/app" },
-        model: { id: "m", providerID: "p", variant: "high" },
-        permissions: [{ action: "question", resource: "*", effect: "deny" }],
-      },
-    })
-    expect(machine.calls[1]).toEqual({
-      method: "POST",
-      path: "/api/session/ses_remote/prompt",
-      body: { text: "Do it" },
-    })
-  })
-
-  test("continues in the same session, switched to the chat's current model", async () => {
-    attach()
-    await chat.run(task())
-    machine.calls = []
-    await chat.run(task())
-    expect(machine.calls.filter((call) => call.path === "/api/session")).toEqual([])
-    expect(machine.calls.slice(0, 2)).toEqual([
-      {
-        method: "POST",
-        path: "/api/session/ses_remote/model",
-        body: { model: { id: "m", providerID: "p", variant: "high" } },
-      },
-      { method: "POST", path: "/api/session/ses_remote/prompt", body: { text: "Do it" } },
-    ])
-  })
-
-  test("hands over the user's attached files only when asked to", async () => {
-    attach()
-    await chat.run({ ...task(), images: true })
-    expect(machine.calls.find((call) => call.path.endsWith("/prompt"))?.body).toEqual({
-      text: "Do it",
-      files: [{ uri: "data:image/png;base64,AAAA", name: "shot.png" }],
-    })
-  })
-
-  test("refuses permission prompts nobody could answer", async () => {
-    attach()
-    machine.permissions = [{ id: "per_1" }]
-    await chat.run(task())
-    expect(machine.calls).toContainEqual({
-      method: "POST",
-      path: "/api/session/ses_remote/permission/per_1/reply",
-      body: expect.objectContaining({ decision: "reject" }),
-    })
-  })
-
-  test("reports an agent that stopped early", async () => {
-    attach()
-    machine.messages = finished("Partial", "failed")
-    expect(await chat.run(task())).toContain("stopped before finishing")
-  })
-
-  test("does not mistake an earlier run's end for this one's", async () => {
-    attach()
-    machine.messages = [{ type: "idle", time: { created: 50 }, outcome: "succeeded" }]
-    const controller = new AbortController()
-    const running = chat.run(task(controller.signal))
-    setTimeout(() => controller.abort(), 2500)
-    await expect(running).rejects.toThrow("interrupted")
-    expect(machine.calls).toContainEqual({ method: "POST", path: "/api/session/ses_remote/interrupt", body: {} })
   })
 })
 

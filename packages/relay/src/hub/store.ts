@@ -206,6 +206,79 @@ export type ChatTarget = {
 
 export type ProviderSummary = Pick<ProviderRow, "id" | "name" | "base_url" | "auth">
 
+/**
+ * Where a task the hub's chat handed to a machine stands. `idle`, `failed`, `interrupted` and `lost` are where an
+ * execution ended; a message sent to the task's session afterwards starts it again.
+ */
+export type ChatTaskStatus = "starting" | "running" | "waiting" | "idle" | "failed" | "interrupted" | "offline" | "lost"
+
+/** A task the hub's chat handed to a machine: one session there, followed live until its execution ends. */
+export type ChatTask = {
+  id: string
+  user_id: string
+  session_id: string
+  machine_id: string
+  directory: string
+  remote_session: string | null
+  title: string
+  prompt_excerpt: string
+  agent: string | null
+  status: ChatTaskStatus
+  created_at: number
+  started_at: number | null
+  ended_at: number | null
+  outcome: string | null
+  error: string | null
+  tokens_input: number
+  tokens_output: number
+  tokens_reasoning: number
+  tokens_cache_read: number
+  tokens_cache_write: number
+  cost: number
+  /** The id of the message that tells the chat's model the last execution ended, chosen once so a retry is idempotent. */
+  notify_id: string | null
+  notified_at: number | null
+  updated_at: number
+}
+
+/** The fields of a chat task that change after it is created. */
+export type ChatTaskUpdate = Partial<
+  Pick<
+    ChatTask,
+    | "remote_session"
+    | "status"
+    | "started_at"
+    | "ended_at"
+    | "outcome"
+    | "error"
+    | "tokens_input"
+    | "tokens_output"
+    | "tokens_reasoning"
+    | "tokens_cache_read"
+    | "tokens_cache_write"
+    | "cost"
+    | "notify_id"
+    | "notified_at"
+  >
+>
+
+const CHAT_TASK_UPDATES = [
+  "remote_session",
+  "status",
+  "started_at",
+  "ended_at",
+  "outcome",
+  "error",
+  "tokens_input",
+  "tokens_output",
+  "tokens_reasoning",
+  "tokens_cache_read",
+  "tokens_cache_write",
+  "cost",
+  "notify_id",
+  "notified_at",
+] as const
+
 // Labels that would collide with infrastructure names or look like the hub itself.
 const RESERVED = new Set(["www", "hub", "api", "app", "admin", "mail", "llm", "localhost", "static", "assets"])
 const MAX_ID = 32
@@ -399,6 +472,35 @@ export function open(dir: string) {
     updated_at INTEGER NOT NULL,
     PRIMARY KEY (user_id, session_id)
   )`)
+
+  // Each task the chat handed to a machine, kept so a restarted hub follows it again and tells the model how it ended.
+  db.run(`CREATE TABLE IF NOT EXISTS chat_task (
+    id TEXT PRIMARY KEY,
+    user_id TEXT NOT NULL,
+    session_id TEXT NOT NULL,
+    machine_id TEXT NOT NULL,
+    directory TEXT NOT NULL,
+    remote_session TEXT,
+    title TEXT NOT NULL,
+    prompt_excerpt TEXT NOT NULL,
+    agent TEXT,
+    status TEXT NOT NULL,
+    created_at INTEGER NOT NULL,
+    started_at INTEGER,
+    ended_at INTEGER,
+    outcome TEXT,
+    error TEXT,
+    tokens_input INTEGER NOT NULL DEFAULT 0,
+    tokens_output INTEGER NOT NULL DEFAULT 0,
+    tokens_reasoning INTEGER NOT NULL DEFAULT 0,
+    tokens_cache_read INTEGER NOT NULL DEFAULT 0,
+    tokens_cache_write INTEGER NOT NULL DEFAULT 0,
+    cost REAL NOT NULL DEFAULT 0,
+    notify_id TEXT,
+    notified_at INTEGER,
+    updated_at INTEGER NOT NULL
+  )`)
+  db.run("CREATE INDEX IF NOT EXISTS chat_task_session ON chat_task (user_id, session_id)")
 
   const machineColumns = "id, name, owner_user_id, owner_org_id, enrolled_by, created_at, last_seen_at"
   const queries = {
@@ -641,6 +743,80 @@ export function open(dir: string) {
       db.run("UPDATE chat_target SET announced = 1 WHERE user_id = ? AND session_id = ?", [user, session]),
     deleteChatTarget: (user: string, session: string) =>
       db.run("DELETE FROM chat_target WHERE user_id = ? AND session_id = ?", [user, session]),
+    createChatTask(input: {
+      id: string
+      user: string
+      session: string
+      machine: string
+      directory: string
+      title: string
+      prompt: string
+      agent?: string
+      remoteSession?: string
+    }) {
+      const now = Date.now()
+      db.run(
+        `INSERT INTO chat_task (id, user_id, session_id, machine_id, directory, remote_session, title, prompt_excerpt,
+           agent, status, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'starting', ?, ?)`,
+        [
+          input.id,
+          input.user,
+          input.session,
+          input.machine,
+          input.directory,
+          input.remoteSession ?? null,
+          input.title,
+          input.prompt,
+          input.agent ?? null,
+          now,
+          now,
+        ],
+      )
+      return db.query<ChatTask, [string]>("SELECT * FROM chat_task WHERE id = ?").get(input.id)!
+    },
+    /** A user's task; another user's answers like one that does not exist. */
+    chatTask: (user: string, id: string) =>
+      db.query<ChatTask, [string, string]>("SELECT * FROM chat_task WHERE id = ? AND user_id = ?").get(id, user) ??
+      undefined,
+    /** A user's tasks, newest first, in one chat session or in all of them. */
+    chatTasks: (user: string, session?: string) =>
+      session === undefined
+        ? db
+            .query<ChatTask, [string]>("SELECT * FROM chat_task WHERE user_id = ? ORDER BY created_at DESC LIMIT 200")
+            .all(user)
+        : db
+            .query<
+              ChatTask,
+              [string, string]
+            >("SELECT * FROM chat_task WHERE user_id = ? AND session_id = ? ORDER BY created_at DESC")
+            .all(user, session),
+    /** Every task a restarted hub has to follow again or report on. */
+    pendingChatTasks: () =>
+      db
+        .query<ChatTask, []>(
+          `SELECT * FROM chat_task WHERE status IN ('starting', 'running', 'waiting', 'offline')
+             OR (notify_id IS NOT NULL AND notified_at IS NULL) ORDER BY created_at`,
+        )
+        .all(),
+    updateChatTask(id: string, update: ChatTaskUpdate) {
+      const fields = CHAT_TASK_UPDATES.filter((field) => update[field] !== undefined)
+      if (fields.length === 0) return
+      db.run(`UPDATE chat_task SET ${fields.map((field) => `${field} = ?`).join(", ")}, updated_at = ? WHERE id = ?`, [
+        ...fields.map((field) => update[field] ?? null),
+        Date.now(),
+        id,
+      ])
+    },
+    /** Forgets a chat session's tasks, with the session. */
+    deleteChatTasks: (user: string, session: string) =>
+      db.run("DELETE FROM chat_task WHERE user_id = ? AND session_id = ?", [user, session]),
+    /** Forgets tasks that ended before `before`. */
+    purgeChatTasks: (before: number) =>
+      db.run(
+        "DELETE FROM chat_task WHERE ended_at IS NOT NULL AND ended_at < ? AND status IN ('idle', 'failed', 'interrupted', 'lost')",
+        [before],
+      ).changes,
     cloudInstance: (id: string) => queries.cloudInstance.get(id) ?? undefined,
     cloudInstancesOf: (user: string) => queries.cloudInstancesOf.all(user),
     cloudInstancesOn: (host: string) => queries.cloudInstancesOn.all(host),
