@@ -10,6 +10,7 @@ import { Catalog } from "./catalog.js"
 import { Chat } from "./chat.js"
 import { ChatMachines } from "./chat-machines.js"
 import { ChatTasks } from "./chat-tasks.js"
+import { ChatTemplates } from "./chat-templates.js"
 import { ChatTools } from "./chat-tools.js"
 import { ChatWatch } from "./chat-watch.js"
 import { ChatGPT } from "./chatgpt.js"
@@ -239,10 +240,14 @@ export async function start(options: Options) {
     store,
     request: machineRequest,
     online: (machine) => tunnels.has(machine),
-    model: (user, session) => chat?.sessionModel(user, session) ?? Promise.resolve(undefined),
-    record: (user, session, message) => chat?.record(user, session, message) ?? Promise.resolve(undefined),
-    // Shell commands run on a user's machine from the hub leave a trace in the hub's log.
-    log: (message) => console.info(message),
+  })
+  const chatModels = (user: string) => chat?.models(user) ?? Promise.resolve([])
+  const chatTemplates = ChatTemplates.create({
+    store,
+    model: async (user, reference) => {
+      const [provider, model] = reference.split("#")[0]!.split("/", 2)
+      return (await chatModels(user)).some((entry) => entry.providerID === provider && entry.id === model)
+    },
   })
   const chatWatch = ChatWatch.create({ request: machineRequest })
   const chatTasks: ChatTasks.Instance = ChatTasks.create({
@@ -255,9 +260,11 @@ export async function start(options: Options) {
         .machinesFor(user)
         .map((machine) => ({ id: machine.id, name: machine.name, online: tunnels.has(machine.id) })),
     model: (user, session) => chat?.sessionModel(user, session) ?? Promise.resolve(undefined),
+    models: chatModels,
+    templates: chatTemplates,
     files: (user, session) => chat?.lastFiles(user, session) ?? Promise.resolve([]),
     record: (user, session, message) => chat?.record(user, session, message) ?? Promise.resolve(undefined),
-    // Answers given to a machine's permission requests leave a trace in the hub's log.
+    // Shell commands run on a machine from the hub, and answers given to its permission requests, leave a trace.
     log: (message) => console.info(message),
   })
   const chatTools: ChatTools.Instance | undefined =
@@ -266,6 +273,7 @@ export async function start(options: Options) {
       owner: chat.owner,
       skills,
       tasks: chatTasks,
+      templates: chatTemplates,
       machines: (user, session) => {
         const target = store.chatTarget(user, session)
         return {
@@ -377,6 +385,8 @@ export async function start(options: Options) {
     if (tasks) return tasks
     const attached = chat && (await chatMachines.handle(request, route, current))
     if (attached) return attached
+    const templated = chat && (await chatTemplates.handle(request, route, current))
+    if (templated) return templated
     // Before `orgs`, which owns every other `orgs/…` route.
     const skill = await skills.handle(request, route, current)
     if (skill) return skill

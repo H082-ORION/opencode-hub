@@ -1,6 +1,8 @@
 import { Option, Schema } from "effect"
 import { json, type Current } from "./accounts.js"
+import type { ModelEntry } from "./chat.js"
 import { finalMessage, type Recorded } from "./chat-machines.js"
+import { ChatTemplates } from "./chat-templates.js"
 import type { ChatWatch } from "./chat-watch.js"
 import type { Store } from "./store.js"
 
@@ -20,6 +22,11 @@ export * as ChatTasks from "./chat-tasks.js"
  *   synthetic message whose id is chosen and stored first, so a retry, after a hub restart included, never tells it
  *   twice. A tool call that waited for the end gets it as its result instead.
  * - A message sent to the task afterwards (steer or queue) starts a new execution in the same session.
+ * - The end is told to the chat's model with `resume` only when the model itself started or last steered the task;
+ *   an execution the user started from the task's panel is recorded without waking the model, which reads it at its
+ *   next turn.
+ * - A task may also run a slash command or one shell command (`kind`), as `/command` and `!command` from the hub's
+ *   composer do: the same session, stream and panel, ended by the command's own end.
  * - Every row is in the hub's database: a restarted hub follows the active ones again, reconciles them with what the
  *   machine says once its stream is back, and retries the notifications it could not deliver.
  *
@@ -39,6 +46,15 @@ const MAX_TITLE = 80
 const MAX_EXCERPT = 500
 const MAX_IMAGE = 5 * 1024 * 1024
 const MAX_WAIT = 600
+/** Images told to the chat's model and shown under a task's card, at most. */
+const MAX_SHOWN_IMAGES = 4
+const MAX_SHELL_OUTPUT = 20_000
+/** How long a shell command has to be refused before it is reported as running: the machine answers when it ends. */
+const SHELL_GRACE = 1000
+/** A slash command that started no agent run is done once the session stays quiet this long. */
+const SETTLE_AFTER = 4000
+/** Deltas of one part held back for a browser that is behind are merged into one frame. */
+const COALESCE_EVERY = 50
 const KEEPALIVE = 15_000
 const SWEEP_EVERY = 60_000
 /** Ended tasks are forgotten after this long. */
@@ -153,18 +169,42 @@ const decodeAnswer = Schema.decodeUnknownOption(
 const decodeFormSession = Schema.decodeUnknownOption(
   Schema.fromJsonString(Schema.Struct({ session: Schema.optional(Schema.String) })),
 )
+const Kind = Schema.Literals(["prompt", "command", "shell"])
 const decodeStart = Schema.decodeUnknownOption(
   Schema.fromJsonString(
     Schema.Struct({
       session: Schema.String,
-      prompt: Schema.String,
+      kind: Schema.optional(Kind),
+      prompt: Schema.optional(Schema.String),
+      command: Schema.optional(Schema.Struct({ name: Schema.String, arguments: Schema.optional(Schema.String) })),
+      shell: Schema.optional(Schema.String),
       machine: Schema.optional(Schema.String),
       directory: Schema.optional(Schema.String),
       agent: Schema.optional(Schema.String),
+      model: Schema.optional(Schema.String),
+      template: Schema.optional(Schema.String),
     }),
   ),
 )
+const decodeDelta = Schema.decodeUnknownOption(
+  Schema.fromJsonString(
+    Schema.Struct({
+      type: Schema.Literals(["session.text.delta", "session.reasoning.delta", "session.tool.input.delta"]),
+      data: Schema.Struct({
+        sessionID: Schema.String,
+        messageID: Schema.optional(Schema.String),
+        partID: Schema.optional(Schema.String),
+        delta: Schema.String,
+      }),
+    }),
+  ),
+)
+const decodeTag = Schema.decodeUnknownOption(Schema.fromJsonString(Schema.Struct({ _tag: Schema.String })))
+const COMMAND_NAME = /^[^\s/]\S{0,199}$/
+const MODEL_REF = /^([^/\s#]+)\/([^\s#]+)(?:#([^\s#]+))?$/
 const isString = Schema.is(Schema.String)
+/** The chat's model started or last steered the task, or the user did from its panel. */
+type Origin = "model" | "user"
 
 export type Decision = typeof Decision.Type
 export type Answer = typeof FormAnswer.Type
@@ -195,8 +235,12 @@ type Live = {
   /** Tool calls waiting for the end of the current execution, which then get its result. */
   waiters: Set<(result: string) => void>
   /** Who stopped the current execution: a stop the chat's model asked for needs no notification. */
-  stopped?: "model" | "user"
+  stopped?: Origin
+  /** Who started the current execution: only the model's own are reported to it right away. */
+  origin: Origin
   lost?: ReturnType<typeof setTimeout>
+  /** For a slash command: ends the task once the session stayed quiet, when the command started no agent run. */
+  settle?: ReturnType<typeof setTimeout>
   unsubscribe?: () => void
 }
 
@@ -211,6 +255,9 @@ export function create(input: {
   /** The machines a user may open, with their names and whether they are connected. */
   machines: (user: string) => readonly { id: string; name: string; online: boolean }[]
   model: (user: string, session: string) => Promise<{ id: string; providerID: string; variant?: string } | undefined>
+  /** The models the user can run, on the hub and on their machines. */
+  models: (user: string) => Promise<readonly ModelEntry[]>
+  templates: ChatTemplates.Instance
   /** The data-URI files of the last user message of a chat session. */
   files: (user: string, session: string) => Promise<readonly { uri: string; name?: string }[]>
   /** Adds a message to a chat session. */
@@ -253,9 +300,12 @@ export function create(input: {
       return task && task.session_id === session ? task : undefined
     },
     status,
+    wait: waitMany,
     read,
     send,
     stop,
+    models: listModels,
+    resolveModel,
     pending,
     replyPermission,
     answer,
@@ -288,6 +338,10 @@ export function create(input: {
       remoteSession: task.remote_session,
       title: task.title,
       agent: task.agent,
+      kind: task.kind,
+      model: task.model,
+      template: task.template,
+      images: task.images,
       status: task.status,
       createdAt: task.created_at,
       startedAt: task.started_at,
@@ -314,11 +368,31 @@ export function create(input: {
     }
     if (route === "chat-tasks" && method === "POST") {
       const body = Option.getOrUndefined(decodeStart(await request.text()))
-      if (!body) return json(400, { error: "Expected { session, prompt, machine?, directory?, agent? }." })
-      const started = await start({ user, ...body }).catch((error: unknown) => new Refusal(502, describe(error)))
+      const kind = body?.kind ?? "prompt"
+      const prompt =
+        kind === "shell" ? body?.shell?.trim() : kind === "command" ? body?.command?.name : body?.prompt?.trim()
+      if (!body || !prompt || (kind === "command" && !COMMAND_NAME.test(prompt)))
+        return json(400, {
+          error:
+            "Expected { session, prompt | command: { name, arguments? } | shell, machine?, directory?, model?, template? }.",
+        })
+      const started = await start({
+        user,
+        session: body.session,
+        kind,
+        prompt: kind === "command" ? "" : prompt,
+        command: body.command,
+        machine: body.machine,
+        directory: body.directory,
+        agent: body.agent,
+        model: body.model,
+        template: body.template,
+        by: "user",
+      }).catch((error: unknown) => new Refusal(502, describe(error)))
       if (started instanceof Refusal) return json(started.status, { error: started.message })
       return json(200, view(started))
     }
+    if (route === "chat-models" && method === "GET") return json(200, { data: await listModels(user) })
     if (route === "chat-tasks/events" && method === "GET") return userEvents(request, user)
     const match = ROUTE.exec(route)
     if (!match) return undefined
@@ -335,7 +409,7 @@ export function create(input: {
     if (rest === "prompt" && method === "POST") {
       const body = Option.getOrUndefined(decodePrompt(await request.text()))
       if (!body || !body.text.trim()) return json(400, { error: "Expected { text, delivery? }." })
-      return respond(send(task, body.text, body.delivery))
+      return respond(send(task, body.text, body.delivery, "user"))
     }
     const permission = /^permission\/([^/]+)$/.exec(rest)
     if (permission && method === "POST") {
@@ -373,16 +447,31 @@ export function create(input: {
     user: string
     session: string
     prompt: string
+    kind?: Store.ChatTaskKind
+    /** For a `command` task: the slash command and its arguments. */
+    command?: { name: string; arguments?: string }
     images?: boolean
     machine?: string
     directory?: string
     agent?: string
+    /** `provider/model`, optionally `#variant`; `variant` on its own applies to that model. */
+    model?: string
+    variant?: string
+    template?: string
     continue?: string
+    by: Origin
   }) {
+    const kind = request.kind ?? "prompt"
+    const template = request.template === undefined ? undefined : input.templates.find(request.user, request.template)
+    if (request.template !== undefined && !template)
+      throw new Refusal(404, `The user has no agent template named ${request.template}: templates_list names them.`)
+    const chosen = request.model ?? template?.model ?? undefined
+    const model = chosen === undefined ? undefined : await resolveModel(request.user, chosen, request.variant)
     if (request.continue !== undefined) {
       const existing = store.chatTask(request.user, request.continue)
       if (!existing || existing.session_id !== request.session) throw new Refusal(404, "Unknown task.")
-      const sent = await send(existing, request.prompt, "queue")
+      const text = template ? `${ChatTemplates.instructions(template)}\n\n${request.prompt}` : request.prompt
+      const sent = await send(existing, text, "queue", request.by, model)
       if (sent instanceof Refusal) throw sent
       return store.chatTask(request.user, existing.id)!
     }
@@ -401,17 +490,30 @@ export function create(input: {
     const active = store.chatTasks(request.user).filter((task) => ACTIVE.has(task.status)).length
     if (active >= MAX_ACTIVE)
       throw new Refusal(429, `At most ${MAX_ACTIVE} tasks run at a time: wait for one to end, or stop one.`)
+    const invoked =
+      kind === "command"
+        ? `/${[request.command?.name, request.command?.arguments?.trim()].filter(Boolean).join(" ")}`
+        : request.prompt
+    const agent = request.agent ?? template?.agent ?? undefined
+    // The chat's own model, as before, when nothing else is asked for.
+    const sessionModel = model ?? (await input.model(request.user, request.session))
     const task = store.createChatTask({
       id: ascendingID("tsk_"),
       user: request.user,
       session: request.session,
       machine: machine.id,
       directory,
-      title: titleOf(request.prompt),
-      prompt: request.prompt.slice(0, MAX_EXCERPT),
-      agent: request.agent,
+      title: kind === "shell" ? `$ ${titleOf(invoked)}` : titleOf(invoked),
+      prompt: invoked.slice(0, MAX_EXCERPT),
+      agent,
+      kind,
+      model: sessionModel ? modelRef(sessionModel) : undefined,
+      template: template?.name,
     })
+    if (kind === "shell")
+      input.log?.(`hub chat: ${request.user} runs a shell command on ${machine.name} in ${directory}: ${invoked}`)
     const live = follow(task)
+    live.origin = request.by
     broadcast(task)
     const failed = (message: string) => {
       store.updateChatTask(task.id, { status: "failed", error: message, ended_at: Date.now() })
@@ -420,12 +522,11 @@ export function create(input: {
       return new Refusal(502, message)
     }
     const call = caller(task)
-    const model = await input.model(request.user, request.session)
     const created = await call("POST", "/api/session", {
       title: task.title,
       location: { directory },
-      ...(model ? { model } : {}),
-      ...(request.agent ? { agent: request.agent } : {}),
+      ...(sessionModel ? { model: sessionModel } : {}),
+      ...(agent ? { agent } : {}),
     }).catch((error: unknown) => error as Error)
     if (created instanceof Error) throw failed(created.message)
     if (!created.ok) throw failed(await failureText(created))
@@ -433,18 +534,137 @@ export function create(input: {
     if (!remote) throw failed("The machine did not create a session.")
     live.sessions.add(remote)
     store.updateChatTask(task.id, { remote_session: remote })
-    const files = request.images ? await input.files(request.user, request.session) : []
-    const sent = await call("POST", `/api/session/${remote}/prompt`, {
-      text: request.prompt,
-      ...(files.length > 0 ? { files } : {}),
-    }).catch((error: unknown) => error as Error)
+    // The template's instructions come first, as their own message, so the panel shows them apart from the request.
+    if (template && kind === "prompt") {
+      const noted = await call("POST", `/api/session/${remote}/synthetic`, {
+        text: ChatTemplates.instructions(template),
+        description: `Template ${template.name}`,
+        resume: false,
+      }).catch((error: unknown) => error as Error)
+      if (noted instanceof Error) throw failed(noted.message)
+      if (!noted.ok) throw failed(await failureText(noted))
+    }
+    const sent = await admit(task, live, remote, request).catch((error: unknown) => error as Error)
+    if (sent instanceof Refusal) {
+      store.updateChatTask(task.id, { status: "failed", error: sent.message, ended_at: Date.now() })
+      broadcast(task)
+      release(live)
+      throw sent
+    }
     if (sent instanceof Error) throw failed(sent.message)
-    if (!sent.ok) throw failed(await failureText(sent))
     const now = store.chatTask(request.user, task.id)!
     // The stream may already have reported the execution.
     if (now.status === "starting") store.updateChatTask(task.id, { status: "running", started_at: Date.now() })
     broadcast(task)
     return store.chatTask(request.user, task.id)!
+  }
+
+  /** Hands the task's work to its new session: the prompt, the slash command, or the shell command. */
+  async function admit(
+    task: Store.ChatTask,
+    live: Live,
+    remote: string,
+    request: {
+      user: string
+      session: string
+      prompt: string
+      images?: boolean
+      command?: { name: string; arguments?: string }
+    },
+  ) {
+    const call = caller(task)
+    if (task.kind === "command") {
+      const sent = await call("POST", `/api/session/${remote}/command`, {
+        name: request.command?.name ?? "",
+        text: request.command?.arguments ?? "",
+      })
+      if (sent.status === 404) {
+        const tag = Option.getOrUndefined(decodeTag(await sent.text()))?._tag
+        if (tag === "CommandNotFoundError")
+          return new Refusal(404, `The machine has no command /${request.command?.name ?? ""}.`)
+        return new Refusal(409, "Update the agent on this machine to run commands from the hub.")
+      }
+      if (!sent.ok) return new Refusal(502, await failureText(sent))
+      // A command may only run a callback and start no agent run: then it is done once the session stays quiet.
+      armSettle(live)
+      return undefined
+    }
+    if (task.kind === "shell") {
+      const posting = call("POST", `/api/session/${remote}/shell`, { command: request.prompt })
+      // The machine answers once the command has ended, so only a quick answer can be a refusal.
+      const early = await Promise.race([posting, Bun.sleep(SHELL_GRACE)])
+      if (early && early.status === 404)
+        return new Refusal(409, "Update the agent on this machine to run shell commands from the hub.")
+      if (early && !early.ok) return new Refusal(502, await failureText(early))
+      // Its end arrives as `session.shell.ended`; the answer itself only says the same later.
+      void posting.then(
+        (response) => {
+          if (!response.ok) void finish(live, "failed", `The machine answered ${response.status}.`)
+        },
+        () => undefined,
+      )
+      return undefined
+    }
+    const files = request.images ? await input.files(request.user, request.session) : []
+    const sent = await call("POST", `/api/session/${remote}/prompt`, {
+      text: request.prompt,
+      ...(files.length > 0 ? { files } : {}),
+    })
+    if (!sent.ok) return new Refusal(502, await failureText(sent))
+    return undefined
+  }
+
+  function armSettle(live: Live) {
+    clearTimeout(live.settle)
+    live.settle = setTimeout(() => {
+      live.settle = undefined
+      const task = store.chatTask(live.user, live.id)
+      if (!task?.remote_session || !ACTIVE.has(task.status)) return
+      void caller(task)("GET", "/api/session/active")
+        .then(async (response) => {
+          const active = response.ok ? Option.getOrUndefined(decodeActive(await response.text()))?.data : undefined
+          if (active && !(task.remote_session! in active)) return finish(live, "succeeded")
+          if (active) armSettle(live)
+        })
+        .catch(() => undefined)
+    }, SETTLE_AFTER)
+    live.settle.unref?.()
+  }
+
+  /** The user's models, with what the chat's model needs to pick one for a task. */
+  async function listModels(user: string) {
+    return (await input.models(user)).map((entry) => ({
+      model: `${entry.providerID}/${entry.id}`,
+      name: entry.name,
+      provider: entry.providerID,
+      ...(entry.status && entry.status !== "active" ? { status: entry.status } : {}),
+      vision: entry.capabilities.input.includes("image"),
+      tools: entry.capabilities.tools ?? true,
+      variants: (entry.variants ?? []).map((variant) => variant.id),
+      ...(entry.limit ? { context: entry.limit.context, maxOutput: entry.limit.output } : {}),
+      ...(entry.cost?.[0]
+        ? { pricePerMillion: { input: entry.cost[0].input, output: entry.cost[0].output, currency: "USD" } }
+        : {}),
+    }))
+  }
+
+  /** A model reference the user can run, or a refusal naming the tool that lists them. */
+  async function resolveModel(user: string, reference: string, variant: string | undefined) {
+    const match = MODEL_REF.exec(reference.trim())
+    if (!match) throw new Refusal(400, `A model is named provider/model, optionally #variant, not ${reference}.`)
+    const found = (await input.models(user)).find((entry) => entry.providerID === match[1] && entry.id === match[2])
+    if (!found)
+      throw new Refusal(
+        404,
+        `No model ${match[1]}/${match[2]} is available with the user's providers: models_list names the ones that are.`,
+      )
+    const effort = variant ?? match[3]
+    if (effort !== undefined && !(found.variants ?? []).some((entry) => entry.id === effort))
+      throw new Refusal(
+        400,
+        `${found.providerID}/${found.id} has no variant ${effort}${found.variants?.length ? `; it has ${found.variants.map((entry) => entry.id).join(", ")}` : ""}.`,
+      )
+    return { id: found.id, providerID: found.providerID, ...(effort === undefined ? {} : { variant: effort }) }
   }
 
   /** Waits up to `seconds` for the task's execution to end: its final message, or undefined if it still runs. */
@@ -460,6 +680,55 @@ export function create(input: {
       clearTimeout(timer)
       live.waiters.delete(resolve)
     })
+  }
+
+  /**
+   * Waits up to `seconds` for some of the tasks to end: the first one with `any`, every one with `all`. Answers each
+   * task's state, with the final message of those that ended meanwhile; tasks already ended count as ended.
+   */
+  async function waitMany(tasks: readonly Store.ChatTask[], mode: "any" | "all", seconds: number) {
+    const budget = Math.min(Math.max(seconds, 0), MAX_WAIT) * 1000
+    const deadline = Date.now() + budget
+    const ended = new Map<string, string>()
+    const active = tasks.filter((task) => {
+      const current = store.chatTask(task.user_id, task.id) ?? task
+      return ACTIVE.has(current.status) && lives.has(task.id)
+    })
+    const wanted = mode === "all" ? active.length : Math.min(1, active.length)
+    if (wanted > 0 && budget > 0) {
+      const done = Promise.withResolvers<void>()
+      const timer = setTimeout(() => done.resolve(), budget)
+      const resolvers = active.map((task) => {
+        const live = lives.get(task.id)!
+        const resolve = (result: string) => {
+          ended.set(task.id, result)
+          if (ended.size >= wanted) done.resolve()
+        }
+        live.waiters.add(resolve)
+        return () => live.waiters.delete(resolve)
+      })
+      await done.promise.finally(() => {
+        clearTimeout(timer)
+        resolvers.forEach((remove) => remove())
+      })
+    }
+    return {
+      tasks: tasks.map((task) => {
+        const current = store.chatTask(task.user_id, task.id) ?? task
+        const result = ended.get(task.id)
+        return {
+          task: current.id,
+          title: current.title,
+          status: current.status,
+          ...(current.error ? { error: current.error } : {}),
+          ...(current.images > 0 ? { images: current.images } : {}),
+          cost: current.cost,
+          ...(result === undefined ? {} : { result }),
+        }
+      }),
+      stillRunning: tasks.filter((task) => ACTIVE.has(store.chatTask(task.user_id, task.id)?.status ?? "idle")).length,
+      waited: Math.round(Math.min(budget, Math.max(0, budget - (deadline - Date.now()))) / 1000),
+    }
   }
 
   /** The task's state, what waits for an answer, and its latest activity, for the chat's model. */
@@ -489,11 +758,26 @@ export function create(input: {
       : lines || "No messages yet."
   }
 
-  async function send(task: Store.ChatTask, text: string, delivery: "steer" | "queue" | undefined) {
+  async function send(
+    task: Store.ChatTask,
+    text: string,
+    delivery: "steer" | "queue" | undefined,
+    by: Origin,
+    model?: { id: string; providerID: string; variant?: string },
+  ) {
     if (!task.remote_session) return new Refusal(409, "The task has not started yet.")
     if (!input.online(task.machine_id)) return new Refusal(409, "The machine is not connected to the hub.")
+    if (task.kind === "shell") return new Refusal(409, "A shell command takes no message; start a task instead.")
     const live = follow(task)
     live.stopped = undefined
+    if (model) {
+      const switched = await caller(task)("POST", `/api/session/${task.remote_session}/model`, { model }).catch(
+        (error: unknown) => error as Error,
+      )
+      if (switched instanceof Error) return new Refusal(502, switched.message)
+      if (!switched.ok && switched.status !== 404) return new Refusal(502, await failureText(switched))
+      if (switched.ok) store.updateChatTask(task.id, { model: modelRef(model) })
+    }
     const response = await caller(task)("POST", `/api/session/${task.remote_session}/prompt`, {
       text,
       ...(delivery ? { delivery } : {}),
@@ -504,6 +788,8 @@ export function create(input: {
       return new Refusal(404, "The task's session is gone from the machine.")
     }
     if (!response.ok) return new Refusal(502, await failureText(response))
+    // Whoever writes to the task owns its next execution: a user's follow-up is not reported to the model as its own.
+    live.origin = by
     if (!ACTIVE.has(task.status))
       store.updateChatTask(task.id, {
         status: "running",
@@ -612,18 +898,7 @@ export function create(input: {
   /** The images the task's tools returned (screenshots and the like), newest first. */
   async function images(task: Store.ChatTask) {
     if (!task.remote_session) return []
-    const messages = (await readMessages(task, 50)) ?? []
-    return messages.flatMap((message) =>
-      (message.content ?? []).flatMap((part) =>
-        part.type === "tool"
-          ? (part.state?.content ?? []).flatMap((item) => {
-              const mime = item.uri?.startsWith("data:") ? IMAGE_URI.exec(item.uri)?.[1] : item.mime
-              if (item.type !== "file" || !item.uri || !mime?.startsWith("image/")) return []
-              return [{ uri: item.uri, mime, name: item.name ?? part.name ?? "image", tool: part.name ?? "" }]
-            })
-          : [],
-      ),
-    )
+    return imagesOf((await readMessages(task, 50)) ?? [])
   }
 
   /** The bytes of one of the task's images, by its place in `images`. */
@@ -659,6 +934,7 @@ export function create(input: {
       forms: new Map(),
       followers: new Set(),
       waiters: new Set(),
+      origin: "model",
     }
     lives.set(task.id, live)
     live.unsubscribe = input.watch.subscribe(task.user_id, task.machine_id, {
@@ -673,6 +949,7 @@ export function create(input: {
     const task = store.chatTask(live.user, live.id)
     if (!options.force && (live.followers.size > 0 || (task && ACTIVE.has(task.status)))) return
     clearTimeout(live.lost)
+    clearTimeout(live.settle)
     live.unsubscribe?.()
     live.followers.forEach((follower) => follower.close())
     lives.delete(live.id)
@@ -690,7 +967,10 @@ export function create(input: {
     const task = store.chatTask(live.user, live.id)
     if (!task) return
     const root = event.session === task.remote_session
+    if (event.type === "session.shell.ended" && root && task.kind === "shell") return void finish(live, "succeeded")
     if (event.type === "session.execution.started" && root) {
+      clearTimeout(live.settle)
+      live.settle = undefined
       store.updateChatTask(task.id, {
         status: live.permissions.size + live.forms.size > 0 ? "waiting" : "running",
         started_at: task.started_at ?? Date.now(),
@@ -787,6 +1067,12 @@ export function create(input: {
     const current = store.chatTask(live.user, live.id)
     if (!current) return
     store.updateChatTask(current.id, totals(live))
+    if (current.kind === "shell" && ACTIVE.has(current.status)) {
+      // A shell command has no execution: its own message says whether it ended.
+      const shell = (await readMessages(task, 10))?.find((message) => message.type === "shell")
+      if (shell && shell.status !== "running") return void finish(live, "succeeded")
+      return settle(live)
+    }
     const busy = active === undefined ? undefined : task.remote_session in active
     if (busy === true || !ACTIVE.has(current.status)) return settle(live)
     if (busy === false && current.status !== "starting") {
@@ -801,6 +1087,8 @@ export function create(input: {
     if (!task?.remote_session || !ACTIVE.has(task.status)) return
     const stopped = live.stopped
     live.stopped = undefined
+    clearTimeout(live.settle)
+    live.settle = undefined
     // A tool call that waited for this end gets the result itself; a stop the model asked for needs no report.
     const silent = live.waiters.size > 0 || stopped === "model"
     // Claimed before reading anything, so a repeated or concurrent end is ignored.
@@ -816,9 +1104,21 @@ export function create(input: {
     })
     broadcast(task)
     const messages = await readMessages(task, 30)
-    const result = messages ? finalMessage(messages, outcome) : "The task ended; its messages could not be read."
+    const shell = task.kind === "shell" ? messages?.find((message) => message.type === "shell") : undefined
+    const result =
+      task.kind === "shell"
+        ? shell
+          ? shellText(shell)
+          : "The command ended; its output could not be read."
+        : messages
+          ? finalMessage(messages, outcome)
+          : "The task ended; its messages could not be read."
+    const shots = task.kind === "prompt" ? imagesOf(messages ?? []).length : 0
+    store.updateChatTask(task.id, { images: shots })
+    if (shots > 0) broadcast(task)
     live.waiters.forEach((resolve) => resolve(result))
-    if (!silent) await notify(store.chatTask(live.user, live.id)!, result)
+    // The model hears at once of what it started; what the user ran from the panel waits for its next turn.
+    if (!silent) await notify(store.chatTask(live.user, live.id)!, result, live.origin === "model", shell)
     release(live)
   }
 
@@ -838,8 +1138,11 @@ export function create(input: {
     if (live) release(live)
   }
 
-  /** Tells the chat's model how the task's last execution ended, once: the engine ignores a message id it knows. */
-  async function notify(task: Store.ChatTask, result?: string) {
+  /**
+   * Tells the chat's model how the task's last execution ended, once: the engine ignores a message id it knows.
+   * Without `resume` the message waits for the model's next turn instead of starting one.
+   */
+  async function notify(task: Store.ChatTask, result?: string, resume = true, shell?: Message) {
     if (!task.notify_id || task.notified_at !== null) return
     const machine = store.machine(task.machine_id)?.name ?? task.machine_id
     const state = task.status === "idle" ? "completed" : task.status === "interrupted" ? "cancelled" : "error"
@@ -851,28 +1154,36 @@ export function create(input: {
           : task.status === "lost"
             ? "was lost"
             : "failed"
-    const shots = result === undefined ? 0 : (await images(task).catch(() => [])).length
+    const shots = result === undefined ? 0 : task.images
     const body =
       result ??
       (task.error
         ? task.error
         : "Its final message could not be read when it ended: read it with machine_task_read before relying on it.")
+    // A command's result keeps the shape of the hub's earlier command records, which the timeline shows as such.
+    const metadata =
+      task.kind === "prompt"
+        ? {
+            kind: "task",
+            title: task.title,
+            ...(task.model ? { model: task.model } : {}),
+            ...(shots > 0 ? { images: Math.min(shots, MAX_SHOWN_IMAGES) } : {}),
+          }
+        : {
+            kind: task.kind,
+            command: task.prompt_excerpt,
+            ...(task.kind === "shell" && shell && state === "completed"
+              ? { exit: shell.exit, ...shellOutput(shell) }
+              : { output: body }),
+          }
     const recorded = await input
       .record(task.user_id, task.session_id, {
         id: task.notify_id,
         description: `${task.title} — ${machine}`,
         text: `Task ${task.id} on ${machine} ${ended}.${shots > 0 ? ` It produced ${shots} image(s): machine_task_image shows them.` : ""}\n\n${body}`,
-        metadata: {
-          source: RECORD_SOURCE,
-          kind: "task",
-          task: task.id,
-          machine,
-          title: task.title,
-          state,
-          ...(shots > 0 ? { images: Math.min(shots, 4) } : {}),
-        },
+        metadata: { source: RECORD_SOURCE, task: task.id, machine, state, ...metadata },
         delivery: "queue",
-        resume: true,
+        resume,
       })
       .then(
         (response) => !(response instanceof Response) || response.ok || response.status === 409,
@@ -931,24 +1242,58 @@ export function create(input: {
     )
   }
 
+  /**
+   * One browser's event stream. While the browser keeps up, frames go out as they come. Once it is behind
+   * (`desiredSize` exhausted), consecutive deltas of one part are merged into one frame and flushed every
+   * `COALESCE_EVERY`, so a fast model does not bury a slow connection under one frame per token; any other frame
+   * flushes what is held first, so order is kept. A browser still `MAX_BACKLOG` behind is cut.
+   */
   function stream(request: Request, set: Set<Follower>, closed: () => void, first: string[]) {
     const encoder = new TextEncoder()
-    const state = {} as { follower?: Follower; timer?: ReturnType<typeof setInterval>; open: boolean }
+    const state = {} as {
+      follower?: Follower
+      timer?: ReturnType<typeof setInterval>
+      open: boolean
+      held?: { key: string; frame: { type: string; data: Record<string, unknown> & { delta: string } } }
+      flush?: ReturnType<typeof setTimeout>
+    }
     state.open = true
     const cleanup = () => {
       if (!state.open) return
       state.open = false
       clearInterval(state.timer)
+      clearTimeout(state.flush)
       if (state.follower) set.delete(state.follower)
       closed()
     }
     const body = new ReadableStream<Uint8Array>(
       {
         start(controller) {
+          const write = (text: string) => controller.enqueue(encoder.encode(text))
+          const flush = () => {
+            clearTimeout(state.flush)
+            state.flush = undefined
+            if (!state.held || !state.open) return
+            write(`data: ${JSON.stringify(state.held.frame)}\n\n`)
+            state.held = undefined
+          }
           state.follower = {
             send(text) {
               if (!state.open) return true
-              controller.enqueue(encoder.encode(text))
+              const behind = (controller.desiredSize ?? 0) <= 0
+              const delta = behind ? Option.getOrUndefined(decodeDelta(text.slice(6).trimEnd())) : undefined
+              if (!delta) {
+                flush()
+                write(text)
+                return (controller.desiredSize ?? 0) > -MAX_BACKLOG
+              }
+              const key = `${delta.data.sessionID}\n${delta.data.messageID ?? ""}\n${delta.data.partID ?? ""}\n${delta.type}`
+              if (state.held && state.held.key === key) state.held.frame.data.delta += delta.data.delta
+              else {
+                flush()
+                state.held = { key, frame: { type: delta.type, data: { ...delta.data } } }
+              }
+              state.flush ??= setTimeout(flush, COALESCE_EVERY)
               return (controller.desiredSize ?? 0) > -MAX_BACKLOG
             },
             close() {
@@ -1125,6 +1470,42 @@ function digest(message: Message): string[] {
       `Tool ${part.name ?? "?"} (${part.state?.status ?? "?"})${files > 0 ? `, ${files} file(s)` : ""}${error ? `: ${error}` : ""}`,
     ]
   })
+}
+
+/** The images a task's tools returned (screenshots and the like), newest first. */
+function imagesOf(messages: readonly Message[]) {
+  return messages.flatMap((message) =>
+    (message.content ?? []).flatMap((part) =>
+      part.type === "tool"
+        ? (part.state?.content ?? []).flatMap((item) => {
+            const mime = item.uri?.startsWith("data:") ? IMAGE_URI.exec(item.uri)?.[1] : item.mime
+            if (item.type !== "file" || !item.uri || !mime?.startsWith("image/")) return []
+            return [{ uri: item.uri, mime, name: item.name ?? part.name ?? "image", tool: part.name ?? "" }]
+          })
+        : [],
+    ),
+  )
+}
+
+function shellText(message: Message) {
+  const status = message.exit === undefined ? `Ended: ${message.status ?? "unknown"}.` : `Exit code ${message.exit}.`
+  const shown = shellOutput(message)
+  if (!shown.output) return status
+  return `${status}\n\n${shown.truncated ? "[Truncated]\n" : ""}\`\`\`\n${shown.output}\n\`\`\``
+}
+
+/** The end of a shell command's output, at most `MAX_SHELL_OUTPUT` characters. */
+function shellOutput(message: Message) {
+  const output = message.output?.output ?? ""
+  return {
+    output: output.length > MAX_SHELL_OUTPUT ? output.slice(-MAX_SHELL_OUTPUT) : output,
+    truncated: output.length > MAX_SHELL_OUTPUT || message.output?.truncated === true,
+  }
+}
+
+/** `provider/model`, with `#variant` when one is chosen: how a task's model is stored and shown. */
+function modelRef(model: { id: string; providerID: string; variant?: string }) {
+  return `${model.providerID}/${model.id}${model.variant ? `#${model.variant}` : ""}`
 }
 
 function titleOf(prompt: string) {

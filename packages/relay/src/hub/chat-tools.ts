@@ -2,6 +2,7 @@ import { gunzipSync } from "node:zlib"
 import { Option, Schema } from "effect"
 import { Skills } from "../skills.js"
 import { Refusal, type ChatTasks } from "./chat-tasks.js"
+import type { ChatTemplates } from "./chat-templates.js"
 import type { HubSkills } from "./skills.js"
 
 export * as ChatTools from "./chat-tools.js"
@@ -35,8 +36,18 @@ const decodeTask = Schema.decodeUnknownOption(
     machine: Schema.optional(Schema.String),
     directory: Schema.optional(Schema.String),
     agent: Schema.optional(Schema.String),
+    model: Schema.optional(Schema.String),
+    variant: Schema.optional(Schema.String),
+    template: Schema.optional(Schema.String),
     continue: Schema.optional(Schema.String),
     wait_seconds: WaitSeconds,
+  }),
+)
+const decodeWait = Schema.decodeUnknownOption(
+  Schema.Struct({
+    tasks: Schema.Array(Schema.String),
+    mode: Schema.optional(Schema.Literals(["any", "all"])),
+    seconds: Schema.optional(Schema.Number),
   }),
 )
 const decodeScope = Schema.decodeUnknownOption(
@@ -51,6 +62,8 @@ const decodeSend = Schema.decodeUnknownOption(
     task: Schema.String,
     text: Schema.String,
     delivery: Schema.optional(Schema.Literals(["steer", "queue"])),
+    model: Schema.optional(Schema.String),
+    variant: Schema.optional(Schema.String),
   }),
 )
 const decodeReply = Schema.decodeUnknownOption(
@@ -94,6 +107,15 @@ const decodeInstall = Schema.decodeUnknownOption(
 const SESSION_META = "ai.opencode/sessionID"
 
 const TASK = { type: "string", description: "The task's id, as machine_task or machine_tasks_list gave it." }
+const MODEL = {
+  type: "string",
+  description:
+    "The model the task's agent runs, as provider/model from models_list (optionally provider/model#variant). The conversation's own model otherwise.",
+}
+const VARIANT = {
+  type: "string",
+  description: "The model's variant (effort level), one of those models_list gives it.",
+}
 const WAIT = {
   type: "number",
   description:
@@ -104,11 +126,18 @@ const TOOLS = [
   {
     name: "machine_task",
     description:
-      "Hand a request to the coding agent on one of the user's machines. It starts a task in its own session there and answers at once with the task's handle; the task runs in the background, and you are told when it ends. By default it works on the machine and project attached to this conversation. The agent there sees nothing of this conversation: pass the whole request and any context it needs. Start several tasks to work in parallel, on other folders or machines.",
+      "Delegate a request to a sub-agent: the coding agent on one of the user's machines. It starts a task in its own session there and answers at once with the task's handle; the task runs in the background, and you are told when it ends (or use machine_tasks_wait). By default it works on the machine and project attached to this conversation, with this conversation's model; choose another with model (see models_list) and a role with template (see templates_list). The sub-agent sees nothing of this conversation: pass the whole request and any context it needs. Start several tasks to work in parallel, on other folders or machines.",
     inputSchema: {
       type: "object",
       properties: {
         prompt: { type: "string", description: "The complete request for the agent on the machine." },
+        model: MODEL,
+        variant: VARIANT,
+        template: {
+          type: "string",
+          description:
+            "An agent template by name (plan, build, review, or one of the user's): its instructions reach the sub-agent before the request, and its default model applies unless model is given.",
+        },
         images: {
           type: "boolean",
           description:
@@ -129,6 +158,32 @@ const TOOLS = [
       },
       required: ["prompt"],
     },
+  },
+  {
+    name: "machine_tasks_wait",
+    description:
+      "Wait for tasks of this conversation to end: the first of them with mode any (the default), every one with mode all, for at most seconds (0 to 600, 120 by default). Answers each task's status, with the final message of those that ended. Use it to chain work: wait, read the results, then start the next tasks.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        tasks: { type: "array", items: TASK, description: "The tasks to wait for." },
+        mode: { type: "string", enum: ["any", "all"] },
+        seconds: { type: "number" },
+      },
+      required: ["tasks"],
+    },
+  },
+  {
+    name: "models_list",
+    description:
+      "List the models the user can run, on the hub and on their machines alike: provider/model, whether it reads images (vision) and uses tools, its variants, context size and price when known. Use it to pick a model for a sub-agent.",
+    inputSchema: { type: "object", properties: {} },
+  },
+  {
+    name: "templates_list",
+    description:
+      "List the agent templates: the built-in plan, build and review, and the user's own. Each is a role (a system prompt) a sub-agent can take, with a default model.",
+    inputSchema: { type: "object", properties: {} },
   },
   {
     name: "machine_tasks_list",
@@ -164,6 +219,11 @@ const TOOLS = [
         task: TASK,
         text: { type: "string" },
         delivery: { type: "string", enum: ["steer", "queue"] },
+        model: {
+          ...MODEL,
+          description: "Switch the task's session to this model first (provider/model from models_list).",
+        },
+        variant: VARIANT,
       },
       required: ["task", "text"],
     },
@@ -301,6 +361,7 @@ export function create(input: {
   owner: (token: string) => string | undefined
   skills: HubSkills.Instance
   tasks: ChatTasks.Instance
+  templates: ChatTemplates.Instance
   /** The machines a user may open, with the machine and folder attached to a chat session. */
   machines: (user: string, session: string) => unknown
   /** Whether a chat session's model reads images. */
@@ -339,6 +400,17 @@ export function create(input: {
   }
 
   async function run(user: string, name: string, args: unknown, context: { session: unknown }) {
+    if (name === "models_list") return text(await input.tasks.models(user))
+    if (name === "templates_list")
+      return text(
+        input.templates.list(user).map((template) => ({
+          name: template.name,
+          description: template.description,
+          ...(template.model ? { model: template.model } : {}),
+          ...(template.agent ? { agent: template.agent } : {}),
+          builtin: template.builtin,
+        })),
+      )
     if (name.startsWith("machine")) {
       if (typeof context.session !== "string") return failure("This tool needs a chat session.")
       return machine(user, context.session, name, args).catch((error: unknown) => failure(describe(error)))
@@ -381,7 +453,9 @@ export function create(input: {
     if (name === "machine_task") {
       const parsed = Option.getOrUndefined(decodeTask(args))
       if (!parsed)
-        return failure("Expected { prompt, images?, machine?, directory?, agent?, continue?, wait_seconds? }.")
+        return failure(
+          "Expected { prompt, model?, variant?, template?, images?, machine?, directory?, agent?, continue?, wait_seconds? }.",
+        )
       const task = await tasks.start({
         user,
         session,
@@ -390,7 +464,11 @@ export function create(input: {
         machine: parsed.machine,
         directory: parsed.directory,
         agent: parsed.agent,
+        model: parsed.model,
+        variant: parsed.variant,
+        template: parsed.template,
         continue: parsed.continue,
+        by: "model",
       })
       const state = await tasks.status(task, parsed.wait_seconds ?? 0)
       return text({
@@ -398,20 +476,42 @@ export function create(input: {
         remoteSession: task.remote_session,
         machine: state.machineName,
         directory: task.directory,
+        ...(task.model ? { model: task.model } : {}),
+        ...(task.template ? { template: task.template } : {}),
         status: state.status,
         ...("result" in state
           ? { result: state.result }
-          : { note: "The task runs in the background. You will be told when it ends; do not wait for it." }),
+          : {
+              note: "The task runs in the background. You will be told when it ends; to block on it, use machine_tasks_wait.",
+            }),
       })
     }
+    if (name === "machine_tasks_wait") {
+      const parsed = Option.getOrUndefined(decodeWait(args))
+      if (!parsed || parsed.tasks.length === 0) return failure("Expected { tasks: [id, ...], mode?, seconds? }.")
+      const found = parsed.tasks.map((id) => tasks.find(user, session, id))
+      const missing = parsed.tasks.filter((_, index) => !found[index])
+      if (missing.length > 0) return failure(`This conversation has no task ${missing.join(", ")}.`)
+      return text(
+        await tasks.wait(
+          found.filter((task) => task !== undefined),
+          parsed.mode ?? "any",
+          parsed.seconds ?? 120,
+        ),
+      )
+    }
+
     if (name === "machine_tasks_list") {
       const parsed = Option.getOrUndefined(decodeScope(args ?? {}))
       return text(
         tasks.list(user, parsed?.scope === "all" ? undefined : session).map((task) => ({
           task: task.id,
           title: task.title,
+          kind: task.kind,
           machine: task.machineName,
           directory: task.directory,
+          ...(task.model ? { model: task.model } : {}),
+          ...(task.template ? { template: task.template } : {}),
           status: task.status,
           ...(task.session === session ? {} : { otherConversation: true }),
           cost: task.cost,
@@ -448,10 +548,12 @@ export function create(input: {
     }
     if (name === "machine_task_send") {
       const parsed = Option.getOrUndefined(decodeSend(args))
-      if (!parsed || !parsed.text.trim()) return failure("Expected { task, text, delivery? }.")
+      if (!parsed || !parsed.text.trim()) return failure("Expected { task, text, delivery?, model?, variant? }.")
       const task = tasks.find(user, session, parsed.task)
       if (!task) return failure(`This conversation has no task ${parsed.task}.`)
-      return done(await tasks.send(task, parsed.text, parsed.delivery), "Sent.")
+      const model =
+        parsed.model === undefined ? undefined : await tasks.resolveModel(user, parsed.model, parsed.variant)
+      return done(await tasks.send(task, parsed.text, parsed.delivery, "model", model), "Sent.")
     }
     if (name === "machine_task_image") {
       const parsed = Option.getOrUndefined(decodeImage(args))

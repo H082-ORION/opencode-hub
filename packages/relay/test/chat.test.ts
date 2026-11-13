@@ -232,6 +232,9 @@ describe("the chat's tools", () => {
     }
     expect(body.result.tools.map((tool) => tool.name)).toEqual([
       "machine_task",
+      "machine_tasks_wait",
+      "models_list",
+      "templates_list",
       "machine_tasks_list",
       "machine_task_status",
       "machine_task_read",

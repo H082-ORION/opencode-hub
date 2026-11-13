@@ -212,6 +212,9 @@ export type ProviderSummary = Pick<ProviderRow, "id" | "name" | "base_url" | "au
  */
 export type ChatTaskStatus = "starting" | "running" | "waiting" | "idle" | "failed" | "interrupted" | "offline" | "lost"
 
+/** What a chat task runs on its machine: an agent prompt, a slash command, or one shell command. */
+export type ChatTaskKind = "prompt" | "command" | "shell"
+
 /** A task the hub's chat handed to a machine: one session there, followed live until its execution ends. */
 export type ChatTask = {
   id: string
@@ -223,6 +226,13 @@ export type ChatTask = {
   title: string
   prompt_excerpt: string
   agent: string | null
+  kind: ChatTaskKind
+  /** The model the task's session runs, as `provider/model` or `provider/model#variant`; null for the machine's default. */
+  model: string | null
+  /** The agent template the task was started with, by name. */
+  template: string | null
+  /** How many images (screenshots and the like) the task's tools had produced when its last execution ended. */
+  images: number
   status: ChatTaskStatus
   created_at: number
   started_at: number | null
@@ -259,12 +269,28 @@ export type ChatTaskUpdate = Partial<
     | "cost"
     | "notify_id"
     | "notified_at"
+    | "model"
+    | "images"
   >
 >
+
+/** An agent template of a user: a system prompt the hub's chat hands a task's agent, with a default model. */
+export type ChatTemplate = {
+  id: string
+  user_id: string
+  name: string
+  description: string
+  system: string
+  model: string | null
+  agent: string | null
+  created_at: number
+  updated_at: number
+}
 
 const CHAT_TASK_UPDATES = [
   "remote_session",
   "status",
+  "model",
   "started_at",
   "ended_at",
   "outcome",
@@ -277,6 +303,7 @@ const CHAT_TASK_UPDATES = [
   "cost",
   "notify_id",
   "notified_at",
+  "images",
 ] as const
 
 // Labels that would collide with infrastructure names or look like the hub itself.
@@ -501,6 +528,31 @@ export function open(dir: string) {
     updated_at INTEGER NOT NULL
   )`)
   db.run("CREATE INDEX IF NOT EXISTS chat_task_session ON chat_task (user_id, session_id)")
+  // Tasks created before they could run commands, pick a model or follow a template lack these columns.
+  const taskColumns = new Set(
+    db
+      .query<{ name: string }, []>("PRAGMA table_info(chat_task)")
+      .all()
+      .map((row) => row.name),
+  )
+  if (!taskColumns.has("kind")) db.run("ALTER TABLE chat_task ADD COLUMN kind TEXT NOT NULL DEFAULT 'prompt'")
+  ;["model", "template"]
+    .filter((column) => !taskColumns.has(column))
+    .forEach((column) => db.run(`ALTER TABLE chat_task ADD COLUMN ${column} TEXT`))
+  if (!taskColumns.has("images")) db.run("ALTER TABLE chat_task ADD COLUMN images INTEGER NOT NULL DEFAULT 0")
+  // A user's agent templates: a system prompt, a description for the chat's model, and a default model.
+  db.run(`CREATE TABLE IF NOT EXISTS chat_template (
+    id TEXT PRIMARY KEY,
+    user_id TEXT NOT NULL,
+    name TEXT NOT NULL,
+    description TEXT NOT NULL,
+    system TEXT NOT NULL,
+    model TEXT,
+    agent TEXT,
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL,
+    UNIQUE (user_id, name)
+  )`)
 
   const machineColumns = "id, name, owner_user_id, owner_org_id, enrolled_by, created_at, last_seen_at"
   const queries = {
@@ -752,13 +804,16 @@ export function open(dir: string) {
       title: string
       prompt: string
       agent?: string
+      kind?: ChatTaskKind
+      model?: string
+      template?: string
       remoteSession?: string
     }) {
       const now = Date.now()
       db.run(
         `INSERT INTO chat_task (id, user_id, session_id, machine_id, directory, remote_session, title, prompt_excerpt,
-           agent, status, created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'starting', ?, ?)`,
+           agent, kind, model, template, status, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'starting', ?, ?)`,
         [
           input.id,
           input.user,
@@ -769,6 +824,9 @@ export function open(dir: string) {
           input.title,
           input.prompt,
           input.agent ?? null,
+          input.kind ?? "prompt",
+          input.model ?? null,
+          input.template ?? null,
           now,
           now,
         ],
@@ -811,6 +869,45 @@ export function open(dir: string) {
     /** Forgets a chat session's tasks, with the session. */
     deleteChatTasks: (user: string, session: string) =>
       db.run("DELETE FROM chat_task WHERE user_id = ? AND session_id = ?", [user, session]),
+    /** A user's agent templates, by name. */
+    chatTemplates: (user: string) =>
+      db.query<ChatTemplate, [string]>("SELECT * FROM chat_template WHERE user_id = ? ORDER BY name").all(user),
+    chatTemplate: (user: string, id: string) =>
+      db
+        .query<ChatTemplate, [string, string]>("SELECT * FROM chat_template WHERE id = ? AND user_id = ?")
+        .get(id, user) ?? undefined,
+    /** Creates a template, or replaces the fields of the one with this id. */
+    saveChatTemplate(input: {
+      id: string
+      user: string
+      name: string
+      description: string
+      system: string
+      model?: string
+      agent?: string
+    }) {
+      const now = Date.now()
+      db.run(
+        `INSERT INTO chat_template (id, user_id, name, description, system, model, agent, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+         ON CONFLICT (id) DO UPDATE SET name = excluded.name, description = excluded.description,
+           system = excluded.system, model = excluded.model, agent = excluded.agent, updated_at = excluded.updated_at`,
+        [
+          input.id,
+          input.user,
+          input.name,
+          input.description,
+          input.system,
+          input.model ?? null,
+          input.agent ?? null,
+          now,
+          now,
+        ],
+      )
+      return db.query<ChatTemplate, [string]>("SELECT * FROM chat_template WHERE id = ?").get(input.id)!
+    },
+    deleteChatTemplate: (user: string, id: string) =>
+      db.run("DELETE FROM chat_template WHERE id = ? AND user_id = ?", [id, user]).changes,
     /** Forgets tasks that ended before `before`. */
     purgeChatTasks: (before: number) =>
       db.run(

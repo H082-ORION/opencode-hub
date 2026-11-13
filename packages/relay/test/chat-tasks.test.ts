@@ -4,6 +4,7 @@ import os from "node:os"
 import path from "node:path"
 import type { ChatMachines } from "../src/hub/chat-machines.js"
 import { ChatTasks } from "../src/hub/chat-tasks.js"
+import { ChatTemplates } from "../src/hub/chat-templates.js"
 import { ChatWatch } from "../src/hub/chat-watch.js"
 import { Store } from "../src/hub/store.js"
 
@@ -14,6 +15,19 @@ const USER = "user-1"
 const SESSION = "ses_chat"
 const dir = mkdtempSync(path.join(os.tmpdir(), "opencode-chat-tasks-"))
 const TOKENS = { input: 10, output: 5, reasoning: 1, cache: { read: 2, write: 0 } }
+/** The models the user's providers give, as the chat engine lists them. */
+const MODELS = [
+  {
+    id: "m",
+    providerID: "p",
+    name: "Model M",
+    capabilities: { tools: true, input: ["text", "image"] },
+    variants: [{ id: "high" }],
+    cost: [{ input: 3, output: 15, cache: { read: 0.3, write: 3.75 } }],
+    limit: { context: 200_000, output: 32_000 },
+  },
+  { id: "small", providerID: "p", name: "Small", capabilities: { tools: true, input: ["text"] }, variants: [] },
+]
 
 type Call = { method: string; path: string; body?: unknown; headers?: [string, string][] }
 type Recorded = { user: string; session: string } & ChatMachines.Recorded
@@ -98,6 +112,10 @@ function create(store = opened.store) {
     return machine.answer(call)
   }
   const watch = ChatWatch.create({ request, retry: 10 })
+  const templates = ChatTemplates.create({
+    store,
+    model: async (_, reference) => MODELS.some((entry) => `${entry.providerID}/${entry.id}` === reference),
+  })
   const tasks = ChatTasks.create({
     store,
     request,
@@ -105,6 +123,8 @@ function create(store = opened.store) {
     online: () => machine.online,
     machines: () => [{ id: "m1", name: "Laptop", online: machine.online }],
     model: async () => ({ id: "m", providerID: "p" }),
+    models: async () => MODELS,
+    templates,
     files: async () => [{ uri: "data:image/png;base64,AAAA", name: "shot.png" }],
     record: async (user, session, message) => {
       if (record.fail) throw new Error("engine down")
@@ -114,6 +134,7 @@ function create(store = opened.store) {
   })
   return {
     tasks,
+    templates,
     close() {
       tasks.close()
       watch.stop()
@@ -153,17 +174,17 @@ afterAll(() => {
 
 const current = (user = USER) =>
   ({ session: "s", user: { id: user } }) as unknown as Parameters<ChatTasks.Instance["handle"]>[2]
-const api = (route: string, init: { method?: string; body?: unknown; user?: string; signal?: AbortSignal } = {}) =>
-  state.hub.tasks.handle(
-    new Request(`http://hub/${route}`, {
-      method: init.method ?? "GET",
-      body: init.body === undefined ? undefined : JSON.stringify(init.body),
-      signal: init.signal,
-    }),
-    route.split("?")[0]!,
-    current(init.user),
-  )
-const start = (prompt = "Fix the tests") => state.hub.tasks.start({ user: USER, session: SESSION, prompt })
+const api = (route: string, init: { method?: string; body?: unknown; user?: string; signal?: AbortSignal } = {}) => {
+  const request = new Request(`http://hub/${route}`, {
+    method: init.method ?? "GET",
+    body: init.body === undefined ? undefined : JSON.stringify(init.body),
+    signal: init.signal,
+  })
+  const handler = route.startsWith("chat-templates") ? state.hub.templates : state.hub.tasks
+  return handler.handle(request, route.split("?")[0]!, current(init.user))
+}
+const start = (prompt = "Fix the tests", extra: Partial<Parameters<ChatTasks.Instance["start"]>[0]> = {}) =>
+  state.hub.tasks.start({ user: USER, session: SESSION, prompt, by: "model", ...extra })
 const task = (id: string) => opened.store.chatTask(USER, id)!
 
 /** Polls until `check` holds, or fails after two seconds. */
@@ -216,21 +237,10 @@ describe("starting a task", () => {
   })
 
   test("on another folder or machine, with the agent asked for", async () => {
-    await state.hub.tasks.start({
-      user: USER,
-      session: SESSION,
-      prompt: "Plan it",
-      machine: "laptop",
-      directory: "/srv/site",
-      agent: "plan",
-    })
+    await start("Plan it", { machine: "laptop", directory: "/srv/site", agent: "plan" })
     expect(machine.calls[0]!.body).toMatchObject({ location: { directory: "/srv/site" }, agent: "plan" })
-    await expect(state.hub.tasks.start({ user: USER, session: SESSION, prompt: "x", machine: "nope" })).rejects.toThrow(
-      "no machine named nope",
-    )
-    await expect(
-      state.hub.tasks.start({ user: USER, session: SESSION, prompt: "x", directory: "relative" }),
-    ).rejects.toThrow("absolute folder")
+    await expect(start("x", { machine: "nope" })).rejects.toThrow("no machine named nope")
+    await expect(start("x", { directory: "relative" })).rejects.toThrow("absolute folder")
   })
 
   test("a machine that refuses the session fails the task at once", async () => {
@@ -437,5 +447,291 @@ describe("what browsers reach", () => {
     machine.active.add("ses_other")
     const response = await api(`chat-tasks/${started.id}/api/session/active`)
     expect(await response!.json()).toEqual({ ses_remote1: {} })
+  })
+})
+
+describe("choosing a sub-agent's model", () => {
+  test("the model and variant asked for go to the session, and the task shows them", async () => {
+    const started = await start("Fix", { model: "p/m", variant: "high" })
+    expect(machine.calls[0]!.body).toMatchObject({ model: { id: "m", providerID: "p", variant: "high" } })
+    expect(started.model).toBe("p/m#high")
+    expect(state.hub.tasks.view(started).model).toBe("p/m#high")
+  })
+
+  test("a model the user's providers do not give is refused, naming the tool that lists them", async () => {
+    await expect(start("Fix", { model: "p/huge" })).rejects.toThrow("models_list")
+    await expect(start("Fix", { model: "p/m", variant: "max" })).rejects.toThrow("no variant max")
+    await expect(start("Fix", { model: "nonsense" })).rejects.toThrow("provider/model")
+    expect(machine.calls).toEqual([])
+  })
+
+  test("a follow-up can switch the session's model first", async () => {
+    const started = await start()
+    const model = await state.hub.tasks.resolveModel(USER, "p/small", undefined)
+    expect(await state.hub.tasks.send(started, "Go on", "queue", "model", model)).toBeUndefined()
+    expect(machine.calls.slice(-2)).toEqual([
+      { method: "POST", path: "/api/session/ses_remote1/model", body: { model: { id: "small", providerID: "p" } } },
+      { method: "POST", path: "/api/session/ses_remote1/prompt", body: { text: "Go on", delivery: "queue" } },
+    ])
+    expect(task(started.id).model).toBe("p/small")
+  })
+
+  test("lists the user's models with what matters to pick one", async () => {
+    expect(await state.hub.tasks.models(USER)).toEqual([
+      {
+        model: "p/m",
+        name: "Model M",
+        provider: "p",
+        vision: true,
+        tools: true,
+        variants: ["high"],
+        context: 200_000,
+        maxOutput: 32_000,
+        pricePerMillion: { input: 3, output: 15, currency: "USD" },
+      },
+      { model: "p/small", name: "Small", provider: "p", vision: false, tools: true, variants: [] },
+    ])
+  })
+})
+
+describe("agent templates", () => {
+  test("a built-in template's instructions reach the sub-agent before the request, with its agent", async () => {
+    const started = await start("Plan the migration", { template: "plan" })
+    expect(started.template).toBe("plan")
+    expect(machine.calls.map((call) => call.path)).toEqual([
+      "/api/session",
+      "/api/session/ses_remote1/synthetic",
+      "/api/session/ses_remote1/prompt",
+    ])
+    expect(machine.calls[0]!.body).toMatchObject({ agent: "plan" })
+    expect(machine.calls[1]!.body).toMatchObject({
+      description: "Template plan",
+      resume: false,
+      text: expect.stringContaining('<agent_template name="plan">'),
+    })
+    expect(machine.calls[2]!.body).toEqual({ text: "Plan the migration" })
+  })
+
+  test("an unknown template is refused before anything reaches the machine", async () => {
+    await expect(start("x", { template: "nope" })).rejects.toThrow("templates_list")
+    expect(machine.calls).toEqual([])
+  })
+
+  test("the user's own template replaces the built-in one of the same name and brings its model", async () => {
+    const created = await api("chat-templates", {
+      method: "POST",
+      body: { name: "plan", description: "My planner", system: "Plan carefully.", model: "p/small" },
+    })
+    expect(created!.status).toBe(200)
+    const names = state.hub.templates.list(USER).map((template) => [template.name, template.builtin])
+    expect(names).toEqual([
+      ["plan", false],
+      ["build", true],
+      ["review", true],
+    ])
+    const started = await start("Plan it", { template: "plan" })
+    expect(machine.calls[0]!.body).toMatchObject({ model: { id: "small", providerID: "p" } })
+    expect(machine.calls[0]!.body).not.toHaveProperty("agent")
+    expect(machine.calls[1]!.body).toMatchObject({ text: expect.stringContaining("Plan carefully.") })
+    // The model asked for still wins over the template's.
+    const other = await start("Plan it again", { template: "plan", model: "p/m" })
+    expect(other.model).toBe("p/m")
+    expect(started.model).toBe("p/small")
+    const id = ((await (await api("chat-templates"))!.json()) as { data: { id: string }[] }).data[0]!.id
+    expect((await api(`chat-templates/${id}`, { method: "DELETE" }))!.status).toBe(204)
+    expect(state.hub.templates.find(USER, "plan")?.builtin).toBe(true)
+  })
+
+  test("a template needs a valid name, a description, a prompt and a known model", async () => {
+    const save = (body: unknown) => api("chat-templates", { method: "POST", body }).then((response) => response!.status)
+    expect(await save({ name: "Bad Name", description: "d", system: "s" })).toBe(400)
+    expect(await save({ name: "ok", description: "", system: "s" })).toBe(400)
+    expect(await save({ name: "ok", description: "d", system: "s", model: "p/huge" })).toBe(400)
+    expect(await save({ name: "ok", description: "d", system: "s" })).toBe(200)
+    expect(await save({ name: "ok", description: "d", system: "s" })).toBe(409)
+    // Another user sees nothing of it.
+    expect(
+      ((await (await api("chat-templates", { user: "user-2" }))!.json()) as { data: unknown[] }).data,
+    ).toHaveLength(3)
+    const own = ((await (await api("chat-templates"))!.json()) as { data: { id: string }[] }).data
+    for (const template of own.filter((entry) => !entry.id.startsWith("builtin:")))
+      await api(`chat-templates/${template.id}`, { method: "DELETE" })
+  })
+})
+
+describe("waiting for several tasks", () => {
+  test("any answers at the first end, with that task's result, and all waits for every one", async () => {
+    const first = await start("One")
+    const second = await start("Two")
+    await until(() => machine.streams.size === 1)
+    const any = state.hub.tasks.wait([first, second], "any", 5)
+    machine.active.delete("ses_remote2")
+    machine.emit("session.execution.succeeded", { sessionID: "ses_remote2" })
+    const result = await any
+    expect(result.stillRunning).toBe(1)
+    expect(result.tasks).toEqual([
+      expect.objectContaining({ task: first.id, status: "running" }),
+      expect.objectContaining({ task: second.id, status: "idle", result: "All done" }),
+    ])
+    // The end that answered a waiter is not reported to the model again.
+    await Bun.sleep(20)
+    expect(recorded).toEqual([])
+    const all = await state.hub.tasks.wait([first, second], "all", 0.05)
+    expect(all.stillRunning).toBe(1)
+    expect(all.tasks[0]).not.toHaveProperty("result")
+    expect(all.tasks[1]).toMatchObject({ status: "idle" })
+  })
+})
+
+describe("who hears of the end", () => {
+  test("a follow-up the user wrote from the panel is recorded without waking the model", async () => {
+    const started = await start()
+    await until(() => machine.streams.size === 1)
+    machine.active.clear()
+    machine.emit("session.execution.succeeded", { sessionID: "ses_remote1" })
+    await until(() => recorded.length === 1)
+    expect(recorded[0]!.resume).toBe(true)
+    expect((await api(`chat-tasks/${started.id}/prompt`, { method: "POST", body: { text: "More" } }))!.status).toBe(204)
+    machine.emit("session.execution.started", { sessionID: "ses_remote1" })
+    await until(() => task(started.id).status === "running")
+    machine.emit("session.execution.succeeded", { sessionID: "ses_remote1" })
+    await until(() => recorded.length === 2)
+    expect(recorded[1]!.resume).toBe(false)
+    // The model's own message takes the task back.
+    expect(await state.hub.tasks.send(task(started.id), "Then this", "queue", "model")).toBeUndefined()
+    machine.emit("session.execution.started", { sessionID: "ses_remote1" })
+    await until(() => task(started.id).status === "running")
+    machine.emit("session.execution.succeeded", { sessionID: "ses_remote1" })
+    await until(() => recorded.length === 3)
+    expect(recorded[2]!.resume).toBe(true)
+  })
+
+  test("the images a task produced are counted, told to the model and shown on the task", async () => {
+    const started = await start()
+    await until(() => machine.streams.size === 1)
+    machine.messages = [
+      {
+        type: "assistant",
+        time: { created: 150 },
+        content: [
+          { type: "text", text: "Here is the page" },
+          {
+            type: "tool",
+            name: "screenshot",
+            state: {
+              status: "completed",
+              content: [
+                { type: "file", uri: "data:image/png;base64,AAAA", name: "home.png" },
+                { type: "file", uri: "media:" + "a".repeat(64), mime: "image/jpeg" },
+              ],
+            },
+          },
+        ],
+      },
+    ]
+    machine.active.clear()
+    machine.emit("session.execution.succeeded", { sessionID: "ses_remote1" })
+    await until(() => recorded.length === 1)
+    expect(task(started.id).images).toBe(2)
+    expect(state.hub.tasks.view(task(started.id)).images).toBe(2)
+    expect(recorded[0]!.metadata).toMatchObject({ kind: "task", images: 2, model: "p/m" })
+    expect(recorded[0]!.text).toContain("2 image(s)")
+    const shot = await api(`chat-tasks/${started.id}/image/0`)
+    expect(shot!.headers.get("content-type")).toBe("image/png")
+  })
+})
+
+describe("commands as tasks", () => {
+  test("a shell command runs in its own session and its output joins the conversation as a shell run", async () => {
+    const response = await api("chat-tasks", { method: "POST", body: { session: SESSION, kind: "shell", shell: "ls" } })
+    expect(response!.status).toBe(200)
+    const started = (await response!.json()) as { id: string; title: string; kind: string; status: string }
+    expect(started).toMatchObject({ kind: "shell", title: "$ ls", status: "running" })
+    expect(machine.calls).toContainEqual({
+      method: "POST",
+      path: "/api/session/ses_remote1/shell",
+      body: { command: "ls" },
+    })
+    await until(() => machine.streams.size === 1)
+    machine.messages = [
+      {
+        id: "msg_shell",
+        type: "shell",
+        command: "ls",
+        status: "exited",
+        exit: 0,
+        output: { output: "README.md\n", truncated: false },
+        time: { created: 400 },
+      },
+    ]
+    machine.emit("session.shell.ended", { sessionID: "ses_remote1", shell: { id: "sh" }, output: {} })
+    await until(() => task(started.id).status === "idle")
+    await until(() => recorded.length === 1)
+    expect(recorded[0]!.resume).toBe(false)
+    expect(recorded[0]!.text).toContain("Exit code 0.")
+    expect(recorded[0]!.metadata).toEqual({
+      source: "hub-machine",
+      task: started.id,
+      machine: "m1",
+      state: "completed",
+      kind: "shell",
+      command: "ls",
+      exit: 0,
+      output: "README.md\n",
+      truncated: false,
+    })
+    // A shell command takes no follow-up.
+    expect((await api(`chat-tasks/${started.id}/prompt`, { method: "POST", body: { text: "x" } }))!.status).toBe(409)
+  })
+
+  test("a slash command runs as a task too, ended by the agent run it started", async () => {
+    const response = await api("chat-tasks", {
+      method: "POST",
+      body: { session: SESSION, kind: "command", command: { name: "review", arguments: "src" } },
+    })
+    expect(response!.status).toBe(200)
+    const started = (await response!.json()) as { id: string; title: string }
+    expect(started.title).toBe("/review src")
+    expect(machine.calls).toContainEqual({
+      method: "POST",
+      path: "/api/session/ses_remote1/command",
+      body: { name: "review", text: "src" },
+    })
+    await until(() => machine.streams.size === 1)
+    machine.emit("session.execution.started", { sessionID: "ses_remote1" })
+    machine.emit("session.execution.succeeded", { sessionID: "ses_remote1" })
+    await until(() => recorded.length === 1)
+    expect(recorded[0]!.metadata).toMatchObject({ kind: "command", command: "/review src", output: "All done" })
+    expect(
+      await api("chat-tasks", {
+        method: "POST",
+        body: { session: SESSION, kind: "command", command: { name: "two words" } },
+      }).then((r) => r!.status),
+    ).toBe(400)
+  })
+})
+
+describe("a browser that is behind", () => {
+  test("gets consecutive deltas of one part merged into one frame", async () => {
+    const started = await start()
+    await until(() => machine.streams.size === 1)
+    const response = await api(`chat-tasks/${started.id}/api/event`)
+    // Nothing reads the stream: the first large delta exhausts its buffer, so the ones after it are held and merged.
+    machine.emit("session.text.delta", {
+      sessionID: "ses_remote1",
+      messageID: "m1",
+      partID: "p1",
+      delta: "x".repeat(70_000),
+    })
+    await Bun.sleep(5)
+    for (const delta of ["a", "b", "c"])
+      machine.emit("session.text.delta", { sessionID: "ses_remote1", messageID: "m1", partID: "p1", delta })
+    machine.emit("session.text.delta", { sessionID: "ses_remote1", messageID: "m1", partID: "p2", delta: "d" })
+    await Bun.sleep(80)
+    const read = frames(response!)
+    await until(() => read.received.filter((frame) => frame.type === "session.text.delta").length === 3)
+    const deltas = read.received.filter((frame) => frame.type === "session.text.delta").map((frame) => frame.data.delta)
+    expect(deltas).toEqual(["x".repeat(70_000), "abc", "d"])
+    read.close()
   })
 })
