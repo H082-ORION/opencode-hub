@@ -1151,6 +1151,8 @@ export interface ToolProps {
   onContentRendered?: () => void
   /** Paths the patch view lists, without change counts or diffs, instead of `metadata.files`. */
   pendingFiles?: readonly string[]
+  /** Images the tool returned inline, shown under its card. */
+  images?: readonly { uri: string; name?: string }[]
   forceOpen?: boolean
   locked?: boolean
 }
@@ -1416,8 +1418,31 @@ export function ToolDisplay(
             <Dynamic component={render()} {...props} />
           </Match>
         </Switch>
+        {/* A read image has its own preview, from the file it read. */}
+        <Show when={props.tool !== "read" && props.images}>{(images) => <ToolImages images={images()} />}</Show>
       </div>
     </Show>
+  )
+}
+
+/** Thumbnails of a tool's images, each opening OpenCode's image preview. */
+function ToolImages(props: { images: readonly { uri: string; name?: string }[] }) {
+  const i18n = useI18n()
+  const preview = createImagePreview()
+  const root = { element: undefined as HTMLDivElement | undefined }
+  // After each render, so images added while the tool runs open the preview too.
+  createEffect(() => {
+    if (props.images.length > 0 && root.element) preview(root.element)
+  })
+
+  return (
+    <div data-component="tool-images" ref={(element) => (root.element = element)}>
+      <For each={props.images}>
+        {(image) => (
+          <img src={image.uri} alt={image.name ?? i18n.t("ui.imagePreview.alt")} loading="lazy" decoding="async" />
+        )}
+      </For>
+    </div>
   )
 }
 

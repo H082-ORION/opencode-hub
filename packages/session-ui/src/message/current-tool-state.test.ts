@@ -1,6 +1,12 @@
 import { describe, expect, test } from "bun:test"
 import type { SessionMessageAssistantTool } from "@opencode/client/promise"
-import { currentToolError, currentToolInput, currentToolMetadata, currentToolOutput } from "./current-tool-state"
+import {
+  currentToolError,
+  currentToolImages,
+  currentToolInput,
+  currentToolMetadata,
+  currentToolOutput,
+} from "./current-tool-state"
 
 const time = { created: 1 }
 
@@ -84,5 +90,26 @@ describe("current tool state", () => {
 
     expect(currentToolError(tool)).toBe("Command failed")
     expect(currentToolOutput(tool)).toBeUndefined()
+  })
+
+  test("shows the images a tool returned inline, but not a dropped payload or another file", () => {
+    const tool = {
+      type: "tool",
+      id: "tool_screenshot",
+      name: "browser_screenshot",
+      state: {
+        status: "completed",
+        input: {},
+        content: [
+          { type: "text", text: "Captured" },
+          { type: "file", mime: "image/png", uri: "data:image/png;base64,iVBORw0KGgo=", name: "page.png" },
+          { type: "file", mime: "image/png", uri: "data:image/png;base64," },
+          { type: "file", mime: "text/plain", uri: "data:text/plain;base64,aGk=" },
+        ],
+      },
+      time,
+    } satisfies SessionMessageAssistantTool
+
+    expect(currentToolImages(tool)).toEqual([{ uri: "data:image/png;base64,iVBORw0KGgo=", name: "page.png" }])
   })
 })

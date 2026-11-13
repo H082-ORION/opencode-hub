@@ -1501,6 +1501,23 @@
   scroll-margin-top: var(--sticky-accordion-top, 0px);
 }
 
+[data-component="tool-images"] {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding-top: 8px;
+
+  img {
+    max-width: min(100%, 320px);
+    max-height: 200px;
+    border: 1px solid var(--v2-border-border-weak, transparent);
+    border-radius: 6px;
+    background: var(--v2-background-bg-layer-1);
+    object-fit: contain;
+    cursor: zoom-in;
+  }
+}
+
 [data-component="dock-prompt"][data-kind="permission"],
 [data-component="dock-prompt"][data-variant="experimental"] {
   position: relative;
