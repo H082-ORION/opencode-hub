@@ -96,7 +96,8 @@ Rules:
   an instance the agent was not given is ignored. The agent checks every name (`[a-z0-9]+(-[a-z0-9]+)*`, 64 at most)
   and path (relative, segments `[A-Za-z0-9_][A-Za-z0-9._-]*`, no `..`, no hidden file, 6 levels) before writing
   anything, and announces a version only once it is written.
-- No flow control: senders rely on WebSocket buffering. Known limitation.
+- No flow control: senders rely on WebSocket buffering. Known limitation (the hub chat's task streams cut a browser
+  that falls too far behind, see "Hub chat").
 - Header hygiene, applied by the **agent** before calling the local server: drop `host`, `origin`, `cookie`,
   `authorization`, `connection`, `upgrade`, `keep-alive`, `transfer-encoding`, `te`, `trailer`,
   `proxy-authorization`, `proxy-connection`, every `sec-websocket-*` for http, and add
@@ -175,13 +176,15 @@ clientID?, clientSecret?, scope? }` changes one (headers left out are kept; a ne
   `chatgpt`, api_key and oauth sealed, created_at, updated_at; primary key `(user_id, id)`), `skill` (id, owner_kind
   `user` or `org`, owner_id, name, description, files as JSON `[{ path, content }]` in clear, created_at, updated_at;
   unique `(owner_kind, owner_id, name)`; an organization's go with it),
-  `setting` (key, value; `url` is the public URL the hub last started with, for `hub invite`). The OPAQUE server key lives in `<data>/opaque-server-setup`, outside
+  `chat_target` and `chat_task` (see "Hub chat"), `setting` (key, value; `url` is the public URL the hub last started with, for `hub invite`). The OPAQUE server key lives in `<data>/opaque-server-setup`, outside
   the database. The data dir is `0700`; `hub.db`, its WAL files, `opaque-server-setup` and `catalog.json` are `0600`.
   Sessions, unlocked user keys, OPAQUE attempts, enrollment codes and handoff tickets live in memory.
   The connection runs with `secure_delete` on, so deleted rows are zeroed. A `provider` table without `user_id` (the
   shared, clear-text one of earlier versions) is dropped at start without being read, then checkpointed out of the
   WAL: those providers have to be entered again by each user. An administrator reset deletes the user's providers and connectors.
 - Routes on the hub host:
+  - The hub chat's routes (`chat/…`, `chat-machines/…`, `chat-targets/…`, `chat-tasks/…`) are described in "Hub
+    chat".
   - The dashboard is a second entry of the web app (`packages/app/hub.html`, `packages/app/src/hub/`) built with
     `@opencode/ui`. The CLI passes the embedded app assets to `Hub.start({ ui })`; every non-API GET on the hub host
     serves `hub.html` (including `/login?next=`). Without assets the hub serves a 503 page explaining how to build them.
@@ -334,6 +337,82 @@ service start`), so the owner's existing sessions stay visible. INSTANCE is appl
 - `opencode agent status`, `opencode agent leave` (forget local enrollment, remove the hub's entries from the
   service environment and the hub's skills from its skills folder).
 
+## Hub chat
+
+The hub's own chat (`Hub.start({ chat })`) runs one opencode server per active user on the hub (`hub/chat.ts`),
+restricted to the hub's tools (the `hub-tools` MCP server at `/hub/chat-tools`, authenticated with that instance's
+token) and behind a closed list of browser routes under `/hub/api/chat/`. It reaches the user's machines only through
+`machineRequest`, which checks `mayOpen(user, machine)` on every call, like a browser request.
+
+- **Target** (`chat_target`, `hub/chat-machines.ts`): the machine and folder attached to a chat session, told to the
+  model once. Its `remote_session` is where `/command` and `!shell` run (results are recorded as synthetic messages
+  at the end, polled; not yet live tasks).
+- **Tasks** (`chat_task`, `hub/chat-tasks.ts`): `machine_task` starts one session per task on a machine (by default
+  the target; or `machine`, `directory`, `agent`), titled after the prompt, and answers as soon as the machine admitted
+  the prompt with `{ task, remoteSession, machine, directory, status }`; `continue: <task>` sends the prompt to an
+  earlier task's session instead; `wait_seconds` (0 to 600) waits for the end. The row is created before the first
+  request to the machine. Statuses: `starting`, `running`, `waiting` (a permission or question pending), `offline` (the
+  machine's stream is down), then `idle`, `failed`, `interrupted` or `lost` (offline 30 minutes, or its session gone; a
+  lost session is never recreated). A message sent to a task that ended starts it again in the same session. At most 8
+  active tasks per user. Stopping the chat's own answer never stops tasks; the UI has an explicit "Stop all tasks".
+- **Following** (`hub/chat-watch.ts`): one `GET /api/event?types=…` stream per user and machine through the tunnel,
+  shared by every task and browser following that user's sessions there, open while anyone follows it, reconnecting
+  with a backoff (1 s doubling to 30 s), unfiltered if the machine refuses the type list. `/api/event` cannot filter by
+  session, so each task keeps the events of its session and of the subagent sessions created under it
+  (`session.created` with a known `parentID`). Each (re)connection starts with `server.connected`, after which a task
+  reconciles with the machine: its session (404 means `lost`), usage, pending permissions and questions, and whether
+  the execution it followed ended meanwhile. Hub streams are tagged `hub-user:<id>` in the tunnel, so a recheck keeps
+  them as long as that user may open the machine (a browser session's tag is checked against the session).
+- **End**: on `session.execution.succeeded|failed|interrupted` of the task's session, the end is claimed first (status
+  written before anything is read, so a repeated end is ignored), then the final text (60 000 characters at most) is
+  read and told once to the chat's model: a synthetic message with `delivery: queue`, `resume: true`, metadata
+  `{ source: "hub-machine", kind: "task", task, machine, title, state, images? }` and an id (`msg_…`) chosen and stored
+  in `notify_id` before sending, so a retry after a failure or a hub restart is ignored by the engine if it already got
+  it. `notified_at` marks delivery. No notification when a tool call was waiting for that end (it gets the result) or
+  when the model itself stopped the task.
+- **Restart**: at start the hub follows every `starting`/`running`/`waiting`/`offline` task again (a task still
+  `starting` without a session fails), and every minute retries undelivered notifications and forgets tasks ended more
+  than 30 days ago. Deleting a chat session forgets its tasks and target.
+- **Usage**: `session.usage.updated` of the task's sessions (cumulative per session) are summed into `tokens_*` and
+  `cost`. Exact metering in the LLM proxy, and quotas, are not done.
+- **Tools** (`hub/chat-tools.ts`), all limited to the calling conversation's tasks: `machine_task`,
+  `machine_tasks_list { scope?: session | all }`, `machine_task_status { task, wait_seconds? }` (status, usage, pending
+  permissions and questions), `machine_task_read { task, limit? }` (a digest of the latest messages, 20 000 characters),
+  `machine_task_send { task, text, delivery? }`, `machine_task_stop`, `machines_list`, `machine_task_permissions`,
+  `machine_task_reply_permission { task, request, decision, session? }`, `machine_task_answer { task, question,
+answer?, session? }` (the system prompt allows these two only when the user asked the model to pilot the task; each
+  answer is logged), `machine_task_images` and `machine_task_image { task, index? }` (an MCP image, 5 MB at most, only
+  for a chat model whose capabilities include image input; otherwise a description). The engine's MCP timeout is 15
+  minutes.
+- **Routes** (`/hub/api/`, the user's own tasks only; another user's answer 404):
+
+  | Route                                                                            | What                                                                                                                                                                                                                                                                                                                        |
+  | -------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+  | `GET chat-tasks?session=`                                                        | tasks, newest first, of one chat session or all                                                                                                                                                                                                                                                                             |
+  | `POST chat-tasks { session, prompt, machine?, directory?, agent? }`              | starts a task                                                                                                                                                                                                                                                                                                               |
+  | `GET chat-tasks/events`                                                          | SSE: `server.connected`, then `hub.task.updated { data: task }` for every change                                                                                                                                                                                                                                            |
+  | `GET chat-tasks/<id>`                                                            | the task                                                                                                                                                                                                                                                                                                                    |
+  | `GET chat-tasks/<id>/api/event`                                                  | SSE: `server.connected`, `hub.task.updated`, then the task's slice of the machine's events, unchanged (another `server.connected` when the machine's stream came back)                                                                                                                                                      |
+  | `GET chat-tasks/<id>/api/…`                                                      | closed list of reads: `session/<s>` and its `message`, `message/<m>`, `inbox`, `permission`, `form`, `form/<f>` for the task's sessions only; `session/active` filtered to them; `session?parentID=`; `experimental/media/<hash>`; `location`, `vcs`, `agent` at the task's folder. Anything else 404; any other method 405 |
+  | `DELETE chat-tasks/<id>/run`, `POST …/background`                                | interrupt the task's session, move its tools to the background                                                                                                                                                                                                                                                              |
+  | `POST chat-tasks/<id>/prompt { text, delivery? }`                                | steer or queue                                                                                                                                                                                                                                                                                                              |
+  | `POST chat-tasks/<id>/permission/<request> { decision, session? }`               | answer a permission (`once`, `always`, `reject`)                                                                                                                                                                                                                                                                            |
+  | `POST chat-tasks/<id>/form/<form> { answer, session? }`, `DELETE … { session? }` | answer or dismiss a question                                                                                                                                                                                                                                                                                                |
+  | `GET chat-tasks/<id>/image/<n>`                                                  | the task's n-th image, newest first                                                                                                                                                                                                                                                                                         |
+
+  Bodies are rebuilt field by field; `session` must be one of the task's sessions. A browser more than 8 MB behind on
+  a task's stream gets `hub.task.resync` and is cut (it reconnects and reads again); 8 browsers per task at most. The
+  tunnel itself still has no flow control.
+
+- **Browser** (`packages/app/src/hub/`): the `machine_task` call shows as OpenCode's subagent card, and the end
+  notification as the subagent's outcome notice; both open the task's right panel (`chat-task-panel.tsx`): an
+  `OpenCode` client on `chat-tasks/<id>`, `createClientConnection` on its event route, `createData` and
+  `SessionTimeline` with tool images kept, the permission dock and a question dock driven by OpenCode's question
+  machine, a composer (Enter sends with the follow-up setting, Mod+Enter steers, Alt+Enter queues), Stop,
+  Background, a link to the machine, status and usage. Its connection is the machine in `task-panel-machine.ts`.
+  Running tasks of every conversation are listed in the sidebar; a task that ends, fails or waits is announced like a
+  session. Below 768 px the panel covers the chat, with its own close button.
+
 ## Library API (`@opencode/relay`)
 
 ```ts
@@ -360,4 +439,6 @@ AgentSkills.write(dir, payload) / remove(dir) / manifest(dir) / reload(local) //
 ## Out of scope for the first version
 
 Flow control, a queue for prompts sent while a machine is offline, mTLS, OAuth-based providers in the
-LLM proxy.
+LLM proxy. In the hub chat: usage metered in the LLM proxy and quotas, `/command` and `!shell` as live tasks, a stack
+of a task's subagent sessions in its panel, its inbox, an automatic answer to a permission nobody answered, and
+image thumbnails in the hub's own timeline.
