@@ -1505,7 +1505,8 @@ function shellOutput(message: Message) {
 
 /** `provider/model`, with `#variant` when one is chosen: how a task's model is stored and shown. */
 function modelRef(model: { id: string; providerID: string; variant?: string }) {
-  return `${model.providerID}/${model.id}${model.variant ? `#${model.variant}` : ""}`
+  const variant = model.variant && model.variant !== "default" ? `#${model.variant}` : ""
+  return `${model.providerID}/${model.id}${variant}`
 }
 
 function titleOf(prompt: string) {
