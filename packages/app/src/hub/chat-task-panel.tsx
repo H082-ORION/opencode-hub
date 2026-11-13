@@ -270,7 +270,14 @@ export function ChatTaskPanel(props: { task: string }) {
                   <span class="hub-task-model" title={task()?.model ?? undefined}>
                     <Icon name="models" size="small" />
                     <span>{name()}</span>
-                    <Show when={task()?.template}>{(template) => <span>· {template()}</span>}</Show>
+                    <Show when={task()?.template}>
+                      {(template) => (
+                        <>
+                          <span aria-hidden="true">·</span>
+                          <span>{template()}</span>
+                        </>
+                      )}
+                    </Show>
                   </span>
                 )}
               </Show>
