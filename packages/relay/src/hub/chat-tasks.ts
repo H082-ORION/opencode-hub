@@ -265,7 +265,8 @@ export function create(input: {
     forget(user: string, session: string) {
       store
         .chatTasks(user, session)
-        .forEach((task) => lives.get(task.id) && release(lives.get(task.id)!, { force: true }))
+        .flatMap((task) => lives.get(task.id) ?? [])
+        .forEach((live) => release(live, { force: true }))
       store.deleteChatTasks(user, session)
     },
     close: () => {
