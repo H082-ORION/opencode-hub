@@ -4,6 +4,7 @@ Audit en lecture seule (sous-agent Fable), branche `remote-machines`. Cible : ex
 dans le style OpenCode (vrais composants `session-ui` / `ui` / timeline, pas de copies visuelles).
 
 Objectifs utilisateur :
+
 1. Pas de redirection : la carte `machine_task` dans le chat hub est cliquable et ouvre une **sidebar droite** sur la même page,
    avec la session distante en temps réel (texte, raisonnement, outils, shell, todo, statut, erreurs).
 2. On continue à parler au chat hub pendant que la tâche tourne.
@@ -58,13 +59,13 @@ Endpoints machine disponibles (Protocol non modifié) : `session.prompt` avec `d
   fermer avec `hub.task.resync` (le client refait `message.sync`). Tunnel : attendre quand `ws.bufferedAmount` dépasse un plafond
   (à vérifier côté client WebSocket Bun). Mettre à jour la spec.
 - **A4. Événement `hub.task.updated`** — P0, S. `{ task, status: starting|running|waiting|idle|failed|interrupted|offline|lost,
-  remoteSession, machineOnline, tokens?, cost?, error? }`, émis sur A2 et sur le SSE du chat hub.
+remoteSession, machineOnline, tokens?, cost?, error? }`, émis sur A2 et sur le SSE du chat hub.
 - **A5. Sessions enfants (sous-agents distants)** — P2, S. Suivies par A1, transmises par A2, rendues par le renderer `subagent` (D4).
 
 ## B. API hub, routes, stockage
 
 - **B1. Table `chat_task`** — P0, M. Dans `store.ts` : `id, user_id, session_id, machine_id, directory, remote_session, title,
-  prompt_excerpt, status, created_at, started_at, ended_at, outcome, error, tokens_*, cost, notified_at` + index `(user_id, session_id)`.
+prompt_excerpt, status, created_at, started_at, ended_at, outcome, error, tokens_*, cost, notified_at` + index `(user_id, session_id)`.
   `chat_target.remote_session` reste la session par défaut de `/commande` et `!shell` (décision Q4).
 - **B2. Routes REST** — P0, M. `GET chat-tasks?session=`, `GET chat-tasks/<id>`, `POST chat-tasks`, `DELETE chat-tasks/<id>/run`,
   `POST chat-tasks/<id>/prompt {text, delivery}`, `POST …/permission/<req>`, `POST|DELETE …/form/<form>`, `POST …/background`.
@@ -83,7 +84,7 @@ Endpoints machine disponibles (Protocol non modifié) : `session.prompt` avec `d
 
 - **C1. Outils asynchrones** (`chat-tools.ts` `TOOLS` `:48`, `run()` `:174`) — P0, L.
   - `machine_task` non bloquant → handle `{ task, remoteSession, machine, directory, status }` ; params `prompt, images?, machine?,
-    directory?, wait_seconds? (0–600)`.
+directory?, wait_seconds? (0–600)`.
   - `machine_tasks_list { scope: session|all }`, `machine_task_status { task }` (dernière activité, permissions/questions en attente,
     tokens/coût), `machine_task_read { task, limit?, since? }` (digest borné ~20 k), `machine_task_send { task, text, delivery }`,
     `machine_task_stop { task }`, `machines_list`, `machine_task_permissions` / `machine_task_reply_permission` / `machine_task_answer`
@@ -186,6 +187,19 @@ Endpoints machine disponibles (Protocol non modifié) : `session.prompt` avec `d
 - **K3. Commentaires d'en-tête** — P1, S. Cycle de vie d'une tâche et invariants.
 
 ---
+
+## État (branche `hub-live-tasks`)
+
+Livré : phases 0 à 3 (A1, A2, A3 côté hub : coalescence des deltas pour un navigateur en retard ; A4, A5/D4 : pile de
+sous-sessions dans le panneau ; B1–B6 ; C1–C5 : `/commande` et `!shell` sont des tâches suivies en direct ; D1–D10 ;
+E1–E3, E5 ; F1, F2, F3, F4 : vignettes sous la carte de tâche ; G1, G2 ; H1–H6 ; I1–I6 ; J1–J3 ; K1).
+Ajouts hors backlog : choix du modèle par sous-agent (`models_list`, `machine_task { model, variant }`,
+`machine_task_send { model }`), `machine_tasks_wait { tasks, mode, seconds }`, **modèles d'agent** (Q5 bis : table
+`chat_template`, routes CRUD, page réglages, built-ins plan/build/review, `machine_task { template }`), prompt système
+d'orchestrateur, politique de notification (le modèle n'est réveillé que pour les exécutions qu'il a lancées ou
+pilotées ; les suites tapées par l'utilisateur dans le panneau sont enregistrées sans `resume`).
+Restant : E4 (repli configurable), E6 (inbox), G3/G4 (mesure dans le proxy LLM, quotas), J4/J5, K2, contrôle de flux
+dans le tunnel, origine d'une tâche conservée après redémarrage du hub.
 
 ## Ordre d'implémentation
 

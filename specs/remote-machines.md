@@ -344,17 +344,49 @@ restricted to the hub's tools (the `hub-tools` MCP server at `/hub/chat-tools`, 
 token) and behind a closed list of browser routes under `/hub/api/chat/`. It reaches the user's machines only through
 `machineRequest`, which checks `mayOpen(user, machine)` on every call, like a browser request.
 
+The chat's model is an **orchestrator**: its system prompt tells it to plan, delegate to sub-agents (tasks on the
+user's machines), choose their model and role, wait only when the next step needs a result, verify, and report.
+
 - **Target** (`chat_target`, `hub/chat-machines.ts`): the machine and folder attached to a chat session, told to the
-  model once. Its `remote_session` is where `/command` and `!shell` run (results are recorded as synthetic messages
-  at the end, polled; not yet live tasks).
+  model once. `/command` and `!shell` from the composer run there as tasks (`kind`, below).
 - **Tasks** (`chat_task`, `hub/chat-tasks.ts`): `machine_task` starts one session per task on a machine (by default
   the target; or `machine`, `directory`, `agent`), titled after the prompt, and answers as soon as the machine admitted
-  the prompt with `{ task, remoteSession, machine, directory, status }`; `continue: <task>` sends the prompt to an
-  earlier task's session instead; `wait_seconds` (0 to 600) waits for the end. The row is created before the first
-  request to the machine. Statuses: `starting`, `running`, `waiting` (a permission or question pending), `offline` (the
-  machine's stream is down), then `idle`, `failed`, `interrupted` or `lost` (offline 30 minutes, or its session gone; a
-  lost session is never recreated). A message sent to a task that ended starts it again in the same session. At most 8
-  active tasks per user. Stopping the chat's own answer never stops tasks; the UI has an explicit "Stop all tasks".
+  the prompt with `{ task, remoteSession, machine, directory, model?, template?, status }`; `continue: <task>` sends
+  the prompt to an earlier task's session instead; `wait_seconds` (0 to 600) waits for the end. The row is created
+  before the first request to the machine. Statuses: `starting`, `running`, `waiting` (a permission or question
+  pending), `offline` (the machine's stream is down), then `idle`, `failed`, `interrupted` or `lost` (offline 30
+  minutes, or its session gone; a lost session is never recreated). A message sent to a task that ended starts it again
+  in the same session. At most 8 active tasks per user. Stopping the chat's own answer never stops tasks; the UI has an
+  explicit "Stop all tasks".
+- **Model** (`model`, `variant`): `provider/model` (or `provider/model#variant`) among the models the user's providers
+  give, the same list on the hub and on the machines since both reach providers through the hub's proxy (`Chat.models`,
+  the engine's `api/model` kept to the user's providers; `models_list` for the model, `GET chat-models` for the
+  browser). An unknown model or variant is refused before anything reaches the machine, naming `models_list`. Without
+  one, the task runs the conversation's own model (or the template's default). The chosen model goes to
+  `POST /api/session` and, for a follow-up (`machine_task_send { model }`, `continue`), to `POST …/model` first; it is
+  stored on the row as `provider/model#variant` and shown on the card, the strip and the panel.
+- **Templates** (`chat_template`, `hub/chat-templates.ts`): a role for a sub-agent, as a system prompt with a
+  description (for the model), a default model and optionally the machine's agent. Three are built in (`plan`, with
+  the machine's `plan` agent; `build`; `review`); a user's own template of the same name replaces the built-in one.
+  `machine_task { template }` sends the template's text as a synthetic message (`<agent_template name="…">`,
+  description `Template <name>`, `resume: false`) to the new session right before the request, so it works on any
+  machine as is and shows apart from the request in the panel; with `continue` it is prefixed to the follow-up. The
+  machine's own agent definitions are not written; a template that names `agent` picks one that exists there.
+  Routes: `GET chat-templates` (own, then the built-in ones not replaced), `POST chat-templates { name, description,
+system, model?, agent? }`, `PUT|DELETE chat-templates/<id>`. Names are lowercase hyphenated words; 50 templates per
+  user. The settings page "Agent templates" edits them.
+- **Waiting** (`machine_tasks_wait { tasks, mode: any | all, seconds }`, 120 by default, 600 at most): blocks until
+  the first (or every) task of this conversation ends, and answers each task's status, with the final message of those
+  that ended meanwhile, how many still run, and how long it waited. A result handed to a waiter is not reported to
+  the model again.
+- **Commands** (`kind`: `prompt`, `command`, `shell`): `POST chat-tasks { session, kind: "command", command: { name,
+arguments? } }` runs a slash command (`POST …/command`), `{ kind: "shell", shell }` one shell command (`POST
+…/shell`, which answers when the command ends, so only a quick answer counts as a refusal), each in its own new
+  session, titled `/name args` or `$ cmd`. A shell task ends on `session.shell.ended` (or, on reconciliation, when its
+  shell message is no longer running); a slash command on the agent run it started, or once the session stays quiet 4
+  seconds without one. A shell task takes no follow-up. Their end is recorded in the shape of the hub's earlier command
+  records (`kind: shell | command`, `command`, `output`, `exit`), which the timeline shows as a shell message or a
+  command and its answer.
 - **Following** (`hub/chat-watch.ts`): one `GET /api/event?types=…` stream per user and machine through the tunnel,
   shared by every task and browser following that user's sessions there, open while anyone follows it, reconnecting
   with a backoff (1 s doubling to 30 s), unfiltered if the machine refuses the type list. `/api/event` cannot filter by
@@ -365,20 +397,26 @@ token) and behind a closed list of browser routes under `/hub/api/chat/`. It rea
   them as long as that user may open the machine (a browser session's tag is checked against the session).
 - **End**: on `session.execution.succeeded|failed|interrupted` of the task's session, the end is claimed first (status
   written before anything is read, so a repeated end is ignored), then the final text (60 000 characters at most) is
-  read and told once to the chat's model: a synthetic message with `delivery: queue`, `resume: true`, metadata
-  `{ source: "hub-machine", kind: "task", task, machine, title, state, images? }` and an id (`msg_…`) chosen and stored
-  in `notify_id` before sending, so a retry after a failure or a hub restart is ignored by the engine if it already got
-  it. `notified_at` marks delivery. No notification when a tool call was waiting for that end (it gets the result) or
-  when the model itself stopped the task.
+  read, the task's images counted (`images`), and the end told once to the chat's model: a synthetic message with
+  `delivery: queue`, metadata `{ source: "hub-machine", kind: "task", task, machine, title, model?, state, images? }`
+  and an id (`msg_…`) chosen and stored in `notify_id` before sending, so a retry after a failure or a hub restart is
+  ignored by the engine if it already got it. `notified_at` marks delivery. No notification when a tool call was
+  waiting for that end (it gets the result) or when the model itself stopped the task.
+- **Who hears of it**: the message carries `resume: true` only when the chat's model started or last wrote to the task
+  (`machine_task`, `machine_task_send`, `continue`); then the model answers it at once. An execution the user started
+  from the task's panel (its composer) or from the hub's composer (`/command`, `!shell`) is recorded with
+  `resume: false`: the model reads it at its next turn instead of being woken by every follow-up the user types. The
+  origin is kept in memory per task (`model` after a restart).
 - **Restart**: at start the hub follows every `starting`/`running`/`waiting`/`offline` task again (a task still
   `starting` without a session fails), and every minute retries undelivered notifications and forgets tasks ended more
   than 30 days ago. Deleting a chat session forgets its tasks and target.
 - **Usage**: `session.usage.updated` of the task's sessions (cumulative per session) are summed into `tokens_*` and
   `cost`. Exact metering in the LLM proxy, and quotas, are not done.
-- **Tools** (`hub/chat-tools.ts`), all limited to the calling conversation's tasks: `machine_task`,
-  `machine_tasks_list { scope?: session | all }`, `machine_task_status { task, wait_seconds? }` (status, usage, pending
+- **Tools** (`hub/chat-tools.ts`), all limited to the calling conversation's tasks: `machine_task { prompt, model?,
+  variant?, template?, images?, machine?, directory?, agent?, continue?, wait_seconds? }`, `machine_tasks_wait`,
+  `models_list`, `templates_list`, `machine_tasks_list { scope?: session | all }`, `machine_task_status { task, wait_seconds? }` (status, usage, pending
   permissions and questions), `machine_task_read { task, limit? }` (a digest of the latest messages, 20 000 characters),
-  `machine_task_send { task, text, delivery? }`, `machine_task_stop`, `machines_list`, `machine_task_permissions`,
+  `machine_task_send { task, text, delivery?, model?, variant? }`, `machine_task_stop`, `machines_list`, `machine_task_permissions`,
   `machine_task_reply_permission { task, request, decision, session? }`, `machine_task_answer { task, question,
 answer?, session? }` (the system prompt allows these two only when the user asked the model to pilot the task; each
   answer is logged), `machine_task_images` and `machine_task_image { task, index? }` (an MCP image, 5 MB at most, only
@@ -386,32 +424,43 @@ answer?, session? }` (the system prompt allows these two only when the user aske
   minutes.
 - **Routes** (`/hub/api/`, the user's own tasks only; another user's answer 404):
 
-  | Route                                                                            | What                                                                                                                                                                                                                                                                                                                        |
-  | -------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-  | `GET chat-tasks?session=`                                                        | tasks, newest first, of one chat session or all                                                                                                                                                                                                                                                                             |
-  | `POST chat-tasks { session, prompt, machine?, directory?, agent? }`              | starts a task                                                                                                                                                                                                                                                                                                               |
-  | `GET chat-tasks/events`                                                          | SSE: `server.connected`, then `hub.task.updated { data: task }` for every change                                                                                                                                                                                                                                            |
-  | `GET chat-tasks/<id>`                                                            | the task                                                                                                                                                                                                                                                                                                                    |
-  | `GET chat-tasks/<id>/api/event`                                                  | SSE: `server.connected`, `hub.task.updated`, then the task's slice of the machine's events, unchanged (another `server.connected` when the machine's stream came back)                                                                                                                                                      |
-  | `GET chat-tasks/<id>/api/…`                                                      | closed list of reads: `session/<s>` and its `message`, `message/<m>`, `inbox`, `permission`, `form`, `form/<f>` for the task's sessions only; `session/active` filtered to them; `session?parentID=`; `experimental/media/<hash>`; `location`, `vcs`, `agent` at the task's folder. Anything else 404; any other method 405 |
-  | `DELETE chat-tasks/<id>/run`, `POST …/background`                                | interrupt the task's session, move its tools to the background                                                                                                                                                                                                                                                              |
-  | `POST chat-tasks/<id>/prompt { text, delivery? }`                                | steer or queue                                                                                                                                                                                                                                                                                                              |
-  | `POST chat-tasks/<id>/permission/<request> { decision, session? }`               | answer a permission (`once`, `always`, `reject`)                                                                                                                                                                                                                                                                            |
-  | `POST chat-tasks/<id>/form/<form> { answer, session? }`, `DELETE … { session? }` | answer or dismiss a question                                                                                                                                                                                                                                                                                                |
-  | `GET chat-tasks/<id>/image/<n>`                                                  | the task's n-th image, newest first                                                                                                                                                                                                                                                                                         |
+  | Route                                                                                                             | What                                                                                                                                                                                                                                                                                                                        |
+  | ----------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+  | `GET chat-tasks?session=`                                                                                         | tasks, newest first, of one chat session or all                                                                                                                                                                                                                                                                             |
+  | `POST chat-tasks { session, prompt \| command \| shell, kind?, machine?, directory?, agent?, model?, template? }` | starts a task (a prompt, a slash command or one shell command), as the user                                                                                                                                                                                                                                                 |
+  | `GET chat-models`                                                                                                 | the models the user can run, as the engine lists them, kept to their providers                                                                                                                                                                                                                                              |
+  | `GET\|POST chat-templates`, `PUT\|DELETE chat-templates/<id>`                                                     | the user's agent templates                                                                                                                                                                                                                                                                                                  |
+  | `GET chat-tasks/events`                                                                                           | SSE: `server.connected`, then `hub.task.updated { data: task }` for every change                                                                                                                                                                                                                                            |
+  | `GET chat-tasks/<id>`                                                                                             | the task                                                                                                                                                                                                                                                                                                                    |
+  | `GET chat-tasks/<id>/api/event`                                                                                   | SSE: `server.connected`, `hub.task.updated`, then the task's slice of the machine's events, unchanged (another `server.connected` when the machine's stream came back)                                                                                                                                                      |
+  | `GET chat-tasks/<id>/api/…`                                                                                       | closed list of reads: `session/<s>` and its `message`, `message/<m>`, `inbox`, `permission`, `form`, `form/<f>` for the task's sessions only; `session/active` filtered to them; `session?parentID=`; `experimental/media/<hash>`; `location`, `vcs`, `agent` at the task's folder. Anything else 404; any other method 405 |
+  | `DELETE chat-tasks/<id>/run`, `POST …/background`                                                                 | interrupt the task's session, move its tools to the background                                                                                                                                                                                                                                                              |
+  | `POST chat-tasks/<id>/prompt { text, delivery? }`                                                                 | steer or queue                                                                                                                                                                                                                                                                                                              |
+  | `POST chat-tasks/<id>/permission/<request> { decision, session? }`                                                | answer a permission (`once`, `always`, `reject`)                                                                                                                                                                                                                                                                            |
+  | `POST chat-tasks/<id>/form/<form> { answer, session? }`, `DELETE … { session? }`                                  | answer or dismiss a question                                                                                                                                                                                                                                                                                                |
+  | `GET chat-tasks/<id>/image/<n>`                                                                                   | the task's n-th image, newest first                                                                                                                                                                                                                                                                                         |
 
-  Bodies are rebuilt field by field; `session` must be one of the task's sessions. A browser more than 8 MB behind on
-  a task's stream gets `hub.task.resync` and is cut (it reconnects and reads again); 8 browsers per task at most. The
-  tunnel itself still has no flow control.
+  Bodies are rebuilt field by field; `session` must be one of the task's sessions. A browser's stream sends frames as
+  they come while it keeps up; once it is behind (its `ReadableStream` buffer exhausted), consecutive `session.text.delta`,
+  `session.reasoning.delta` and `session.tool.input.delta` of one part are merged into one frame flushed every 50 ms,
+  and any other frame flushes what is held first, so order is kept. A browser more than 8 MB behind gets
+  `hub.task.resync` and is cut (it reconnects and reads again); 8 browsers per task at most. The tunnel itself still
+  has no flow control.
 
-- **Browser** (`packages/app/src/hub/`): the `machine_task` call shows as OpenCode's subagent card, and the end
-  notification as the subagent's outcome notice; both open the task's right panel (`chat-task-panel.tsx`): an
-  `OpenCode` client on `chat-tasks/<id>`, `createClientConnection` on its event route, `createData` and
-  `SessionTimeline` with tool images kept, the permission dock and a question dock driven by OpenCode's question
-  machine, a composer (Enter sends with the follow-up setting, Mod+Enter steers, Alt+Enter queues), Stop,
-  Background, a link to the machine, status and usage. Its connection is the machine in `task-panel-machine.ts`.
-  Running tasks of every conversation are listed in the sidebar; a task that ends, fails or waits is announced like a
-  session. Below 768 px the panel covers the chat, with its own close button.
+- **Browser** (`packages/app/src/hub/`): the `machine_task` call shows as OpenCode's subagent card (machine, model
+  and template on its first line, title and cost on the second, then thumbnails of up to 4 of the task's images served
+  by `chat-tasks/<id>/image/<n>`), and the end notification as the subagent's outcome notice; both open the task's
+  right panel. The hub's timeline keeps `subagents: separate` whatever the user's detail level, so the cards never
+  fold into a tool group. A strip above the composer lists the conversation's running tasks (status, machine, model,
+  cost; a click opens the panel) with "Stop all tasks". `/command` and `!shell` start a task and open its panel. The
+  panel (`chat-task-panel.tsx`): an `OpenCode` client on `chat-tasks/<id>`, `createClientConnection` on its event
+  route, `createData` and `SessionTimeline` with tool images kept, the permission dock and a question dock driven by
+  OpenCode's question machine, a composer (Enter sends with the follow-up setting, Mod+Enter steers, Alt+Enter
+  queues; none for a shell task), Stop, Background, a link to the machine, status, model and usage. A subagent card
+  in the panel opens that child session in place, with a Back button (the panel keeps a stack). Its connection is
+  the machine in `task-panel-machine.ts`. Running tasks of every conversation are listed in the sidebar; a task that
+  ends, fails or waits is announced like a session. Below 768 px the panel covers the chat, with its own close
+  button. Settings has an "Agent templates" page.
 
 ## Library API (`@opencode/relay`)
 
@@ -438,7 +487,7 @@ AgentSkills.write(dir, payload) / remove(dir) / manifest(dir) / reload(local) //
 
 ## Out of scope for the first version
 
-Flow control, a queue for prompts sent while a machine is offline, mTLS, OAuth-based providers in the
-LLM proxy. In the hub chat: usage metered in the LLM proxy and quotas, `/command` and `!shell` as live tasks, a stack
-of a task's subagent sessions in its panel, its inbox, an automatic answer to a permission nobody answered, and
-image thumbnails in the hub's own timeline.
+Flow control in the tunnel, a queue for prompts sent while a machine is offline, mTLS, OAuth-based providers in the
+LLM proxy. In the hub chat: usage metered in the LLM proxy and quotas, a task's inbox, an automatic answer to a
+permission nobody answered, agent templates written as agent definitions on the machines (they travel as a message
+today), and keeping a task's origin (model or user) across a hub restart.
